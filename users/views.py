@@ -9,12 +9,16 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 
 from .serializers import (
     UserSerializer,
-    RegisterCoachSerializer,
     LoginUserSerializer,
 )
 
 # Central cookie settings to avoid repetition.
-COOKIE_SETTINGS = {"httponly": True, "secure": True, "samesite": "None"}
+COOKIE_SETTINGS = {
+    "httponly": True,
+    "secure": True,
+    "samesite": "None",
+}
+
 
 class UserInfoView(RetrieveUpdateAPIView):
     permission_classes = (IsAuthenticated,)
@@ -37,16 +41,13 @@ class LoginView(GenericAPIView):
         access_token = str(refresh.access_token)
 
         # Build response with user data and set tokens as cookies.
-        response = Response(
-            {"user": UserSerializer(user).data}, status=status.HTTP_200_OK
-        )
+        response = Response(UserSerializer(user).data, status=status.HTTP_200_OK)
         response.set_cookie(key="access_token", value=access_token, **COOKIE_SETTINGS)
         response.set_cookie(key="refresh_token", value=str(refresh), **COOKIE_SETTINGS)
         return response
 
 
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         refresh_token = request.COOKIES.get("refresh_token")
@@ -84,10 +85,11 @@ class CookieTokenRefreshView(TokenRefreshView):
                 {"message": "Access token refreshed successfully"},
                 status=status.HTTP_200_OK,
             )
-            response.set_cookie(key="access_token", value=access_token, **COOKIE_SETTINGS)
+            response.set_cookie(
+                key="access_token", value=access_token, **COOKIE_SETTINGS
+            )
             return response
         except InvalidToken:
             return Response(
                 {"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED
             )
-
