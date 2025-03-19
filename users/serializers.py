@@ -13,8 +13,9 @@ class UserSerializer(ModelSerializer):
 class RegisterPlayerSerializer(ModelSerializer):
     class Meta:
         model = User
-        fields = ("profile", "first_name", "last_name", "email", "password")
+        fields = ("id", "profile", "first_name", "last_name", "email", "password")
         extra_kwargs = {"password": {"write_only": True}}
+        read_only_fields = ("id",)
 
     def create(self, validated_data):
         user = User.objects.create_player(**validated_data)
