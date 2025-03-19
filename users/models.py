@@ -46,7 +46,7 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
-    profile = models.ImageField(null=True)
+    profile = models.ImageField(upload_to="users/", null=True)
     role = models.CharField(choices=Role, default=Role.PLAYER, max_length=10)
     date_of_birth = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)

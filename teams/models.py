@@ -2,16 +2,42 @@ from django.db import models
 import cloudinary.models
 from sports.models import Sport, Position
 from django.conf import settings
-
+from django.db.models import Q, F
+from games.models import Game 
+from django.utils.text import slugify
 
 class Team(models.Model):
     name = models.CharField(max_length=100)
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    logo = models.ImageField(null=True)
+    coach = models.ManyToManyField('teams.Coach', blank=True)
+    logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
+    slug = models.SlugField(unique=True, blank=True)  
     created_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
         return f"{self.name} ({self.sport}) "
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)  # Auto-generate slug from name
+        super().save(*args, **kwargs)
+        
+    def win_loss_record(self):
+        wins = Game.objects.filter(
+            status="completed"
+        ).filter(
+            Q(home_team=self, home_team_score__gt=F('away_team_score')) |
+            Q(away_team=self, away_team_score__gt=F('home_team_score'))
+        ).count()
+        losses = Game.objects.filter(
+            status="completed"
+        ).filter(
+            Q(home_team=self, home_team_score__lt=F('away_team_score')) |
+            Q(away_team=self, away_team_score__lt=F('home_team_score'))
+        ).count()
+        
+        return wins, losses
+     
 
 class Coach(models.Model):
     user = models.OneToOneField(
@@ -20,8 +46,6 @@ class Coach(models.Model):
         related_name='coach_profile',
         primary_key=True
     )
-    sports = models.ManyToManyField(Sport, blank=True)
-    teams = models.ManyToManyField(Team, blank=True)
     
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
@@ -35,7 +59,7 @@ class Player(models.Model):
     )
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
-    team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL)
+    team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL, related_name="players")
     jersey_number = models.IntegerField(blank=False)
     position = models.ForeignKey(Position, null=True, on_delete=models.SET_NULL)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
