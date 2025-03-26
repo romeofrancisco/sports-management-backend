@@ -10,7 +10,7 @@ class UserSerializer(ModelSerializer):
         fields = ( "profile", "first_name", "last_name", "email", "role", "date_of_birth")
 
 
-class RegisterPlayerSerializer(ModelSerializer):
+class PlayerSerializer(ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "profile", "first_name", "last_name", "email", "password")
@@ -22,7 +22,7 @@ class RegisterPlayerSerializer(ModelSerializer):
         return user
 
 
-class RegisterCoachSerializer(ModelSerializer):
+class CoachSerializer(ModelSerializer):
     class Meta:
         model = User
         fields = ("profile", "first_name", "last_name", "email", "password")
