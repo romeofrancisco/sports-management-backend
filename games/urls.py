@@ -3,8 +3,8 @@ from django.urls import path, include
 from .views import PlayerStatViewSet, GameViewSet
 
 router = DefaultRouter()
-router.register(r'player-stats', PlayerStatViewSet)
-router.register(r'games', GameViewSet)
+router.register(r'player-stats', PlayerStatViewSet, basename='stats')
+router.register(r'games', GameViewSet, basename='game')
 
 urlpatterns = [
     path('', include(router.urls)),

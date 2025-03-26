@@ -24,19 +24,26 @@ class Team(models.Model):
         
     def win_loss_record(self):
         wins = Game.objects.filter(
-            status="completed"
-        ).filter(
             Q(home_team=self, home_team_score__gt=F('away_team_score')) |
-            Q(away_team=self, away_team_score__gt=F('home_team_score'))
-        ).count()
-        losses = Game.objects.filter(
+            Q(away_team=self, away_team_score__gt=F('home_team_score')),
             status="completed"
-        ).filter(
+        ).count()
+        
+        losses = Game.objects.filter(
             Q(home_team=self, home_team_score__lt=F('away_team_score')) |
-            Q(away_team=self, away_team_score__lt=F('home_team_score'))
+            Q(away_team=self, away_team_score__lt=F('home_team_score')),
+            status="completed"
         ).count()
         
         return wins, losses
+    
+    def get_record(self):
+        wins, losses = self.win_loss_record()
+        return {
+            'win': wins,
+            'loss': losses,
+            'win_percentage': wins / (wins + losses) if (wins + losses) > 0 else 0
+        }
      
 
 class Coach(models.Model):
@@ -61,7 +68,7 @@ class Player(models.Model):
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
     team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL, related_name="players")
     jersey_number = models.IntegerField(blank=False)
-    position = models.ForeignKey(Position, null=True, on_delete=models.SET_NULL)
+    position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
     
     def __str__(self):
