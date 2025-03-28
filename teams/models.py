@@ -2,9 +2,10 @@ from django.db import models
 import cloudinary.models
 from sports.models import Sport, Position
 from django.conf import settings
-from django.db.models import Q, F
+from django.db.models import Q, F, Max, Exists, OuterRef
 from games.models import Game 
 from django.utils.text import slugify
+from games.models import Substitution
 
 class Team(models.Model):
     name = models.CharField(max_length=100)
@@ -57,6 +58,25 @@ class Coach(models.Model):
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
 
+class PlayerManager(models.Manager):
+    def active_in_game(self, game):
+        """Return currently active players in the game"""
+        subs = Substitution.objects.filter(game=game)
+        all_players = Player.objects.filter(
+            Q(team=game.home_team) | Q(team=game.away_team)
+        )
+        
+        # Players who were subbed out without being subbed back in
+        subbed_out = subs.values('substitute_out').annotate(
+            last_action=Max('timestamp')
+        ).filter(
+            ~Exists(subs.filter(substitute_in=OuterRef('substitute_out')))
+        )
+        
+        return all_players.exclude(
+            pk__in=subbed_out.values('substitute_out')
+        )
+
 class Player(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -71,9 +91,19 @@ class Player(models.Model):
     position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
     
-    def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
-
+    objects = PlayerManager()
+    
     class Meta:
-        verbose_name = "Player Profile"
-        verbose_name_plural = "Player Profiles"
+        unique_together = ['team', 'jersey_number']
+    
+    def is_active_in_game(self, game):
+        """Check if player is currently active in game"""
+        last_sub = self.substitutions_out.filter(game=game).last()
+        if last_sub:
+            # Check if there's a subsequent substitution back in
+            return Substitution.objects.filter(
+                game=game,
+                substitute_in=self,
+                timestamp__gt=last_sub.timestamp
+            ).exists()
+        return True
