@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 import cloudinary.models
+from django.utils.text import slugify
 
 
 class CustomUserManager(BaseUserManager):
@@ -58,6 +59,7 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.role})"
+
 
     @property
     def is_admin(self):

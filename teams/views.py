@@ -17,6 +17,7 @@ class TeamViewSet(ModelViewSet):
 class PlayerViews(ModelViewSet):
     queryset = Player.objects.all()
     serializer_class = PlayerInfoSerializer
+    lookup_field = "slug"
 
 
 class CoachViews(ModelViewSet):

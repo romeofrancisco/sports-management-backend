@@ -7,7 +7,14 @@ from django.contrib.auth import authenticate
 class UserSerializer(ModelSerializer):
     class Meta:
         model = User
-        fields = ( "profile", "first_name", "last_name", "email", "role", "date_of_birth")
+        fields = (
+            "profile",
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "date_of_birth",
+        )
 
 
 class PlayerSerializer(ModelSerializer):
@@ -25,7 +32,7 @@ class PlayerSerializer(ModelSerializer):
 class CoachSerializer(ModelSerializer):
     class Meta:
         model = User
-        fields = ("profile", "first_name", "last_name", "email", "password")
+        fields = ("id", "profile", "first_name", "last_name", "email", "password")
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):

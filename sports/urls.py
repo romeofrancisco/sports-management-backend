@@ -4,7 +4,7 @@ from .views import SportsViewSet, PositionViewSet, SportStatTypeViewSet
 
 router = DefaultRouter()
 router.register(r'sports', SportsViewSet)
-router.register(r'positions', PositionViewSet)
+router.register(r'positions', PositionViewSet, basename="positions")
 router.register(r'sport-stats', SportStatTypeViewSet)
 
 urlpatterns = [
