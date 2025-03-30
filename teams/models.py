@@ -86,6 +86,7 @@ class Player(models.Model):
     )
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
+    slug = models.SlugField(max_length=255, unique=True)
     team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL, related_name="players")
     jersey_number = models.IntegerField(blank=False)
     position = models.ManyToManyField(Position, blank=True)
@@ -95,6 +96,13 @@ class Player(models.Model):
     
     class Meta:
         unique_together = ['team', 'jersey_number']
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            # Use user's ID since it's the primary key
+            base_slug = slugify(f"{self.user.first_name} {self.user.last_name}")
+            self.slug = f"{base_slug}-{self.user_id}"  # user_id is the FK to User
+        super().save(*args, **kwargs)
     
     def is_active_in_game(self, game):
         """Check if player is currently active in game"""

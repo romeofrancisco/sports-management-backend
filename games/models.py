@@ -24,7 +24,7 @@ class Game(models.Model):
     date = models.DateTimeField()
     location = models.CharField(max_length=255)
     status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.SCHEDULED
+        max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
     )
     current_period = models.PositiveIntegerField(
         default=1
@@ -85,9 +85,9 @@ class Game(models.Model):
         """Start game with validation of existing lineup"""
         if self.status != self.Status.SCHEDULED:
             raise ValidationError("Game can only start from scheduled status")
-        
+
         self.validate_starting_lineup()
-        
+
         self.status = self.Status.IN_PROGRESS
         self.started_at = timezone.now()
         self.save()
@@ -107,7 +107,7 @@ class Game(models.Model):
             errors.append(
                 f"Away team needs exactly {sport.max_players_on_field} starters"
             )
-        
+
         if errors:
             raise ValidationError(" ".join(errors))
 

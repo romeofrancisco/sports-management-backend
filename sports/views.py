@@ -13,8 +13,17 @@ class SportStatTypeViewSet(ModelViewSet):
     filterset_fields = ['sport']
 
 class PositionViewSet(ModelViewSet):
-    queryset = Position.objects.all()
     serializer_class = PositionSerializer
+    
+    def get_queryset(self):
+        queryset = Position.objects.all()
+        sport = self.request.query_params.get('sport')
+        
+        if sport:
+            queryset = queryset.filter(
+                sport__slug__iexact=sport
+            ).select_related('sport')  # Optimizes related sport data fetching
+        return queryset
 
     
 

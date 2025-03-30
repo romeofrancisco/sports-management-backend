@@ -13,7 +13,7 @@ class Sport(models.Model):
     
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name)  # Auto-generate slug from name
+            self.slug = f"{slugify(self.name)}-{self.id}"
         super().save(*args, **kwargs)
 
 class SportStatType(models.Model):

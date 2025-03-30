@@ -98,6 +98,7 @@ class GameSerializer(serializers.ModelSerializer):
     status = serializers.ChoiceField(choices=Game.Status.choices)
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
+    sport = serializers.CharField(source="sport.slug", read_only=True)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -106,7 +107,6 @@ class GameSerializer(serializers.ModelSerializer):
     away_team_id = serializers.PrimaryKeyRelatedField(
         queryset=Team.objects.all(), write_only=True, source="away_team"
     )
-    read_only_fields = ()
 
     class Meta:
         model = Game
@@ -193,6 +193,7 @@ class GameActionSerializer(serializers.Serializer):
 class GamePlayerSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
     full_name = serializers.SerializerMethodField()
+    profile = serializers.ImageField(source="user.profile", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True)
     team = serializers.SerializerMethodField()
     team_side = serializers.SerializerMethodField()
@@ -203,6 +204,7 @@ class GamePlayerSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "full_name",
+            "profile",
             "email",
             "jersey_number",
             "height",
@@ -320,10 +322,6 @@ class StartingLineupSerializer(serializers.ModelSerializer):
         # Validate player belongs to game teams
         if player.team not in [game.home_team, game.away_team]:
             raise ValidationError("Player not in this game")
-        
-        # Validate position
-        if attrs['position'] not in player.position.all():
-            raise ValidationError("Player doesn't have this position")
             
         return attrs
 
