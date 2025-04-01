@@ -116,9 +116,9 @@ class PlayerInfoSerializer(ModelSerializer):
         return instance
 
 
-class CoachSerializer(ModelSerializer):
+class CoachInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
-    profile = serializers.ImageField(source="user.profile", read_only=True)
+    profile = serializers.ImageField(source="user.profile")
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
     email = serializers.EmailField(source="user.email", required=True)

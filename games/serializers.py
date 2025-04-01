@@ -113,6 +113,8 @@ class GameSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "sport",
+            "league",
+            "season",
             "home_team",
             "away_team",
             "home_team_id",

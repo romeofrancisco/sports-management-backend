@@ -3,6 +3,7 @@ from sports.models import Sport, SportStatType, Position
 from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from leagues.models import League, Season
 
 
 class Game(models.Model):
@@ -13,22 +14,16 @@ class Game(models.Model):
         POSTPONED = "postponed", "Postponed"
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name='games')
+    season = models.ForeignKey(Season, on_delete=models.CASCADE)
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
-    home_team = models.ForeignKey(
-        "teams.Team", on_delete=models.CASCADE, related_name="home_games"
-    )
-    away_team = models.ForeignKey(
-        "teams.Team", on_delete=models.CASCADE, related_name="away_games"
-    )
+    home_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="home_games")
+    away_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="away_games")
     date = models.DateTimeField()
     location = models.CharField(max_length=255)
-    status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
-    )
-    current_period = models.PositiveIntegerField(
-        default=1
-    )  # For tracking quarters/sets
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True)
+    current_period = models.PositiveIntegerField(default=1)  # For tracking quarters/sets
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     duration = models.DurationField(null=True, blank=True)
