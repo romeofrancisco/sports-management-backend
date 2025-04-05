@@ -11,11 +11,10 @@ class PlayerStatRecordSerializer(serializers.ModelSerializer):
     game = serializers.PrimaryKeyRelatedField(queryset=Game.objects.all())
     player = serializers.PrimaryKeyRelatedField(queryset=Player.objects.all())
     stat_type = serializers.PrimaryKeyRelatedField(queryset=SportStatType.objects.all())
-    success = serializers.BooleanField(default=True)
 
     class Meta:
         model = PlayerStat
-        fields = ["game", "player", "stat_type", "success"]
+        fields = ["game", "player", "stat_type"]
 
 
 class PlayerStatSerializer(serializers.ModelSerializer):
@@ -98,7 +97,7 @@ class GameSerializer(serializers.ModelSerializer):
     status = serializers.ChoiceField(choices=Game.Status.choices)
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
-    sport = serializers.CharField(source="sport.slug", read_only=True)
+    sport_slug = serializers.CharField(source="sport.slug", read_only=True)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -107,12 +106,14 @@ class GameSerializer(serializers.ModelSerializer):
     away_team_id = serializers.PrimaryKeyRelatedField(
         queryset=Team.objects.all(), write_only=True, source="away_team"
     )
+    
 
     class Meta:
         model = Game
         fields = [
             "id",
             "sport",
+            "sport_slug",
             "league",
             "season",
             "home_team",
@@ -132,7 +133,7 @@ class GameSerializer(serializers.ModelSerializer):
             "winner",
             "created_at",
         ]
-        read_only_fields = ["created_at", "updated_at", "winner"]
+        read_only_fields = ["created_at", "updated_at", "winner", "home_team_score","away_team_score"]
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
@@ -195,6 +196,7 @@ class GameActionSerializer(serializers.Serializer):
 class GamePlayerSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
     full_name = serializers.SerializerMethodField()
+    short_name = serializers.SerializerMethodField()
     profile = serializers.ImageField(source="user.profile", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True)
     team = serializers.SerializerMethodField()
@@ -206,6 +208,7 @@ class GamePlayerSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "full_name",
+            "short_name",
             "profile",
             "email",
             "jersey_number",
@@ -218,6 +221,9 @@ class GamePlayerSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
+    
+    def get_short_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name[0]}."
 
     def get_team(self, obj):
         return {
@@ -290,14 +296,13 @@ class StartingLineupSerializer(serializers.ModelSerializer):
     class Meta:
         model = StartingLineup
         fields = [
-            'id', 'player', 'player_name', 
+            'player', 'player_name', 
             'team', 'team_name', 'position',
-            'team_side', 'is_starting'
+            'team_side'
         ]
         extra_kwargs = {
             'team': {'read_only': True},  # Changed from write_only
             'game': {'write_only': True},
-            'is_starting': {'read_only': True}
         }
         
     def get_team_side(self, obj):

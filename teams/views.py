@@ -31,6 +31,6 @@ class PlayerViews(ModelViewSet):
     lookup_field = "slug"
 
 class CoachViews(ModelViewSet):
-    queryset = Coach.objects.all()
+    queryset = Coach.objects.all().prefetch_related('team_set')
     serializer_class = CoachInfoSerializer
 

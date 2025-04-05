@@ -14,8 +14,8 @@ class Game(models.Model):
         POSTPONED = "postponed", "Postponed"
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name='games')
-    season = models.ForeignKey(Season, on_delete=models.CASCADE)
+    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name='games', null=True)
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True)
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
     home_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="home_games")
@@ -86,6 +86,18 @@ class Game(models.Model):
         self.status = self.Status.IN_PROGRESS
         self.started_at = timezone.now()
         self.save()
+        
+    def complete_game(self):
+        if self.status != self.Status.IN_PROGRESS:
+            raise ValueError(f"Cannot complete game in {self.status} status")
+
+        self.status = self.Status.COMPLETED
+        self.ended_at = timezone.now()
+
+        if self.started_at:
+            self.duration = self.ended_at - self.started_at
+
+        self.save(update_fields=["status", "ended_at", "duration", "updated_at"])
 
     def validate_starting_lineup(self):
         """Validate lineup requirements"""
@@ -123,18 +135,6 @@ class Game(models.Model):
 
         if errors:
             raise ValidationError(" ".join(errors))
-
-    def complete_game(self):
-        if self.status != self.Status.IN_PROGRESS:
-            raise ValueError(f"Cannot complete game in {self.status} status")
-
-        self.status = self.Status.COMPLETED
-        self.ended_at = timezone.now()
-
-        if self.started_at:
-            self.duration = self.ended_at - self.started_at
-
-        self.save(update_fields=["status", "ended_at", "duration", "updated_at"])
 
     @property
     def winner(self):
