@@ -48,7 +48,7 @@ class LoginView(GenericAPIView):
 
 
 class LogoutView(APIView):
-
+    authentication_classes = [] 
     def post(self, request, *args, **kwargs):
         refresh_token = request.COOKIES.get("refresh_token")
         if refresh_token:
@@ -56,17 +56,23 @@ class LogoutView(APIView):
                 # Blacklist the token if possible.
                 RefreshToken(refresh_token).blacklist()
             except Exception as e:
-                return Response(
-                    {"error": f"Error invalidating token: {str(e)}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                # Log the error but continue with cookie deletion
+                print(f"Token blacklist error (might be expired): {str(e)}")
 
         response = Response(
             {"message": "Successfully logged out!"}, status=status.HTTP_200_OK
         )
-        response.delete_cookie("access_token")
-        response.delete_cookie("refresh_token")
+        # Delete cookies by setting them with max_age=0
+        for cookie_name in ["access_token", "refresh_token"]:
+            response.set_cookie(
+                key=cookie_name,
+                value='',
+                max_age=0,
+                **COOKIE_SETTINGS
+            )
         return response
+
+
 
 
 class CookieTokenRefreshView(TokenRefreshView):

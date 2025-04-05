@@ -122,13 +122,11 @@ class CoachInfoSerializer(ModelSerializer):
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
     email = serializers.EmailField(source="user.email", required=True)
-    password = serializers.CharField(
-        source="user.password", required=True, write_only=True
-    )
-
+    password = serializers.CharField(source="user.password", required=True, write_only=True)
+    teams = TeamSerializer(many=True, read_only=True, source='team_set') 
     class Meta:
         model = Coach
-        fields = ["id", "profile", "first_name", "last_name", "email", "password"]
+        fields = ["id", "profile", "first_name", "last_name", "email", "password", "teams"]
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")

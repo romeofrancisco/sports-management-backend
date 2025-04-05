@@ -9,4 +9,4 @@ router.register(r'substitutions', SubstitutionViewSet, basename='substitution')
 
 urlpatterns = [
     path('', include(router.urls)),
-]
+] 
