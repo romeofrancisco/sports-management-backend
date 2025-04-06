@@ -14,16 +14,26 @@ class Game(models.Model):
         POSTPONED = "postponed", "Postponed"
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    league = models.ForeignKey(League, on_delete=models.CASCADE, related_name='games', null=True)
+    league = models.ForeignKey(
+        League, on_delete=models.CASCADE, related_name="games", null=True
+    )
     season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True)
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
-    home_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="home_games")
-    away_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="away_games")
+    home_team = models.ForeignKey(
+        "teams.Team", on_delete=models.CASCADE, related_name="home_games"
+    )
+    away_team = models.ForeignKey(
+        "teams.Team", on_delete=models.CASCADE, related_name="away_games"
+    )
     date = models.DateTimeField()
     location = models.CharField(max_length=255)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True)
-    current_period = models.PositiveIntegerField(default=1)  # For tracking quarters/sets
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
+    )
+    current_period = models.PositiveIntegerField(
+        default=1
+    )  # For tracking quarters/sets
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     duration = models.DurationField(null=True, blank=True)
@@ -86,7 +96,7 @@ class Game(models.Model):
         self.status = self.Status.IN_PROGRESS
         self.started_at = timezone.now()
         self.save()
-        
+
     def complete_game(self):
         if self.status != self.Status.IN_PROGRESS:
             raise ValueError(f"Cannot complete game in {self.status} status")
@@ -136,6 +146,33 @@ class Game(models.Model):
         if errors:
             raise ValidationError(" ".join(errors))
 
+    def get_current_players(self, team):
+        starters = self.starting_lineup.filter(
+            team=team, 
+            is_starting=True
+        ).select_related('player', 'position')
+        
+        current_lineups = {sp.player_id: sp for sp in starters}
+        
+        # Get substitutions in chronological order (oldest first)
+        substitutions = self.substitutions.filter(
+            substitute_in__team=team,
+            period__lte=self.current_period
+        ).order_by("timestamp")
+        
+        for sub in substitutions:
+            if sub.substitute_out_id in current_lineups:
+                current_lineups[sub.substitute_in_id] = StartingLineup(
+                    player=sub.substitute_in,
+                    team=team,
+                    position=current_lineups[sub.substitute_out_id].position,
+                    game=self,
+                    is_starting=False
+                )
+                del current_lineups[sub.substitute_out_id]
+        
+        return list(current_lineups.values())
+
     @property
     def winner(self):
         if self.status != self.Status.COMPLETED:
@@ -156,7 +193,9 @@ class Game(models.Model):
 
 
 class PlayerStat(models.Model):
-    player = models.ForeignKey("teams.Player", on_delete=models.CASCADE)
+    player = models.ForeignKey(
+        "teams.Player", on_delete=models.CASCADE, related_name="player_stats"
+    )
     game = models.ForeignKey(Game, on_delete=models.CASCADE)
     stat_type = models.ForeignKey(SportStatType, on_delete=models.CASCADE)
     period = models.PositiveIntegerField()
@@ -181,19 +220,17 @@ class PlayerStat(models.Model):
 
 
 class Substitution(models.Model):
-    game = models.ForeignKey(Game, on_delete=models.CASCADE)
-    substitute_in = models.ForeignKey(
-        "teams.Player", on_delete=models.CASCADE, related_name="substitutions_in"
-    )
-    substitute_out = models.ForeignKey(
-        "teams.Player", on_delete=models.CASCADE, related_name="substitutions_out"
-    )
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="substitutions")
+    substitute_in = models.ForeignKey("teams.Player", on_delete=models.CASCADE, related_name="substitutions_in")
+    substitute_out = models.ForeignKey("teams.Player", on_delete=models.CASCADE, related_name="substitutions_out")
     period = models.PositiveIntegerField()
     timestamp = models.DateTimeField(auto_now_add=True)
-
     class Meta:
-        unique_together = ("game", "substitute_out", "period")
         ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["game", "period"]),
+            models.Index(fields=["substitute_in", "substitute_out"]),
+        ]
 
     def clean(self):
         # Validate same team
@@ -210,14 +247,11 @@ class Substitution(models.Model):
 
 
 class StartingLineup(models.Model):
-    game = models.ForeignKey(
-        Game, on_delete=models.CASCADE, related_name="starting_lineup"
-    )
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="starting_lineup")
     player = models.ForeignKey("teams.Player", on_delete=models.CASCADE)
     team = models.ForeignKey("teams.Team", on_delete=models.CASCADE)
     is_starting = models.BooleanField(default=True)
     position = models.ForeignKey(Position, on_delete=models.SET_NULL, null=True)
-    is_starting = models.BooleanField(default=True, editable=False)
 
     class Meta:
         unique_together = ("game", "player")  # A player can't start multiple times
