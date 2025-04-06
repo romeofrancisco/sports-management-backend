@@ -96,6 +96,9 @@ class Player(models.Model):
     
     class Meta:
         unique_together = ['team', 'jersey_number']
+        
+    def __str__(self):
+        return f"{self.user.get_full_name()} (#{self.jersey_number})"
     
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -105,13 +108,25 @@ class Player(models.Model):
         super().save(*args, **kwargs)
     
     def is_active_in_game(self, game):
-        """Check if player is currently active in game"""
-        last_sub = self.substitutions_out.filter(game=game).last()
-        if last_sub:
-            # Check if there's a subsequent substitution back in
-            return Substitution.objects.filter(
-                game=game,
-                substitute_in=self,
-                timestamp__gt=last_sub.timestamp
-            ).exists()
-        return True
+        """Determine if player is currently on the field considering their status and substitutions"""
+        # Check if player is part of the game's teams
+        if self.team not in [game.home_team, game.away_team]:
+            return False
+
+        # Check if player is a starter
+        is_starter = game.starting_lineup.filter(
+            player=self, 
+            is_starting=True
+        ).exists()
+
+        # Get substitution counts
+        subs_out = self.substitutions_out.filter(game=game).count()
+        subs_in = self.substitutions_in.filter(game=game).count()
+
+        # Determine active status
+        if is_starter:
+            # Starter is active if not subbed out more than subbed back in
+            return subs_out <= subs_in
+        else:
+            # Substitute is active if subbed in more than subbed out
+            return subs_in > subs_out

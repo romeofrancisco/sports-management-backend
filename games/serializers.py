@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Game, PlayerStat, StartingLineup, Substitution
-from teams.serializers import TeamSerializer
+from teams.serializers import TeamSerializer, PlayerInfoSerializer
 from teams.models import Team, Player
 from sports.models import SportStatType, Position
 from sports.serializers import PositionSerializer
@@ -106,7 +106,6 @@ class GameSerializer(serializers.ModelSerializer):
     away_team_id = serializers.PrimaryKeyRelatedField(
         queryset=Team.objects.all(), write_only=True, source="away_team"
     )
-    
 
     class Meta:
         model = Game
@@ -133,15 +132,23 @@ class GameSerializer(serializers.ModelSerializer):
             "winner",
             "created_at",
         ]
-        read_only_fields = ["created_at", "updated_at", "winner", "home_team_score","away_team_score"]
+        read_only_fields = [
+            "created_at",
+            "updated_at",
+            "winner",
+            "home_team_score",
+            "away_team_score",
+        ]
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
-    
+
     def get_lineup_status(self, obj):
         return {
-            'home_ready': obj.starting_lineup.filter(team=obj.home_team).count() >= obj.sport.max_players_on_field,
-            'away_ready': obj.starting_lineup.filter(team=obj.away_team).count() >= obj.sport.max_players_on_field
+            "home_ready": obj.starting_lineup.filter(team=obj.home_team).count()
+            >= obj.sport.max_players_on_field,
+            "away_ready": obj.starting_lineup.filter(team=obj.away_team).count()
+            >= obj.sport.max_players_on_field,
         }
 
     def validate(self, data):
@@ -170,7 +177,6 @@ class GameActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
         choices=["start", "complete", "postpone"], required=True
     )
-    notes = serializers.CharField(required=False, allow_blank=True)
 
     def validate_action(self, value):
         game = self.context["game"]
@@ -199,7 +205,6 @@ class GamePlayerSerializer(serializers.ModelSerializer):
     short_name = serializers.SerializerMethodField()
     profile = serializers.ImageField(source="user.profile", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True)
-    team = serializers.SerializerMethodField()
     team_side = serializers.SerializerMethodField()
     position = PositionSerializer(many=True)
 
@@ -221,16 +226,9 @@ class GamePlayerSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
-    
+
     def get_short_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name[0]}."
-
-    def get_team(self, obj):
-        return {
-            "id": obj.team.id,
-            "name": obj.team.name,
-            "logo": obj.team.logo.url if obj.team.logo else None,
-        }
 
     def get_team_side(self, obj):
         game = self.context["game"]
@@ -287,48 +285,96 @@ class SubstitutionSerializer(serializers.ModelSerializer):
         return data
 
 
-class StartingLineupSerializer(serializers.ModelSerializer):
-    player_name = serializers.CharField(source='player.user.get_full_name', read_only=True)
-    team_name = serializers.CharField(source='team.name', read_only=True)
-    position = serializers.PrimaryKeyRelatedField(queryset=Position.objects.all()) 
+class CurrentPlayerSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(source="player.user.id")
+    profile = serializers.ImageField(source="player.user.profile", read_only=True)
+    first_name = serializers.CharField(source="player.user.first_name")
+    last_name = serializers.CharField(source="player.user.last_name")
+    jersey_number = serializers.IntegerField(source="player.jersey_number")
+    position = PositionSerializer()
+    team = serializers.IntegerField(source="player.team.id")
+    short_name = serializers.SerializerMethodField()
     team_side = serializers.SerializerMethodField()
 
     class Meta:
         model = StartingLineup
         fields = [
-            'player', 'player_name', 
-            'team', 'team_name', 'position',
-            'team_side'
+            "id",
+            "profile",
+            "short_name",
+            "first_name",
+            "last_name",
+            "position",
+            "jersey_number",
+            "team_side",
+            "team",
         ]
+
+    def get_short_name(self, obj):
+        return f"{obj.player.user.first_name} {obj.player.user.last_name[0]}."
+    
+    def get_team_side(self, obj):
+        game = obj.game
+        return "home_team" if obj.team == game.home_team else "away_team"
+
+
+class GameCurrentPlayersSerializer(serializers.ModelSerializer):
+    home_players = serializers.SerializerMethodField()
+    away_players = serializers.SerializerMethodField()
+    current_period = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Game
+        fields = ["id", "current_period", "home_players", "away_players"]
+
+    def get_home_players(self, obj):
+        players = obj.get_current_players(obj.home_team)
+        return CurrentPlayerSerializer(players, many=True, context=self.context).data
+
+    def get_away_players(self, obj):
+        players = obj.get_current_players(obj.away_team)
+        return CurrentPlayerSerializer(players, many=True, context=self.context).data
+
+
+class StartingLineupSerializer(serializers.ModelSerializer):
+    player_name = serializers.CharField(
+        source="player.user.get_full_name", read_only=True
+    )
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    position = serializers.PrimaryKeyRelatedField(queryset=Position.objects.all())
+    team_side = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StartingLineup
+        fields = ["player", "player_name", "team", "team_name", "position", "team_side"]
         extra_kwargs = {
-            'team': {'read_only': True},  # Changed from write_only
-            'game': {'write_only': True},
+            "team": {"read_only": True},  # Changed from write_only
+            "game": {"write_only": True},
         }
-        
+
     def get_team_side(self, obj):
         """Determine if player is on home or away team"""
-        return 'home' if obj.team == obj.game.home_team else 'away'
-    
+        return "home" if obj.team == obj.game.home_team else "away"
+
     def create(self, validated_data):
         # Get game from context
-        game = self.context['game']
-        validated_data['game'] = game
-        
+        game = self.context["game"]
+        validated_data["game"] = game
+
         # Force is_starting to True
-        validated_data['is_starting'] = True
-        
+        validated_data["is_starting"] = True
+
         return super().create(validated_data)
 
     def validate(self, attrs):
-        game = self.context['game']
-        player = attrs['player']
-        
+        game = self.context["game"]
+        player = attrs["player"]
+
         # Auto-assign team based on player's team
-        attrs['team'] = player.team
-        
+        attrs["team"] = player.team
+
         # Validate player belongs to game teams
         if player.team not in [game.home_team, game.away_team]:
             raise ValidationError("Player not in this game")
-            
-        return attrs
 
+        return attrs
