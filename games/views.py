@@ -3,7 +3,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
-from django.shortcuts import get_object_or_404
 from django.db.models import Value, IntegerField
 from .models import Game, PlayerStat, Substitution
 from teams.models import Player
@@ -21,6 +20,7 @@ from .serializers import (
 )
 from sports_management.permissions import IsAdminOrCoachUser
 from collections import defaultdict
+from django.db.models import Count
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -80,204 +80,182 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
     def stats_summary(self, request):
         game_id = request.query_params.get("game_id")
         team = request.query_params.get("team")
+
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
 
         try:
-            game = Game.objects.get(pk=game_id)
-            current_period = game.current_period
-            sport = game.sport
-            
-            if team == 'home_team':
-                teams = [game.home_team]
-            elif team == 'away_team':
-                teams = [game.away_team]
-            else:
-                teams = [game.home_team, game.away_team]
-
-            all_stats = SportStatType.objects.filter(sport=sport)
-            base_stats = all_stats.filter(composite_stats__isnull=True)
-            composite_stats = all_stats.filter(composite_stats__isnull=False)
-
-            sum_composites = composite_stats.filter(calculation_type="sum")
-            percentage_composites = composite_stats.filter(
-                calculation_type="percentage"
-            )
-
-            players = Player.objects.filter(team__in=teams)
-            stat_records = PlayerStat.objects.filter(
-                game=game, stat_type__in=base_stats
-            ).select_related("player", "stat_type")
+            game = Game.objects.select_related("home_team", "away_team").get(pk=game_id)
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
 
-        counter_abbrevs = set(
-            SportStatType.objects.filter(
-                sport=sport, is_counter=True, calculation_type="none"
-            ).values_list("abbreviation", flat=True)
+        # determine which teams to include
+        teams = []
+        if team == "home_team":
+            teams = [game.home_team]
+        elif team == "away_team":
+            teams = [game.away_team]
+        else:
+            teams = [game.home_team, game.away_team]
+
+        # fetch stat types
+        all_stats = SportStatType.objects.filter(sport=game.sport)
+        base_stats = all_stats.filter(composite_stats__isnull=True)
+        sum_composites = all_stats.filter(
+            composite_stats__isnull=False, calculation_type="sum"
+        )
+        pct_composites = all_stats.filter(
+            composite_stats__isnull=False, calculation_type="percentage"
         )
 
-        all_base_abbrevs = list(base_stats.values_list("abbreviation", flat=True))
-        all_calc_abbrevs = list(
-            sum_composites.values_list("abbreviation", flat=True)
-        ) + list(percentage_composites.values_list("abbreviation", flat=True))
+        # abbreviations
+        counter_abbrevs = set(
+            all_stats.filter(is_counter=True, calculation_type="none").values_list(
+                "abbreviation", flat=True
+            )
+        )
+        base_abbrevs = list(base_stats.values_list("abbreviation", flat=True))
+        sum_abbrevs = list(sum_composites.values_list("abbreviation", flat=True))
+        pct_abbrevs = list(pct_composites.values_list("abbreviation", flat=True))
+        all_calc_abbrevs = sum_abbrevs + pct_abbrevs
 
+        # aggregate base stats per player per period
+        base_agg = (
+            PlayerStat.objects.filter(
+                game=game, stat_type__in=base_stats, player__team__in=teams
+            )
+            .values("player_id", "period", "stat_type__abbreviation")
+            .annotate(count=Count("id"))
+        )
+
+        # aggregate sum composites per player per period by summing their components
+        # we prefetch the M2M composite_stats relationship
+        sum_comp_map = {
+            comp.abbreviation: list(
+                comp.composite_stats.values_list("abbreviation", flat=True)
+            )
+            for comp in sum_composites.prefetch_related("composite_stats")
+        }
+
+        # build an in-Python structure for fast lookup
         summary = {}
-        for player in players:
-            summary[player.user.id] = {
+        for player in Player.objects.filter(team__in=teams).select_related("user"):
+            summary[player.pk] = {
                 "player_id": player.user.id,
                 "player_name": player.user.get_full_name(),
                 "jersey_number": player.jersey_number,
                 "team_id": player.team.id,
                 "periods": {
-                    period: {
-                        "base_stats": {abbrev: 0 for abbrev in all_base_abbrevs},
-                        "calculated_stats": {abbrev: 0 for abbrev in all_calc_abbrevs},
+                    p: {
+                        "base_stats": dict.fromkeys(base_abbrevs, 0),
+                        "calculated_stats": dict.fromkeys(all_calc_abbrevs, 0),
                     }
-                    for period in range(1, current_period + 1)
+                    for p in range(1, game.current_period + 1)
                 },
             }
 
-        for stat in stat_records:
-            player_id = stat.player.user.id
-            period = stat.period
-            abbrev = stat.stat_type.abbreviation
-            if player_id in summary and period <= current_period:
-                summary[player_id]["periods"][period]["base_stats"][abbrev] += 1
+        # populate base stats
+        for rec in base_agg:
+            pid, per, abbr, cnt = (
+                rec["player_id"],
+                rec["period"],
+                rec["stat_type__abbreviation"],
+                rec["count"],
+            )
+            if pid in summary and per <= game.current_period:
+                summary[pid]["periods"][per]["base_stats"][abbr] = cnt
 
-        def process_composites(composites, is_percentage=False):
-            for cs in composites:
-                components = cs.composite_stats.all()
-                component_abbrevs = [c.abbreviation for c in components]
-                cs_abbrev = cs.abbreviation
-
-                for player_id, player_data in summary.items():
-                    for period, period_data in player_data["periods"].items():
-                        try:
-                            if not is_percentage:
-                                total = sum(
-                                    period_data["base_stats"].get(abbrev, 0)
-                                    + period_data["calculated_stats"].get(abbrev, 0)
-                                    for abbrev in component_abbrevs
-                                )
-                                period_data["calculated_stats"][cs_abbrev] = total
-                            else:
-                                if len(component_abbrevs) != 2:
-                                    continue
-
-                                made_candidates = [
-                                    ab for ab in component_abbrevs if ab.endswith("MA")
-                                ]
-                                attempt_candidates = [
-                                    ab
-                                    for ab in component_abbrevs
-                                    if ab.endswith("AT") or ab.endswith("MS")
-                                ]
-
-                                if (
-                                    len(made_candidates) == 1
-                                    and len(attempt_candidates) == 1
-                                ):
-                                    numerator_abbrev = made_candidates[0]
-                                    denominator_abbrev = attempt_candidates[0]
-                                else:
-                                    continue
-
-                                numerator = period_data["base_stats"].get(
-                                    numerator_abbrev, 0
-                                ) + period_data["calculated_stats"].get(
-                                    numerator_abbrev, 0
-                                )
-                                denominator = period_data["base_stats"].get(
-                                    denominator_abbrev, 0
-                                ) + period_data["calculated_stats"].get(
-                                    denominator_abbrev, 0
-                                )
-                                percentage = (
-                                    round((numerator / denominator) * 100, 1)
-                                    if denominator != 0
-                                    else 0.0
-                                )
-                                period_data["calculated_stats"][cs_abbrev] = percentage
-                        except KeyError:
-                            continue
-
-        process_composites(sum_composites)
-        process_composites(percentage_composites, is_percentage=True)
-
-        response_data = []
-        for player_id, data in summary.items():
-            periods_list = []
-            total_points = 0
-            combined_base = {abbrev: 0 for abbrev in all_base_abbrevs}
-            combined_calc = {abbrev: 0 for abbrev in all_calc_abbrevs}
-
-            for period_num in range(1, current_period + 1):
-                period_data = data["periods"][period_num]
-
-                points = 0
-                for stat in all_stats:
-                    abbrev = stat.abbreviation
-                    if not abbrev or stat.point_value == 0:
-                        continue
-
-                    made = (
-                        period_data['base_stats'].get(abbrev, 0) +
-                        period_data['calculated_stats'].get(abbrev, 0)
+        # compute sum composites
+        for cs_abbr, components in sum_comp_map.items():
+            for pid, data in summary.items():
+                for per, pd in data["periods"].items():
+                    total = sum(
+                        pd["base_stats"].get(c, 0) + pd["calculated_stats"].get(c, 0)
+                        for c in components
                     )
-                    points += made * stat.point_value
+                    pd["calculated_stats"][cs_abbr] = total
 
-                total_points += points
+        # compute percentage composites
+        for comp in pct_composites.prefetch_related('composite_stats'):
+            comps = list(comp.composite_stats.values_list('abbreviation', flat=True))
+            if len(comps) != 2:
+                continue
+            made_abbr = next((c for c in comps if c.endswith('MA')), None)
+            att_abbr  = next((c for c in comps if c.endswith(('AT','MS'))), None)
+            if not made_abbr or not att_abbr:
+                continue
 
-                for k, v in period_data["base_stats"].items():
-                    combined_base[k] += v
-                for k, v in period_data["calculated_stats"].items():
-                    combined_calc[k] += v
+            for pid, data in summary.items():
+                for per, pd in data['periods'].items():
+                    made = pd['base_stats'].get(made_abbr, 0) \
+                         + pd['calculated_stats'].get(made_abbr, 0)
+                    att  = pd['base_stats'].get(att_abbr, 0) \
+                         + pd['calculated_stats'].get(att_abbr, 0)
+                    pct  = round((made/att)*100,1) if att else 0.0
+                    pd['calculated_stats'][comp.abbreviation] = pct
 
-                filtered_base_stats = {
+        # build final response
+        response = []
+        for data in summary.values():
+            total_base = defaultdict(int)
+            total_calc = defaultdict(float)
+            periods_out = []
+
+            for per in range(1, game.current_period + 1):
+                pd = data["periods"][per]
+                # compute points
+                pts = sum(
+                    (
+                        pd["base_stats"].get(s.abbreviation, 0)
+                        + pd["calculated_stats"].get(s.abbreviation, 0)
+                    )
+                    * s.point_value
+                    for s in all_stats
+                    if s.point_value
+                )
+
+                # filter out counter stats
+                fb = {
                     k: v
-                    for k, v in period_data["base_stats"].items()
+                    for k, v in pd["base_stats"].items()
                     if k not in counter_abbrevs
                 }
-                filtered_calc_stats = {
+                fc = {
                     k: int(v) if k.endswith("_AT") else v
-                    for k, v in period_data["calculated_stats"].items()
+                    for k, v in pd["calculated_stats"].items()
                     if k not in counter_abbrevs
                 }
 
-                periods_list.append(
+                for k, v in fb.items():
+                    total_base[k] += v
+                for k, v in fc.items():
+                    total_calc[k] += v
+
+                periods_out.append(
                     {
-                        "period": period_num,
-                        "base_stats": filtered_base_stats,
-                        "calculated_stats": filtered_calc_stats,
-                        "points": points,
+                        "period": per,
+                        "base_stats": fb,
+                        "calculated_stats": fc,
+                        "points": pts,
                     }
                 )
 
-            response_data.append(
+            response.append(
                 {
                     "id": data["player_id"],
                     "name": data["player_name"],
                     "jersey_number": data["jersey_number"],
                     "team_id": data["team_id"],
-                    "periods": periods_list,
-                    "total_points": total_points,
+                    "periods": periods_out,
+                    "total_points": sum(p["points"] for p in periods_out),
                     "total_stats": {
-                        "base_stats": {
-                            k: v
-                            for k, v in combined_base.items()
-                            if k not in counter_abbrevs
-                        },
-                        "calculated_stats": {
-                            k: int(v) if k.endswith("_AT") else v
-                            for k, v in combined_calc.items()
-                            if k not in counter_abbrevs
-                        },
+                        "base_stats": dict(total_base),
+                        "calculated_stats": dict(total_calc),
                     },
                 }
             )
 
-        return Response(response_data)
+        return Response(response)
 
 
 class GameViewSet(viewsets.ModelViewSet):
