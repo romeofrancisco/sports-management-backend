@@ -18,9 +18,7 @@ class PlayerStatRecordSerializer(serializers.ModelSerializer):
 
 
 class PlayerStatSerializer(serializers.ModelSerializer):
-    player_name = serializers.CharField(
-        source="player.user.get_full_name", read_only=True
-    )
+    player_name = serializers.CharField(source="player.user.get_full_name", read_only=True)
     team = serializers.SerializerMethodField()
     stat_details = serializers.SerializerMethodField()
 
