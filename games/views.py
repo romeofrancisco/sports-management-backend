@@ -215,10 +215,18 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
             for period_num in range(1, current_period + 1):
                 period_data = data["periods"][period_num]
 
-                fg_ma = period_data["calculated_stats"].get("FG_MA", 0)
-                fg3_ma = period_data["calculated_stats"].get("3FG_MA", 0)
-                ft_ma = period_data["calculated_stats"].get("FT_MA", 0)
-                points = (fg_ma - fg3_ma) * 2 + fg3_ma * 3 + ft_ma
+                points = 0
+                for stat in all_stats:
+                    abbrev = stat.abbreviation
+                    if not abbrev or stat.point_value == 0:
+                        continue
+
+                    made = (
+                        period_data['base_stats'].get(abbrev, 0) +
+                        period_data['calculated_stats'].get(abbrev, 0)
+                    )
+                    points += made * stat.point_value
+
                 total_points += points
 
                 for k, v in period_data["base_stats"].items():
