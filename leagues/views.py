@@ -2,7 +2,8 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import League, Season
-from .serializers import LeagueSerializer, LeagueWriteSerializer, SeasonSerializer
+from .serializers import LeagueSerializer, LeagueWriteSerializer, SeasonSerializer, TeamStandingsSerializer
+from django.shortcuts import get_object_or_404
 
 class LeagueViewSet(viewsets.ModelViewSet):
     queryset = League.objects.all()
@@ -41,7 +42,7 @@ class LeagueViewSet(viewsets.ModelViewSet):
             
         league.teams.remove(team_id)
         return Response({'status': 'Team removed'})
-
+    
 class SeasonViewSet(viewsets.ModelViewSet):
     serializer_class = SeasonSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
@@ -50,5 +51,34 @@ class SeasonViewSet(viewsets.ModelViewSet):
         return Season.objects.filter(league_id=self.kwargs['league_pk'])
 
     def perform_create(self, serializer):
-        league = League.objects.get(pk=self.kwargs['league_pk'])
+        league = get_object_or_404(League, pk=self.kwargs['league_pk'])
         serializer.save(league=league)
+    
+    @action(detail=True, methods=['get'])
+    def standings(self, request, league_pk=None, pk=None):
+        season = self.get_object()
+        raw_standings = season.standings()
+        
+        standings_data = {item['team_id']: item for item in raw_standings}
+        
+        teams = season.league.teams.all()
+        
+        serializer = TeamStandingsSerializer(
+            teams,
+            many=True,
+            context={
+                'request': request,
+                'standings_data': standings_data
+            }
+        )
+        
+        # Sort by standings criteria
+        sorted_data = sorted(
+            serializer.data,
+            key=lambda x: (
+                -x['standings'].get('points', 0),
+                -x['standings'].get('win_percentage', 0)
+            )
+        )
+        
+        return Response(sorted_data)

@@ -15,9 +15,9 @@ class Game(models.Model):
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     league = models.ForeignKey(
-        League, on_delete=models.CASCADE, related_name="games", null=True
+        League, on_delete=models.CASCADE, null=True
     )
-    season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True)
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True, related_name="games")
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
     home_team = models.ForeignKey(
@@ -26,8 +26,8 @@ class Game(models.Model):
     away_team = models.ForeignKey(
         "teams.Team", on_delete=models.CASCADE, related_name="away_games"
     )
-    date = models.DateTimeField()
-    location = models.CharField(max_length=255)
+    date = models.DateTimeField(null=True, blank=True)
+    location = models.CharField(max_length=255, blank=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
     )
@@ -109,6 +109,14 @@ class Game(models.Model):
 
         self.save(update_fields=["status", "ended_at", "duration", "updated_at"])
 
+    def next_period(self):
+        if self.status != self.Status.IN_PROGRESS:
+            raise ValueError(f"Cannot proceed to next period in {self.status} status")
+        
+        self.current_period += 1
+        self.save(update_fields=["current_period"])
+        
+    
     def validate_starting_lineup(self):
         """Validate lineup requirements"""
         sport = self.sport

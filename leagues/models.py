@@ -1,117 +1,24 @@
 from django.db import models
 from django.core.exceptions import ValidationError
-
+from django.db.models import Sum, F, Q
 
 class League(models.Model):
-    class EliminationType(models.TextChoices):
-        SINGLE = "single_elimination", "Single Elimination"
-        DOUBLE = "double_elimination", "Double Elimination"
-
     name = models.CharField(max_length=255)
     sport = models.ForeignKey("sports.Sport", on_delete=models.CASCADE)
     teams = models.ManyToManyField("teams.Team", related_name="leagues")
-    elimination_type = models.CharField(
-        max_length=20,
-        choices=EliminationType.choices,
-        default=EliminationType.SINGLE,
-        blank=False,
-    )
-    start_date = models.DateField()
-    end_date = models.DateField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-start_date"]
+        ordering = ["-created_at"]
         unique_together = ["name", "sport"]
 
     def __str__(self):
         return f"{self.name} ({self.sport})"
 
-    @property
-    def standings(self):
-        standings = []
-        for team in self.teams.all():
-            # Access games through the league's game set
-            games = self.games.filter(status="completed")
-
-            # Calculate statistics
-            wins = games.filter(
-                models.Q(
-                    home_team=team, home_team_score__gt=models.F("away_team_score")
-                )
-                | models.Q(
-                    away_team=team, away_team_score__gt=models.F("home_team_score")
-                )
-            ).count()
-
-            losses = games.filter(
-                models.Q(
-                    home_team=team, home_team_score__lt=models.F("away_team_score")
-                )
-                | models.Q(
-                    away_team=team, away_team_score__lt=models.F("home_team_score")
-                )
-            ).count()
-
-            ties = games.filter(
-                models.Q(home_team=team, home_team_score=models.F("away_team_score"))
-                | models.Q(away_team=team, away_team_score=models.F("home_team_score"))
-            ).count()
-
-            # Calculate points
-            points_for = sum(
-                [
-                    sum(
-                        games.filter(home_team=team).values_list(
-                            "home_team_score", flat=True
-                        )
-                    ),
-                    sum(
-                        games.filter(away_team=team).values_list(
-                            "away_team_score", flat=True
-                        )
-                    ),
-                ]
-            )
-
-            points_against = sum(
-                [
-                    sum(
-                        games.filter(home_team=team).values_list(
-                            "away_team_score", flat=True
-                        )
-                    ),
-                    sum(
-                        games.filter(away_team=team).values_list(
-                            "home_team_score", flat=True
-                        )
-                    ),
-                ]
-            )
-
-            standings.append(
-                {
-                    "team_id": team.id,
-                    "team_name": team.name,
-                    "wins": wins,
-                    "losses": losses,
-                    "ties": ties,
-                    "points_for": points_for,
-                    "points_against": points_against,
-                    "points_difference": points_for - points_against,
-                }
-            )
-
-        return sorted(
-            standings, key=lambda x: (-x["wins"], -x["ties"], -x["points_difference"])
-        )
-
     def clean(self):
-        # Validate league dates
         if self.start_date >= self.end_date:
             raise ValidationError("End date must be after start date")
-
 
 class Season(models.Model):
     class Status(models.TextChoices):
@@ -123,7 +30,6 @@ class Season(models.Model):
             
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="seasons")
     year = models.PositiveIntegerField()
-    record_stats = models.BooleanField(default=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
     start_date = models.DateField()
     end_date = models.DateField()
@@ -142,3 +48,104 @@ class Season(models.Model):
             raise ValidationError("Season cannot start before league start date")
         if self.end_date > self.league.end_date:
             raise ValidationError("Season cannot end after league end date")
+    
+    @property
+    def has_bracket(self):
+        """Check if any bracket exists for this season"""
+        return self.brackets.exists()
+
+    def standings(self):
+        sport = self.league.sport
+        scoring_type = sport.scoring_type  # "points", "sets", or "goals"
+        games = self.games.filter(status="completed", season=self.id)
+        standings = []
+
+        for team in self.league.teams.all():
+            team_games = games.filter(Q(home_team=team) | Q(away_team=team))
+            matches_played = team_games.count()
+
+            wins = team_games.filter(
+                Q(home_team=team, home_team_score__gt=F("away_team_score")) |
+                Q(away_team=team, away_team_score__gt=F("home_team_score"))
+            ).count()
+
+            losses = team_games.filter(
+                Q(home_team=team, home_team_score__lt=F("away_team_score")) |
+                Q(away_team=team, away_team_score__lt=F("home_team_score"))
+            ).count()
+
+            ties = 0
+            if sport.has_tie:
+                ties = team_games.filter(
+                    Q(home_team=team, home_team_score=F("away_team_score")) |
+                    Q(away_team=team, away_team_score=F("home_team_score"))
+                ).count()
+
+            # Scoring values
+            home = games.filter(home_team=team).aggregate(
+                scored=Sum('home_team_score'),
+                conceded=Sum('away_team_score')
+            )
+            away = games.filter(away_team=team).aggregate(
+                scored=Sum('away_team_score'),
+                conceded=Sum('home_team_score')
+            )
+            scored = (home['scored'] or 0) + (away['scored'] or 0)
+            conceded = (home['conceded'] or 0) + (away['conceded'] or 0)
+            goal_difference = scored - conceded
+
+            team_data = {
+                "team_id": team.id,
+                "team_name": team.name,
+                "matches_played": matches_played,
+                "wins": wins,
+                "losses": losses,
+            }
+
+            if sport.has_tie:
+                team_data["ties"] = ties
+
+            if scoring_type == "points":
+                points = wins * 3
+                win_percentage = round(wins / matches_played, 3) if matches_played else 0
+                team_data.update({
+                    "points": points,
+                    "win_percentage": win_percentage,
+                })
+
+            elif scoring_type == "sets":
+                set_ratio = round(scored / conceded, 2) if conceded else scored
+                team_data.update({
+                    "sets_won": scored,
+                    "sets_lost": conceded,
+                    "set_ratio": set_ratio,
+                })
+
+            elif scoring_type == "goals":
+                point_ratio = round(scored / conceded, 2) if conceded else scored
+                team_data.update({
+                    "points_won": scored,
+                    "points_lost": conceded,
+                    "point_ratio": point_ratio,
+                    "goal_difference": goal_difference,
+                })
+
+            standings.append(team_data)
+
+        # Custom sorting based on scoring type
+        def sort_key(team):
+            if scoring_type == "points":
+                return (-team["points"], -team.get("win_percentage", 0))
+            elif scoring_type == "sets":
+                return (-team.get("set_ratio", 0), -team.get("sets_won", 0))
+            elif scoring_type == "goals":
+                return (-team.get("point_ratio", 0), -team.get("goal_difference", 0))
+            return (-team.get("wins", 0),)
+
+        sorted_standings = sorted(standings, key=sort_key)
+
+        # Add rankings to the standings
+        for rank, team in enumerate(sorted_standings, start=1):
+            team["rank"] = rank
+            
+        return sorted_standings
