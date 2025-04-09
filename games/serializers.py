@@ -139,7 +139,7 @@ class GameSerializer(serializers.ModelSerializer):
         ]
 
     def get_winner(self, obj):
-        return obj.winner.id if obj.winner else None
+        return obj.winner.id if obj.winner else None    
 
     def get_lineup_status(self, obj):
         return {
@@ -173,14 +173,14 @@ class GameSerializer(serializers.ModelSerializer):
 
 class GameActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
-        choices=["start", "complete", "postpone"], required=True
+        choices=["start", "complete", "postpone","next_period"], required=True
     )
 
     def validate_action(self, value):
         game = self.context["game"]
         valid_transitions = {
             Game.Status.SCHEDULED: ["start"],
-            Game.Status.IN_PROGRESS: ["complete", "postpone"],
+            Game.Status.IN_PROGRESS: ["complete", "postpone", "next_period"],
             Game.Status.POSTPONED: ["start"],
             Game.Status.COMPLETED: [],
         }

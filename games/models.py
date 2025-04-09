@@ -109,6 +109,14 @@ class Game(models.Model):
 
         self.save(update_fields=["status", "ended_at", "duration", "updated_at"])
 
+    def next_period(self):
+        if self.status != self.Status.IN_PROGRESS:
+            raise ValueError(f"Cannot proceed to next period in {self.status} status")
+        
+        self.current_period += 1
+        self.save(update_fields=["current_period"])
+        
+    
     def validate_starting_lineup(self):
         """Validate lineup requirements"""
         sport = self.sport

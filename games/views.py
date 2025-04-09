@@ -19,7 +19,7 @@ from .serializers import (
     GameCurrentPlayersSerializer,
 )
 from sports_management.permissions import IsAdminOrCoachUser
-from .services import PlayerStatsSummaryService, RecordingService
+from .services import PlayerStatsSummaryService, RecordingService, TeamStatsSummaryService
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -54,13 +54,25 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         return Response(PlayerStatSerializer(stat).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["get"])
-    def stats_summary(self, request):
+    def player_stats_summary(self, request):
         game_id = request.query_params.get("game_id")
         team   = request.query_params.get("team")
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
         try:
             service = PlayerStatsSummaryService(game_id=game_id, team_filter=team)
+        except Game.DoesNotExist:
+            return Response({"error": "Game not found"}, status=404)
+        data = service.get_summary()
+        return Response(data)
+    
+    @action(detail=False, methods=["get"])
+    def team_stats_summary(self, request):
+        game_id = request.query_params.get("game_id")
+        if not game_id:
+            return Response({"error": "game_id parameter required"}, status=400)
+        try:
+            service = TeamStatsSummaryService(game_id=game_id)
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
         data = service.get_summary()
@@ -91,6 +103,8 @@ class GameViewSet(viewsets.ModelViewSet):
                 game.start_game()
             elif action == "complete":
                 game.complete_game()
+            elif action == "next_period":
+                game.next_period()
 
             return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
         except ValidationError as e:

@@ -7,6 +7,9 @@ class Sport(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     max_players_per_team = models.PositiveIntegerField(blank=False)
     max_players_on_field = models.PositiveIntegerField(blank=False)
+    has_period = models.BooleanField(default=False)
+    max_period = models.PositiveIntegerField(blank=False)
+    has_tie = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
