@@ -6,7 +6,7 @@ from .models import Bracket, BracketRound, BracketMatch
 from .serializers import BracketSerializer
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
-from time import timezone
+import random
 
 
 class BracketViewSet(viewsets.ModelViewSet):
@@ -14,43 +14,25 @@ class BracketViewSet(viewsets.ModelViewSet):
     serializer_class = BracketSerializer
     
     def perform_create(self, serializer):
-        """Hook for bracket creation"""
         bracket = serializer.save()
         self._generate_bracket(bracket)
 
     def _generate_bracket(self, bracket):
-        """Route to correct elimination type generator"""
         if bracket.elimination_type == 'single':
             self._generate_single_elimination(bracket)
         elif bracket.elimination_type == 'double':
             self._generate_double_elimination(bracket)
+        elif bracket.elimination_type == 'round_robin':
+            self._generate_round_robin(bracket)
         else:
             raise ValidationError("Invalid elimination type")
-
-    def _generate_initial_round(self, bracket, teams):
-        """Create first round only"""
-        with transaction.atomic():
-            initial_round = BracketRound.objects.create(bracket=bracket, round_number=1)
-
-            # Shuffle and pair teams
-            teams = list(teams)
-            teams_count = len(teams)
-            
-
-            # Create matches for initial round
-            for i in range(0, teams_count, 2):
-                away = teams[i + 1] if i + 1 < teams_count else None
-                BracketMatch.objects.create(
-                    bracket=bracket,
-                    round=initial_round,
-                    home_team=teams[i],
-                    away_team=away,
-                )
                 
     def _generate_single_elimination(self, bracket):
         teams = list(bracket.season.league.teams.all())
         if not teams:
             raise ValidationError("No teams found")
+
+        random.shuffle(teams)
 
         total_teams = len(teams)
         total_rounds = (total_teams - 1).bit_length()
@@ -103,6 +85,64 @@ class BracketViewSet(viewsets.ModelViewSet):
                     current_matches[second_idx].next_match = next_match
                     current_matches[second_idx].save()
         
+    def _generate_double_elimination(self, bracket):
+        # Implement your double elimination logic here or leave as a placeholder
+        raise NotImplementedError("Double elimination generation is not implemented yet.")
+    
+    def _generate_round_robin(self, bracket):
+        teams = list(bracket.season.league.teams.all())
+        if not teams:
+            raise ValidationError("No teams found")
+
+        num_teams = len(teams)
+        is_odd = num_teams % 2 != 0
+
+        # If odd number of teams, add a "bye" placeholder (None)
+        if is_odd:
+            teams.append(None)
+            num_teams += 1
+
+        total_rounds = num_teams - 1
+        half_size = num_teams // 2
+
+        # Generate initial team order (fixed first, rotating rest)
+        teams_fixed = teams[0]
+        rotating = teams[1:]
+
+        for round_number in range(1, total_rounds + 1):
+            round_obj = BracketRound.objects.create(
+                bracket=bracket,
+                round_number=round_number
+            )
+
+            matchups = []
+
+            # Pair the fixed team
+            first = teams_fixed
+            second = rotating[-1]
+            matchups.append((first, second))
+
+            # Pair remaining teams
+            for i in range(half_size - 1):
+                home = rotating[i]
+                away = rotating[-i - 2]
+                matchups.append((home, away))
+
+            # Create matches
+            for home, away in matchups:
+                if home is None or away is None:
+                    continue  # Skip matches involving "bye"
+                BracketMatch.objects.create(
+                    bracket=bracket,
+                    round=round_obj,
+                    home_team=home,
+                    away_team=away
+                )
+
+            # Rotate teams
+            rotating = [rotating[-1]] + rotating[:-1]
+
+        
     def _create_next_round(self, bracket):
         current_round = bracket.rounds.get(round_number=bracket.current_round)
         next_round_number = bracket.current_round + 1
@@ -148,9 +188,14 @@ class BracketViewSet(viewsets.ModelViewSet):
         
     @action(detail=False, methods=['get'], url_path=r'for_season/(?P<season_id>\d+)')
     def for_season(self, request, season_id=None):
-        """Get brackets for a specific season with rounds and matches"""
-        brackets = Bracket.objects.filter(season_id=season_id).prefetch_related(
-            'rounds__matches'  # Prefetch rounds and their matches
-        )
-        serializer = self.get_serializer(brackets, many=True)
+        try:
+            bracket = Bracket.objects.select_related('season').prefetch_related(
+                'rounds__matches'
+            ).get(season_id=season_id)
+        except Bracket.DoesNotExist:
+            return Response(
+                {"detail": "Bracket for this season does not exist."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(bracket)
         return Response(serializer.data)

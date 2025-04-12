@@ -113,6 +113,7 @@ class GameSerializer(serializers.ModelSerializer):
             "sport_slug",
             "league",
             "season",
+            "creator",
             "home_team",
             "away_team",
             "home_team_id",
@@ -136,6 +137,9 @@ class GameSerializer(serializers.ModelSerializer):
             "winner",
         ]
 
+    def create(self, validated_data):
+        return super().create(validated_data)
+    
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None    
 

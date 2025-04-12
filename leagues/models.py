@@ -32,8 +32,8 @@ class Season(models.Model):
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="seasons")
     year = models.PositiveIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
-    start_date = models.DateField()
-    end_date = models.DateField()
+    start_date = models.DateTimeField()
+    end_date = models.DateField(null=True)
 
     class Meta:
         ordering = ["-year"]
@@ -51,9 +51,8 @@ class Season(models.Model):
             raise ValidationError("Season cannot end after league end date")
     
     @property
-    def has_bracket(self):
-        """Check if any bracket exists for this season"""
-        return self.brackets.exists()
+    def get_bracket(self):
+        return getattr(self, 'bracket', None)
 
     def standings(self):
         sport = self.league.sport

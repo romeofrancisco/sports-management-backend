@@ -12,28 +12,19 @@ class Game(models.Model):
         IN_PROGRESS = "in_progress", "In Progress"
         COMPLETED = "completed", "Completed"
         POSTPONED = "postponed", "Postponed"
-
+ 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    league = models.ForeignKey(
-        League, on_delete=models.CASCADE, null=True
-    )
+    league = models.ForeignKey(League, on_delete=models.CASCADE, null=True)
     season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True, related_name="games")
+    creator = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, related_name="creator")
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
-    home_team = models.ForeignKey(
-        "teams.Team", on_delete=models.CASCADE, related_name="home_games"
-    )
-    away_team = models.ForeignKey(
-        "teams.Team", on_delete=models.CASCADE, related_name="away_games"
-    )
+    home_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="home_games")
+    away_team = models.ForeignKey("teams.Team", on_delete=models.CASCADE, related_name="away_games")
     date = models.DateTimeField(null=True, blank=True)
     location = models.CharField(max_length=255, blank=True)
-    status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
-    )
-    current_period = models.PositiveIntegerField(
-        default=1
-    )  # For tracking quarters/sets
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True)
+    current_period = models.PositiveIntegerField(default=1)  # For tracking quarters/sets
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     duration = models.DurationField(null=True, blank=True)
@@ -48,7 +39,7 @@ class Game(models.Model):
             models.Index(fields=["started_at"]),
             models.Index(fields=["ended_at"]),
         ]
-        ordering = ["-date"]
+        ordering = ["date"]
 
     def clean(self):
         if self.home_team == self.away_team:
@@ -118,8 +109,7 @@ class Game(models.Model):
         
         self.current_period += 1
         self.save(update_fields=["current_period"])
-        
-    
+           
     def validate_starting_lineup(self):
         """Validate lineup requirements"""
         sport = self.sport

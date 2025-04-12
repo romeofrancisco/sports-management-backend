@@ -7,7 +7,7 @@ class Bracket(models.Model):
         DOUBLE = "double", "Double Elimination"
         ROUND_ROBIN = "round_robin", "Round Robin"
 
-    season = models.ForeignKey("leagues.Season", on_delete=models.CASCADE, related_name="brackets")
+    season = models.OneToOneField("leagues.Season", on_delete=models.CASCADE, related_name="bracket")
     elimination_type = models.CharField(max_length=20, choices=ELIMINATION_TYPES)
     current_round = models.PositiveIntegerField(default=1)  # Track progress
     is_complete = models.BooleanField(default=False)
@@ -17,7 +17,7 @@ class Bracket(models.Model):
 
     def __str__(self):
         return f"{self.sport} - {self.season} ({self.elimination_type})"
-
+ 
 class BracketRound(models.Model):
     bracket = models.ForeignKey(Bracket, on_delete=models.CASCADE, related_name="rounds")
     round_number = models.PositiveIntegerField()

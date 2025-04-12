@@ -6,6 +6,7 @@ from games.models import Game
 from .views import BracketViewSet
 import logging
 from time import sleep
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -76,26 +77,48 @@ def handle_match_completion(sender, instance, **kwargs):
 
 @receiver(post_save, sender=BracketMatch)
 def create_or_assign_game(sender, instance, **kwargs):
-    if instance.bracket.is_complete == Bracket.is_complete == True:
+    # If the bracket is complete, do nothing
+    if instance.bracket.is_complete:
         logger.info(f"Bracket {instance.bracket.id} is already complete.")
         return
-    
+     
     if instance.game:
         return  # Already linked to a game
 
+    # Only create game if both teams have been assigned
     if instance.home_team and instance.away_team:
         try:
+            # Retrieve the season start datetime from the bracket's season
+            season_start = instance.bracket.season.start_date
+            if not season_start:
+                raise ValueError("Season start date is not defined.")
+
+            # Calculate day offset: each round is on a new day.
+            round_offset = timedelta(days=instance.round.round_number - 1)
+
+            # Calculate the match order (2 hours per match) within the current round.
+            # We simply order matches in this round by their id.
+            matches_in_round = list(instance.round.matches.order_by('id'))
+            try:
+                match_index = matches_in_round.index(instance)
+            except ValueError:
+                match_index = 0
+            time_offset = timedelta(hours=2 * match_index)
+
+            scheduled_datetime = season_start + round_offset + time_offset
+
             game = Game.objects.create(
                 sport=instance.home_team.sport,
                 home_team=instance.home_team,
                 away_team=instance.away_team,
                 status=Game.Status.SCHEDULED,
                 season=instance.bracket.season,
-                league=instance.bracket.season.league if instance.bracket.season else None
+                league=instance.bracket.season.league if instance.bracket.season else None,
+                date=scheduled_datetime  # Assuming your Game model has this field
             )
             instance.game = game
             instance.save(update_fields=["game"])
-            logger.info(f"Game created for match {instance.id}")
+            logger.info(f"Game created for match {instance.id} scheduled at {scheduled_datetime}")
         except Exception as e:
             logger.error(f"Failed to create game for match {instance.id}: {str(e)}")
 

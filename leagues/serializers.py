@@ -32,7 +32,7 @@ class SeasonSerializer(serializers.ModelSerializer):
         return data
     
     def get_has_bracket(self, obj):
-        return obj.brackets.exists()
+        return hasattr(obj, 'bracket')
     
 class TeamStandingsSerializer(serializers.ModelSerializer):
     logo = serializers.SerializerMethodField()
