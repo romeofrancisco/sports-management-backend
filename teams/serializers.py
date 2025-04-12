@@ -26,7 +26,7 @@ class SportsTeamSerializer(Serializer):
 
 class PlayerInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
-    profile = serializers.ImageField(source="user.profile")
+    profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
     slug = serializers.CharField(read_only=True)

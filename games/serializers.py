@@ -134,8 +134,6 @@ class GameSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "winner",
-            "home_team_score",
-            "away_team_score",
         ]
 
     def get_winner(self, obj):

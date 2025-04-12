@@ -28,6 +28,7 @@ class Season(models.Model):
         CANCELED = "canceled", "Canceled"
         PAUSED = "paused", "Paused"
             
+    name = models.CharField(max_length=255, blank=True)
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="seasons")
     year = models.PositiveIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
@@ -36,7 +37,7 @@ class Season(models.Model):
 
     class Meta:
         ordering = ["-year"]
-        unique_together = ["league", "year"]
+        unique_together = ["league", "year", "name"]
 
     def __str__(self):
         return f"{self.league.name} Season {self.year}"

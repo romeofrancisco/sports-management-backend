@@ -97,18 +97,15 @@ class GameViewSet(viewsets.ModelViewSet):
         serializer = GameActionSerializer(data=request.data, context={"game": game})
         serializer.is_valid(raise_exception=True)
 
-        try:
-            action = serializer.validated_data["action"]
-            if action == "start":
-                game.start_game()
-            elif action == "complete":
-                game.complete_game()
-            elif action == "next_period":
-                game.next_period()
+        action = serializer.validated_data["action"]
+        if action == "start":
+            game.start_game()
+        elif action == "complete":
+            game.complete_game()
+        elif action == "next_period":
+            game.next_period()
 
-            return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
-        except ValidationError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def update_scores(self, request, pk=None):

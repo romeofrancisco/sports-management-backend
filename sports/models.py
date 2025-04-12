@@ -12,8 +12,14 @@ class Sport(models.Model):
     )
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(unique=True, blank=True)
-    max_players_per_team = models.PositiveIntegerField(blank=False)
-    max_players_on_field = models.PositiveIntegerField(blank=False)
+    max_players_per_team = models.PositiveIntegerField(
+        default=12,  # Add default value
+        help_text="Maximum players allowed per team roster",
+    )
+    max_players_on_field = models.PositiveIntegerField(
+        default=5,  # Add default value
+        help_text="Maximum players allowed on the field/court during play",
+    )
     has_period = models.BooleanField(default=False)
     max_period = models.PositiveIntegerField(
         blank=True, null=True, help_text="Maximum periods/quarters/sets possible"

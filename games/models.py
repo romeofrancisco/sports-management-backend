@@ -1,7 +1,7 @@
 from django.db import models
 from sports.models import Sport, SportStatType, Position
 from django.db.models import Sum
-from django.core.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from leagues.models import League, Season
 
@@ -90,6 +90,9 @@ class Game(models.Model):
         """Start game with validation of existing lineup"""
         if self.status != self.Status.SCHEDULED:
             raise ValidationError("Game can only start from scheduled status")
+        
+        if not self.date:
+            raise ValidationError({"error":"Please specify a start date before launching the game."})
 
         self.validate_starting_lineup()
 
