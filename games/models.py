@@ -16,6 +16,7 @@ class Game(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     league = models.ForeignKey(League, on_delete=models.CASCADE, null=True)
     season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True, related_name="games")
+    is_recorded = models.BooleanField(default=False)
     creator = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, related_name="creator")
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)

@@ -28,7 +28,7 @@ class BracketViewSet(viewsets.ModelViewSet):
             raise ValidationError("Invalid elimination type")
                 
     def _generate_single_elimination(self, bracket):
-        teams = list(bracket.season.league.teams.all())
+        teams = list(bracket.season.teams.all())
         if not teams:
             raise ValidationError("No teams found")
 
@@ -90,7 +90,7 @@ class BracketViewSet(viewsets.ModelViewSet):
         raise NotImplementedError("Double elimination generation is not implemented yet.")
     
     def _generate_round_robin(self, bracket):
-        teams = list(bracket.season.league.teams.all())
+        teams = list(bracket.season.teams.all())
         if not teams:
             raise ValidationError("No teams found")
 

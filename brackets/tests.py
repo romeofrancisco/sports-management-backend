@@ -50,7 +50,7 @@ class BracketFlowTestCase(TestCase):
         # Create a Bracket for this season. You may add additional fields as needed.
         self.bracket = Bracket.objects.create(
             season=self.season,
-            elimination_type=Bracket.ELIMINATION_TYPES.SINGLE,
+            elimination_type=Bracket.ELIMINATION_TYPES.ROUND_ROBIN,
             current_round=1
         )
         

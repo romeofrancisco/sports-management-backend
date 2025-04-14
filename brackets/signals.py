@@ -114,7 +114,7 @@ def create_or_assign_game(sender, instance, **kwargs):
                 status=Game.Status.SCHEDULED,
                 season=instance.bracket.season,
                 league=instance.bracket.season.league if instance.bracket.season else None,
-                date=scheduled_datetime  # Assuming your Game model has this field
+                date=scheduled_datetime 
             )
             instance.game = game
             instance.save(update_fields=["game"])

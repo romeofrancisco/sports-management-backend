@@ -8,8 +8,13 @@ from django.utils.text import slugify
 from games.models import Substitution
 
 class Team(models.Model):
+    class Division(models.TextChoices):
+        MALE = "Male", "male"
+        FEMALE = "Female", "female"
+    
     name = models.CharField(max_length=100)
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+    division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
     coach = models.ManyToManyField('teams.Coach', blank=True)
     logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
     slug = models.SlugField(unique=True, blank=True)  
@@ -78,12 +83,29 @@ class PlayerManager(models.Manager):
         )
 
 class Player(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='player_profile',
-        primary_key=True
-    )
+    YEAR_LEVEL_CHOICES = [
+        ('grade_7', 'Grade 7'),
+        ('grade_8', 'Grade 8'),
+        ('grade_9', 'Grade 9'),
+        ('grade_10', 'Grade 10'),
+        ('grade_11', 'Grade 11'),
+        ('grade_12', 'Grade 12'),
+        ('1st_year_college', '1st Year College'),
+        ('2nd_year_college', '2nd Year College'),
+        ('3rd_year_college', '3rd Year College'),
+        ('4th_year_college', '4th Year College'),
+    ]
+    
+    COURSE_CHOICES = [
+        ('stem', 'STEM'),
+        ('gas', 'GAS'),
+        ('humss', 'HUMSS'),
+        ('abm', 'ABM'),
+        ('bs_cs', 'BS Computer Science'),
+        ('bs_ba', 'BS Business Administration'),
+    ]
+        
+    user = models.OneToOneField( settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='player_profile', primary_key=True)
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
     slug = models.SlugField(max_length=255, unique=True)
@@ -91,6 +113,9 @@ class Player(models.Model):
     jersey_number = models.IntegerField(blank=False)
     position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
+    year_level = models.CharField(max_length=20, choices=YEAR_LEVEL_CHOICES)
+    course = models.CharField(max_length=50, choices=COURSE_CHOICES)
+    
     
     objects = PlayerManager()
     
