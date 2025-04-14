@@ -11,6 +11,7 @@ class UserSerializer(ModelSerializer):
             "profile",
             "first_name",
             "last_name",
+            "sex",
             "email",
             "role",
             "date_of_birth",
@@ -20,7 +21,7 @@ class UserSerializer(ModelSerializer):
 class PlayerSerializer(ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "profile", "first_name", "last_name", "email", "password")
+        fields = ("id", "profile", "first_name", "last_name", "sex", "email", "password")
         extra_kwargs = {"password": {"write_only": True}}
         read_only_fields = ("id",)
 
@@ -32,7 +33,7 @@ class PlayerSerializer(ModelSerializer):
 class CoachSerializer(ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "profile", "first_name", "last_name", "email", "password")
+        fields = ("id", "profile", "first_name", "last_name", "sex", "email", "password")
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):

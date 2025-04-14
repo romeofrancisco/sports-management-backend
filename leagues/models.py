@@ -5,7 +5,7 @@ from django.db.models import Sum, F, Q
 class League(models.Model):
     name = models.CharField(max_length=255)
     sport = models.ForeignKey("sports.Sport", on_delete=models.CASCADE)
-    teams = models.ManyToManyField("teams.Team", related_name="leagues")
+    logo = models.ImageField(upload_to="league_logos/", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -19,6 +19,81 @@ class League(models.Model):
     def clean(self):
         if self.start_date >= self.end_date:
             raise ValidationError("End date must be after start date")
+    
+    def standings(self, request=None):
+        from games.models import Game
+        from brackets.models import Bracket
+
+        sport = self.sport
+        seasons = self.seasons.prefetch_related('teams', 'games').all()
+        all_games = Game.objects.filter(season__in=seasons, status="completed")
+
+        teams = set()
+        for season in seasons:
+            teams.update(season.teams.all())
+            
+        standings = []
+
+        for team in teams:
+            team_seasons = seasons.filter(teams=team)
+            seasons_participated = team_seasons.count()
+
+            matches_played = all_games.filter(
+                Q(home_team=team) | Q(away_team=team)
+            ).count()
+
+            wins = all_games.filter(
+                Q(home_team=team, home_team_score__gt=F("away_team_score")) |
+                Q(away_team=team, away_team_score__gt=F("home_team_score"))
+            ).count()
+
+            losses = all_games.filter(
+                Q(home_team=team, home_team_score__lt=F("away_team_score")) |
+                Q(away_team=team, away_team_score__lt=F("home_team_score"))
+            ).count()
+
+            ties = 0
+            if sport.has_tie:
+                ties = all_games.filter(
+                    Q(home_team=team, home_team_score=F("away_team_score")) |
+                    Q(away_team=team, away_team_score=F("home_team_score"))
+                ).count()
+
+            # Count championships (1st rank in any season)
+            championships = Bracket.objects.filter(
+                season__in=seasons,
+                winner=team
+            ).count()
+
+            win_ratio = round(wins / matches_played, 3) if matches_played else 0
+
+            team_data = {
+                "team_id": team.id,
+                "team_name": team.name,
+                "team_logo": request.build_absolute_uri(team.logo.url) if team.logo and request else None,
+                "championships": championships,
+                "seasons_participated": seasons_participated,
+                "matches_played": matches_played,
+                "wins": wins,
+                "losses": losses,
+                "win_ratio": win_ratio,
+            }
+
+            if sport.has_tie:
+                team_data["ties"] = ties
+
+            standings.append(team_data)
+
+        standings.sort(key=lambda t: (-t["championships"], -t["win_ratio"]))
+
+        # Only take top 10
+        standings = standings[:10]
+
+        # Add ranks to top 10
+        for i, team in enumerate(standings, start=1):
+            team["rank"] = i
+
+        return standings
 
 class Season(models.Model):
     class Status(models.TextChoices):
@@ -28,15 +103,18 @@ class Season(models.Model):
         CANCELED = "canceled", "Canceled"
         PAUSED = "paused", "Paused"
             
+    name = models.CharField(max_length=255, blank=True)
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="seasons")
+    teams = models.ManyToManyField("teams.Team", related_name="leagues")
     year = models.PositiveIntegerField()
+    is_recorded = models.BooleanField(default=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
-    start_date = models.DateField()
-    end_date = models.DateField()
+    start_date = models.DateTimeField()
+    end_date = models.DateField(null=True)
 
     class Meta:
         ordering = ["-year"]
-        unique_together = ["league", "year"]
+        unique_together = ["league", "year", "name"]
 
     def __str__(self):
         return f"{self.league.name} Season {self.year}"
@@ -44,23 +122,22 @@ class Season(models.Model):
     def clean(self):
         if self.start_date >= self.end_date:
             raise ValidationError("Season end date must be after start date")
-        if self.start_date < self.league.start_date:
+        if self.start_date < self.start_date:
             raise ValidationError("Season cannot start before league start date")
-        if self.end_date > self.league.end_date:
+        if self.end_date > self.end_date:
             raise ValidationError("Season cannot end after league end date")
     
     @property
-    def has_bracket(self):
-        """Check if any bracket exists for this season"""
-        return self.brackets.exists()
+    def get_bracket(self):
+        return getattr(self, 'bracket', None)
 
     def standings(self):
         sport = self.league.sport
         scoring_type = sport.scoring_type  # "points", "sets", or "goals"
-        games = self.games.filter(status="completed", season=self.id)
+        games = self.games.filter(status="completed", season=self.id, is_recorded=True)
         standings = []
 
-        for team in self.league.teams.all():
+        for team in self.teams.all():
             team_games = games.filter(Q(home_team=team) | Q(away_team=team))
             matches_played = team_games.count()
 

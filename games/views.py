@@ -19,7 +19,11 @@ from .serializers import (
     GameCurrentPlayersSerializer,
 )
 from sports_management.permissions import IsAdminOrCoachUser
-from .services import PlayerStatsSummaryService, RecordingService, TeamStatsSummaryService
+from .services import (
+    PlayerStatsSummaryService,
+    RecordingService,
+    TeamStatsSummaryService,
+)
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -56,7 +60,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def player_stats_summary(self, request):
         game_id = request.query_params.get("game_id")
-        team   = request.query_params.get("team")
+        team = request.query_params.get("team")
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
         try:
@@ -65,7 +69,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
             return Response({"error": "Game not found"}, status=404)
         data = service.get_summary()
         return Response(data)
-    
+
     @action(detail=False, methods=["get"])
     def team_stats_summary(self, request):
         game_id = request.query_params.get("game_id")
@@ -91,24 +95,24 @@ class GameViewSet(viewsets.ModelViewSet):
     serializer_class = GameSerializer
     permission_classes = [IsAdminOrCoachUser]
 
+    def perform_create(self, serializer):
+        serializer.save(creator=self.request.user)
+
     @action(detail=True, methods=["post"])
     def manage(self, request, pk=None):
         game = self.get_object()
         serializer = GameActionSerializer(data=request.data, context={"game": game})
         serializer.is_valid(raise_exception=True)
 
-        try:
-            action = serializer.validated_data["action"]
-            if action == "start":
-                game.start_game()
-            elif action == "complete":
-                game.complete_game()
-            elif action == "next_period":
-                game.next_period()
+        action = serializer.validated_data["action"]
+        if action == "start":
+            game.start_game()
+        elif action == "complete":
+            game.complete_game()
+        elif action == "next_period":
+            game.next_period()
 
-            return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
-        except ValidationError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def update_scores(self, request, pk=None):

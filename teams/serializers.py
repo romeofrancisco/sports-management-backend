@@ -26,24 +26,17 @@ class SportsTeamSerializer(Serializer):
 
 class PlayerInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
-    profile = serializers.ImageField(source="user.profile")
+    profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
+    sex = serializers.CharField(source="user.sex", required=True)
     slug = serializers.CharField(read_only=True)
     email = serializers.EmailField(source="user.email", required=True)
-    password = serializers.CharField(
-        source="user.password", required=True, write_only=True
-    )
+    password = serializers.CharField(source="user.password", required=True, write_only=True)
 
-    team_id = serializers.PrimaryKeyRelatedField(
-        queryset=Team.objects.all(), write_only=True, required=False, allow_null=True
-    )
-    position_ids = serializers.PrimaryKeyRelatedField(
-        queryset=Position.objects.all(), many=True, write_only=True, required=False
-    )
-    sport_id = serializers.PrimaryKeyRelatedField(
-        queryset=Sport.objects.all(), write_only=True, required=False, allow_null=True
-    )
+    team_id = serializers.PrimaryKeyRelatedField(queryset=Team.objects.all(), write_only=True, required=False, allow_null=True)
+    position_ids = serializers.PrimaryKeyRelatedField(queryset=Position.objects.all(), many=True, write_only=True, required=False)
+    sport_id = serializers.PrimaryKeyRelatedField(queryset=Sport.objects.all(), write_only=True, required=False, allow_null=True)
 
     # Read-only nested serializers
     team = TeamSerializer(read_only=True)
@@ -57,8 +50,11 @@ class PlayerInfoSerializer(ModelSerializer):
             "profile",
             "first_name",
             "last_name",
+            "sex",
             "email",
             "slug",
+            "year_level",
+            "course",
             "password",
             "height",
             "weight",
@@ -122,11 +118,12 @@ class CoachInfoSerializer(ModelSerializer):
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
     email = serializers.EmailField(source="user.email", required=True)
+    sex = serializers.CharField(source="user.sex", read_only=True)
     password = serializers.CharField(source="user.password", required=True, write_only=True)
     teams = TeamSerializer(many=True, read_only=True, source='team_set') 
     class Meta:
         model = Coach
-        fields = ["id", "profile", "first_name", "last_name", "email", "password", "teams"]
+        fields = ["id", "profile", "first_name", "last_name", "sex", "email", "password", "teams"]
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")

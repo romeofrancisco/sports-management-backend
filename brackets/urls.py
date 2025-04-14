@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import BracketViewSet
 
 router = DefaultRouter()
-router.register(r'brackets', BracketViewSet)
+router.register(r'brackets', BracketViewSet, basename='bracket')
 
 urlpatterns = [
     path('', include(router.urls)),

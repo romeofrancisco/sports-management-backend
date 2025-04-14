@@ -13,35 +13,12 @@ class LeagueViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update']:
             return LeagueWriteSerializer
         return LeagueSerializer
-
-    @action(detail=True, methods=['post'])
-    def add_team(self, request, pk=None):
+    
+    @action(detail=True, methods=["get"])
+    def standings(self, request, pk=None):
         league = self.get_object()
-        team_id = request.data.get('team_id')
-        
-        if not team_id:
-            return Response({'error': 'team_id required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if league.teams.filter(id=team_id).exists():
-            return Response({'status': 'Team already in league'})
-            
-        team = Team.objects.get(id=team_id)
-        if team.sport != league.sport:
-            return Response({'error': 'Team sport mismatch'}, status=400)
-            
-        league.teams.add(team)
-        return Response({'status': 'Team added'})
-
-    @action(detail=True, methods=['post'])
-    def remove_team(self, request, pk=None):
-        league = self.get_object()
-        team_id = request.data.get('team_id')
-        
-        if not team_id:
-            return Response({'error': 'team_id required'}, status=400)
-            
-        league.teams.remove(team_id)
-        return Response({'status': 'Team removed'})
+        standings = league.standings(request=request)
+        return Response(standings)
     
 class SeasonViewSet(viewsets.ModelViewSet):
     serializer_class = SeasonSerializer
@@ -53,6 +30,35 @@ class SeasonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         league = get_object_or_404(League, pk=self.kwargs['league_pk'])
         serializer.save(league=league)
+        
+    @action(detail=True, methods=['post'])
+    def add_team(self, request, pk=None):
+        season = self.get_object()
+        team_id = request.data.get('team_id')
+        
+        if not team_id:
+            return Response({'error': 'team_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if season.teams.filter(id=team_id).exists():
+            return Response({'status': 'Team already in season'})
+            
+        team = Team.objects.get(id=team_id)
+        if team.sport != season.sport:
+            return Response({'error': 'Team sport mismatch'}, status=400)
+            
+        season.teams.add(team)
+        return Response({'status': 'Team added'})
+
+    @action(detail=True, methods=['post'])
+    def remove_team(self, request, pk=None):
+        season = self.get_object()
+        team_id = request.data.get('team_id')
+        
+        if not team_id:
+            return Response({'error': 'team_id required'}, status=400)
+            
+        season.teams.remove(team_id)
+        return Response({'status': 'Team removed'})
     
     @action(detail=True, methods=['get'])
     def standings(self, request, league_pk=None, pk=None):
@@ -61,7 +67,7 @@ class SeasonViewSet(viewsets.ModelViewSet):
         
         standings_data = {item['team_id']: item for item in raw_standings}
         
-        teams = season.league.teams.all()
+        teams = season.teams.all()
         
         serializer = TeamStandingsSerializer(
             teams,

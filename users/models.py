@@ -43,23 +43,27 @@ class User(AbstractUser):
         COACH = "Coach", "Coach"
         PLAYER = "Player", "Player"
 
+    class Sex(models.TextChoices):
+        MALE = "Male", "male"
+        FEMALE = "Female", "female"
+
     username = None
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
-    profile = models.ImageField(upload_to="users/", null=True)
+    sex = models.CharField(max_length=10, choices=Sex.choices, default=Sex.MALE)
+    profile = models.ImageField(upload_to="users/", null=True, blank=True)
     role = models.CharField(choices=Role, default=Role.PLAYER, max_length=10)
     date_of_birth = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["first_name", "last_name"]
+    REQUIRED_FIELDS = ["first_name", "last_name", "sex"]
 
     objects = CustomUserManager()
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.role})"
-
 
     @property
     def is_admin(self):
