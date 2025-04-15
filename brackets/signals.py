@@ -112,6 +112,7 @@ def create_or_assign_game(sender, instance, **kwargs):
                 home_team=instance.home_team,
                 away_team=instance.away_team,
                 status=Game.Status.SCHEDULED,
+                type=Game.Type.LEAGUE,
                 season=instance.bracket.season,
                 league=instance.bracket.season.league if instance.bracket.season else None,
                 date=scheduled_datetime 

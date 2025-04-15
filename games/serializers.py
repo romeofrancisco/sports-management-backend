@@ -114,6 +114,7 @@ class GameSerializer(serializers.ModelSerializer):
             "league",
             "season",
             "is_recorded",
+            "type",
             "creator",
             "home_team",
             "away_team",

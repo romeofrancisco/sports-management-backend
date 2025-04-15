@@ -12,11 +12,17 @@ class Game(models.Model):
         IN_PROGRESS = "in_progress", "In Progress"
         COMPLETED = "completed", "Completed"
         POSTPONED = "postponed", "Postponed"
+        
+    class Type(models.TextChoices):
+        LEAGUE = "league", "League"
+        TOURNAMENT = "tournament", "Tournament"
+        NORMAL = "normal", "Normal"
  
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     league = models.ForeignKey(League, on_delete=models.CASCADE, null=True)
     season = models.ForeignKey(Season, on_delete=models.CASCADE, null=True, related_name="games")
     is_recorded = models.BooleanField(default=False)
+    type = models.CharField(max_length=20, choices=Type.choices, default=Type.NORMAL)
     creator = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, related_name="creator")
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
@@ -41,6 +47,11 @@ class Game(models.Model):
             models.Index(fields=["ended_at"]),
         ]
         ordering = ["date"]
+        
+    def save(self, *args, **kwargs):
+        if self.type == self.Type.NORMAL:
+            self.is_recorded = False
+        super().save(*args, **kwargs)
 
     def clean(self):
         if self.home_team == self.away_team:

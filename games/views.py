@@ -24,6 +24,8 @@ from .services import (
     RecordingService,
     TeamStatsSummaryService,
 )
+from django_filters.rest_framework import DjangoFilterBackend
+from .filters import GameFilter
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -94,6 +96,8 @@ class GameViewSet(viewsets.ModelViewSet):
     )
     serializer_class = GameSerializer
     permission_classes = [IsAdminOrCoachUser]
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = GameFilter
 
     def perform_create(self, serializer):
         serializer.save(creator=self.request.user)

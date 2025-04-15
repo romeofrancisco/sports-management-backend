@@ -9,8 +9,8 @@ from games.models import Substitution
 
 class Team(models.Model):
     class Division(models.TextChoices):
-        MALE = "Male", "male"
-        FEMALE = "Female", "female"
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
     
     name = models.CharField(max_length=100)
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
