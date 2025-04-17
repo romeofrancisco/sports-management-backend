@@ -90,7 +90,6 @@ class GameViewSet(viewsets.ModelViewSet):
         "sport", "home_team", "away_team"
     ).prefetch_related(
         "starting_lineup__player__user",
-        "starting_lineup__position",
         "substitutions__substitute_in__user",
         "substitutions__substitute_out__user",
     )
@@ -158,13 +157,12 @@ class GameViewSet(viewsets.ModelViewSet):
         if request.method == "GET":
             return self._get_starting_lineup(game)
         elif request.method == "POST":
-            return self._create_starting_lineup(game, request.data)
-
+            return self._update_starting_lineup(game, request.data)
         elif request.method == "DELETE":
             return self._delete_starting_lineup(game)
 
     def _get_starting_lineup(self, game):
-        lineup = game.starting_lineup.select_related("player", "position", "team")
+        lineup = game.starting_lineup.select_related("player", "team")
         serializer = StartingLineupSerializer(lineup, many=True)
 
         # Split players into home/away teams
@@ -181,99 +179,95 @@ class GameViewSet(viewsets.ModelViewSet):
             {"home_starting_lineup": home_players, "away_starting_lineup": away_players}
         )
 
-    def _create_starting_lineup(self, game, data):
+    def _update_starting_lineup(self, game, data):
+        """Handle lineup updates including empty submissions"""
         if game.status != Game.Status.SCHEDULED:
             return Response(
                 {"error": "Lineups can only be set for scheduled games"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate request structure
-        if (
-            not isinstance(data, dict)
-            or "home_team" not in data
-            or "away_team" not in data
-        ):
+        # Validate request structure but allow empty arrays
+        if not isinstance(data, dict) or "home_team" not in data or "away_team" not in data:
             return Response(
                 {"error": "Payload must contain home_team and away_team arrays"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        home_data = data["home_team"]
-        away_data = data["away_team"]
+        home_data = data.get("home_team", [])
+        away_data = data.get("away_team", [])
 
-        # Validate team assignments
+        # Validate team assignments (will skip if empty)
         try:
-            self._validate_team_players(game.home_team, home_data, "home_team")
-            self._validate_team_players(game.away_team, away_data, "away_team")
+            if home_data:  # Only validate if data exists
+                self._validate_team_players(game.home_team, home_data, "home_team", game.sport.max_players_on_field)
+            if away_data:  # Only validate if data exists
+                self._validate_team_players(game.away_team, away_data, "away_team", game.sport.max_players_on_field)
         except ValidationError as e:
             return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Combine into flat list for serializer
-        combined_data = home_data + away_data
-
         with transaction.atomic():
-            game.starting_lineup.all().delete()
-            serializer = StartingLineupSerializer(
-                data=combined_data,
-                many=True,
-                context={"game": game, "request": self.request},
-            )
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
+            # Clear existing lineup for teams that have data (empty array means clear)
+            if "home_team" in data:  # Key exists (could be empty array)
+                game.starting_lineup.filter(team=game.home_team).delete()
+            if "away_team" in data:  # Key exists (could be empty array)
+                game.starting_lineup.filter(team=game.away_team).delete()
 
-            try:
-                self._validate_lineup_completeness(game)
-            except ValidationError as e:
-                return Response({"error": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+            # Combine non-empty data for serializer
+            combined_data = [p for p in home_data + away_data if p.get("player") is not None]
+            
+            if combined_data:
+                serializer = StartingLineupSerializer(
+                    data=combined_data,
+                    many=True,
+                    context={"game": game, "request": self.request},
+                )
+                serializer.is_valid(raise_exception=True)
+                serializer.save()
 
-        return Response(
-            {
-                "home_team": [p for p in serializer.data if p["team_side"] == "home"],
-                "away_team": [p for p in serializer.data if p["team_side"] == "away"],
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-    def _validate_team_players(self, expected_team, players, team_side):
-        """Validate all players in a team section belong to that team"""
+        # Return current state
+        return Response({
+            "home_team": StartingLineupSerializer(
+                game.starting_lineup.filter(team=game.home_team),
+                many=True
+            ).data,
+            "away_team": StartingLineupSerializer(
+                game.starting_lineup.filter(team=game.away_team),
+                many=True
+            ).data,
+            "lineup_status": game.get_lineup_status()
+        }, status=status.HTTP_200_OK)
+    
+    def _validate_team_players(self, expected_team, players, team_side, max_players):
+        """Validate players belong to team, and do not exceed max field players"""
         if not isinstance(players, list):
             raise ValidationError({team_side: "Must be an array of players"})
 
-        player_user_ids = [p.get("player") for p in players]  # These are user IDs
+        # Skip validation if empty array
+        if not players:
+            return
 
-        # Check for missing player IDs
-        if None in player_user_ids:
-            raise ValidationError({team_side: "All entries must have a player ID"})
+        # Filter out any player entries that don't have a player ID
+        player_user_ids = [p.get("player") for p in players if p.get("player")]
 
-        # Get actual players using user_id
-        players = Player.objects.filter(
-            user_id__in=player_user_ids
-        )  # Changed to user_id__in
+        if not player_user_ids:
+            return  # No valid player IDs, allow submission
 
-        if players.count() != len(player_user_ids):
+        # Validate count against max players allowed on field
+        if len(player_user_ids) > max_players:
+            raise ValidationError({
+                team_side: f"You can only select up to {max_players} players for the starting lineup."
+            })
+
+        players_queryset = Player.objects.filter(user_id__in=player_user_ids)
+        if players_queryset.count() != len(player_user_ids):
             raise ValidationError({team_side: "Invalid player IDs provided"})
 
-        # Verify team membership
-        for player in players:
+        for player in players_queryset:
             if player.team != expected_team:
                 raise ValidationError(
-                    {team_side: f"Player {player.user_id} belongs to wrong team"}
+                    {team_side: f"Player {player.user.id} belongs to the wrong team"}
                 )
-
-    def _validate_lineup_completeness(self, game):
-        sport = game.sport
-        home_count = game.starting_lineup.filter(team=game.home_team).count()
-        away_count = game.starting_lineup.filter(team=game.away_team).count()
-
-        errors = {}
-        if home_count != sport.max_players_on_field:
-            errors["home_team"] = f"Needs exactly {sport.max_players_on_field} starters"
-        if away_count != sport.max_players_on_field:
-            errors["away_team"] = f"Needs exactly {sport.max_players_on_field} starters"
-
-        if errors:
-            raise ValidationError(errors)
 
     def _delete_starting_lineup(self, game):
         if game.status != Game.Status.SCHEDULED:
@@ -297,6 +291,13 @@ class SubstitutionViewSet(viewsets.ModelViewSet):
         if game_id:
             return self.queryset.filter(game_id=game_id)
         return self.queryset
+    
+    @action(detail=False, methods=["post"], url_path="bulk_create")
+    def bulk_create(self, request):
+        serializer = self.get_serializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_bulk_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def undo(self, request, pk=None):

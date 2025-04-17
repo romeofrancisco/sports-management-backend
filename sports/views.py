@@ -1,6 +1,7 @@
 from rest_framework.viewsets import ModelViewSet
 from .models import Sport, Position, SportStatType
 from .serializers import SportSerializer, PositionSerializer, SportStatTypeSerializer
+from django_filters.rest_framework import DjangoFilterBackend
 
 class SportsViewSet(ModelViewSet):
     queryset = Sport.objects.all()
@@ -14,16 +15,9 @@ class SportStatTypeViewSet(ModelViewSet):
 
 class PositionViewSet(ModelViewSet):
     serializer_class = PositionSerializer
-    
-    def get_queryset(self):
-        queryset = Position.objects.all()
-        sport = self.request.query_params.get('sport')
-        
-        if sport:
-            queryset = queryset.filter(
-                sport__slug__iexact=sport
-            ).select_related('sport')  # Optimizes related sport data fetching
-        return queryset
+    queryset = Position.objects.select_related('sport').all()
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['sport']
 
     
 

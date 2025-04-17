@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken
+from datetime import timedelta, datetime, timezone
 
 from .serializers import (
     UserSerializer,
@@ -18,6 +19,11 @@ COOKIE_SETTINGS = {
     "secure": True,
     "samesite": "None",
 }
+
+def set_auth_cookies(response, access_token, refresh_token):
+    expiry = datetime.now(timezone.utc) + timedelta(days=30)
+    response.set_cookie("access_token", access_token, expires=expiry, **COOKIE_SETTINGS)
+    response.set_cookie("refresh_token", refresh_token, expires=expiry, **COOKIE_SETTINGS)
 
 
 class UserInfoView(RetrieveUpdateAPIView):
@@ -44,6 +50,7 @@ class LoginView(GenericAPIView):
         response = Response(UserSerializer(user).data, status=status.HTTP_200_OK)
         response.set_cookie(key="access_token", value=access_token, **COOKIE_SETTINGS)
         response.set_cookie(key="refresh_token", value=str(refresh), **COOKIE_SETTINGS)
+        set_auth_cookies(response, access_token, str(refresh))
         return response
 
 

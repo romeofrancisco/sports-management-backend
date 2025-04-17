@@ -12,6 +12,7 @@ class Sport(models.Model):
     )
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(unique=True, blank=True)
+    banner = models.ImageField(upload_to="sport_banner/", null=True, blank=True)
     max_players_per_team = models.PositiveIntegerField(
         default=12,  # Add default value
         help_text="Maximum players allowed per team roster",
@@ -92,6 +93,12 @@ class Position(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
     abbreviation = models.CharField(max_length=3, blank=True)
+    
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['sport', 'name'], name='unique_position_name_per_sport'),
+            models.UniqueConstraint(fields=['sport', 'abbreviation'], name='unique_position_abbr_per_sport'),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.sport})"

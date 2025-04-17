@@ -96,6 +96,7 @@ class GameSerializer(serializers.ModelSerializer):
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
+    max_players_on_field_per_team = serializers.IntegerField(source="sport.max_players_on_field", read_only=True)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -111,6 +112,7 @@ class GameSerializer(serializers.ModelSerializer):
             "id",
             "sport",
             "sport_slug",
+            "max_players_on_field_per_team",
             "league",
             "season",
             "is_recorded",
@@ -146,12 +148,7 @@ class GameSerializer(serializers.ModelSerializer):
         return obj.winner.id if obj.winner else None    
 
     def get_lineup_status(self, obj):
-        return {
-            "home_ready": obj.starting_lineup.filter(team=obj.home_team).count()
-            >= obj.sport.max_players_on_field,
-            "away_ready": obj.starting_lineup.filter(team=obj.away_team).count()
-            >= obj.sport.max_players_on_field,
-        }
+        return obj.get_lineup_status()
 
     def validate(self, data):
         # Get home_team and away_team from different possible sources
@@ -203,10 +200,11 @@ class GameActionSerializer(serializers.Serializer):
 
 class GamePlayerSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
+    first_name = serializers.CharField(source="user.first_name", read_only=True)
+    last_name = serializers.CharField(source="user.last_name", read_only=True)
     full_name = serializers.SerializerMethodField()
     short_name = serializers.SerializerMethodField()
     profile = serializers.ImageField(source="user.profile", read_only=True)
-    email = serializers.EmailField(source="user.email", read_only=True)
     team_side = serializers.SerializerMethodField()
     position = PositionSerializer(many=True)
 
@@ -214,13 +212,12 @@ class GamePlayerSerializer(serializers.ModelSerializer):
         model = Player
         fields = [
             "id",
+            "first_name",
+            "last_name",
             "full_name",
             "short_name",
             "profile",
-            "email",
             "jersey_number",
-            "height",
-            "weight",
             "team",
             "team_side",
             "position",
@@ -343,12 +340,11 @@ class StartingLineupSerializer(serializers.ModelSerializer):
         source="player.user.get_full_name", read_only=True
     )
     team_name = serializers.CharField(source="team.name", read_only=True)
-    position = serializers.PrimaryKeyRelatedField(queryset=Position.objects.all())
     team_side = serializers.SerializerMethodField()
 
     class Meta:
         model = StartingLineup
-        fields = ["player", "player_name", "team", "team_name", "position", "team_side"]
+        fields = ["player", "player_name", "team", "team_name", "team_side"]
         extra_kwargs = {
             "team": {"read_only": True},  # Changed from write_only
             "game": {"write_only": True},

@@ -114,16 +114,22 @@ class PlayerInfoSerializer(ModelSerializer):
 
 class CoachInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
-    profile = serializers.ImageField(source="user.profile")
+    profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
     email = serializers.EmailField(source="user.email", required=True)
-    sex = serializers.CharField(source="user.sex", read_only=True)
+    sex = serializers.CharField(source="user.sex")
     password = serializers.CharField(source="user.password", required=True, write_only=True)
     teams = TeamSerializer(many=True, read_only=True, source='team_set') 
     class Meta:
         model = Coach
         fields = ["id", "profile", "first_name", "last_name", "sex", "email", "password", "teams"]
+        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Only require password on creation
+        if self.instance is not None:
+            self.fields["password"].required = False
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")
@@ -136,3 +142,20 @@ class CoachInfoSerializer(ModelSerializer):
         # Create the Player instance with the user instance
         coach = Coach.objects.create(user=user, **validated_data)
         return coach
+    
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        user = instance.user
+
+        for attr, value in user_data.items():
+            if attr == "password":
+                user.set_password(value)
+            else:
+                setattr(user, attr, value)
+        user.save()
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        return instance

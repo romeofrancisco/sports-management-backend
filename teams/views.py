@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import F
-from .filters import PlayerFilter
+from .filters import CoachFilter, PlayerFilter
 
 
 class TeamViewSet(ModelViewSet):
@@ -49,8 +49,19 @@ class PlayerViews(ModelViewSet):
             first_name=F("user__first_name"),
             last_name=F("user__last_name"),
             sex=F("user__sex"),
-        )
+        ).order_by('user__first_name')
+
 
 class CoachViews(ModelViewSet):
     queryset = Coach.objects.all().prefetch_related("team_set")
     serializer_class = CoachInfoSerializer
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ["first_name", "last_name"]
+    filterset_class = CoachFilter
+    
+    def get_queryset(self):
+        return Coach.objects.select_related("user").annotate(
+            first_name=F("user__first_name"),
+            last_name=F("user__last_name"),
+            sex=F("user__sex"),
+        )
