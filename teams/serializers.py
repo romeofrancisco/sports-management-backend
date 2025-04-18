@@ -7,17 +7,12 @@ from sports.serializers import SportSerializer, PositionSerializer
 
 
 class TeamSerializer(ModelSerializer):
-    record = serializers.SerializerMethodField()
     logo = serializers.ImageField(use_url=True, required=False)
 
     class Meta:
         model = Team
         fields = "__all__"
         read_only_fields = ("created_at", "slug")
-
-    def get_record(self, obj):
-        return obj.get_record()
-
 
 class SportsTeamSerializer(Serializer):
     sport = serializers.CharField()

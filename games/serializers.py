@@ -6,6 +6,10 @@ from sports.models import SportStatType, Position
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
 
+class PositionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Position  # adjust based on your model name
+        fields = ['id', 'name'] 
 
 class PlayerStatRecordSerializer(serializers.ModelSerializer):
     game = serializers.PrimaryKeyRelatedField(queryset=Game.objects.all())
@@ -290,7 +294,7 @@ class CurrentPlayerSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(source="player.user.first_name")
     last_name = serializers.CharField(source="player.user.last_name")
     jersey_number = serializers.IntegerField(source="player.jersey_number")
-    position = PositionSerializer()
+    position = PositionSerializer(source="player.position", many=True, read_only=True)
     team = serializers.IntegerField(source="player.team.id")
     short_name = serializers.SerializerMethodField()
     team_side = serializers.SerializerMethodField()
@@ -341,13 +345,15 @@ class StartingLineupSerializer(serializers.ModelSerializer):
     )
     team_name = serializers.CharField(source="team.name", read_only=True)
     team_side = serializers.SerializerMethodField()
+    position = PositionSerializer(source="player.position", many=True, read_only=True)
 
     class Meta:
         model = StartingLineup
-        fields = ["player", "player_name", "team", "team_name", "team_side"]
+        fields = ["player", "player_name", "position", "team", "team_name", "team_side",]
         extra_kwargs = {
-            "team": {"read_only": True},  # Changed from write_only
+            "team": {"read_only": True}, 
             "game": {"write_only": True},
+            "position": {"read_only": True},
         }
 
     def get_team_side(self, obj):

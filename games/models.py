@@ -138,7 +138,7 @@ class Game(models.Model):
         return self.starting_lineup.filter(team=team).count() == self.sport.max_players_on_field
 
     def get_current_players(self, team):
-        starters = self.starting_lineup.filter(team=team, is_starting=True).select_related('player', 'position')
+        starters = self.starting_lineup.filter(team=team, is_starting=True).select_related('player')
         current = {s.player_id: s for s in starters}
 
         substitutions = self.substitutions.filter(
