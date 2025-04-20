@@ -8,8 +8,8 @@ from django.core.exceptions import ValidationError
 
 class PositionSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Position  # adjust based on your model name
-        fields = ['id', 'name'] 
+        model = Position 
+        fields = ['id', 'name', "abbreviation"] 
 
 class PlayerStatRecordSerializer(serializers.ModelSerializer):
     game = serializers.PrimaryKeyRelatedField(queryset=Game.objects.all())
@@ -46,7 +46,7 @@ class PlayerStatSerializer(serializers.ModelSerializer):
     def get_stat_details(self, obj):
         return {
             "name": obj.stat_type.name,
-            "abbreviation": obj.stat_type.abbreviation,
+            "code": obj.stat_type.code,
             "point_value": obj.stat_type.point_value,
         }
 
@@ -62,7 +62,7 @@ class RecordableStatSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
-            "abbreviation",
+            "code",
             "point_value",
             "current_period",
             "button_type",
@@ -90,7 +90,7 @@ class RecordableStatSerializer(serializers.ModelSerializer):
             if obj.related_stat
             else SportStatType.objects.filter(related_stat=obj).first()
         )
-        return counterpart.abbreviation if counterpart else None
+        return counterpart.code if counterpart else None
 
 
 class GameSerializer(serializers.ModelSerializer):

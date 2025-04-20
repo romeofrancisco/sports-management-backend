@@ -128,7 +128,6 @@ class Game(models.Model):
             raise ValidationError(" ".join(errors))
 
     def get_lineup_status(self):
-        sport = self.sport
         return {
             "home_ready": self._is_team_ready(self.home_team),
             "away_ready": self._is_team_ready(self.away_team)
@@ -150,7 +149,6 @@ class Game(models.Model):
                 current[sub.substitute_in_id] = StartingLineup(
                     player=sub.substitute_in,
                     team=team,
-                    position=current[sub.substitute_out_id].position,
                     game=self,
                     is_starting=False
                 )
@@ -223,15 +221,25 @@ class GameSet(models.Model):
     
     def determine_winner(self):
         sport = self.game.sport
-        threshold = sport.win_threshold
-        margin = getattr(sport, "win_by_margin", 2)  # Default to 2 if not defined
+        point_threshold = getattr(sport, "set_point_threshold", 25)  
+        point_cap = getattr(sport, "set_point_cap", None)
+        margin = getattr(sport, "win_by_margin", 2)
 
-        if self.home_team_score >= threshold and (self.home_team_score - self.away_team_score) >= margin:
+        # Win by margin logic
+        if self.home_team_score >= point_threshold and (self.home_team_score - self.away_team_score) >= margin:
             self.winner = self.game.home_team
-        elif self.away_team_score >= threshold and (self.away_team_score - self.home_team_score) >= margin:
+        elif self.away_team_score >= point_threshold and (self.away_team_score - self.home_team_score) >= margin:
             self.winner = self.game.away_team
+        # Cap override — force win at cap
+        elif point_cap:
+            if self.home_team_score == point_cap:
+                self.winner = self.game.home_team
+            elif self.away_team_score == point_cap:
+                self.winner = self.game.away_team
+            else:
+                self.winner = None
         else:
-            self.winner = None  # No winner yet
+            self.winner = None
 
 class PlayerStat(models.Model):
     player = models.ForeignKey(

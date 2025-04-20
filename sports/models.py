@@ -31,6 +31,8 @@ class Sport(models.Model):
         blank=True,
         help_text="Target value needed to win a match (e.g., 3 sets, 25 points)",
     )
+    set_point_threshold = models.IntegerField(null=True, blank=True)
+    set_point_cap = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -49,9 +51,18 @@ class SportStatType(models.Model):
         PERCENTAGE = "percentage", "Percentage"
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    name = models.CharField(max_length=100)
-    abbreviation = models.CharField(max_length=10, blank=True, null=True)
+    name = models.CharField(max_length=30)
+    display_name = models.CharField(
+        null=True,
+        blank=True,
+        max_length=12,
+        help_text="Displayed name for counter stats in recording button",
+    )
+    code = models.CharField(max_length=10, blank=True, null=True)
     point_value = models.IntegerField(default=0)
+    is_record = models.BooleanField(
+        default=False, help_text="Check if the stat is use in recording stats else for metrics"
+    )
     is_counter = models.BooleanField(default=False)
     calculation_type = models.CharField(
         max_length=20, choices=CALULATION_TYPE.choices, default="none"
@@ -93,11 +104,15 @@ class Position(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
     abbreviation = models.CharField(max_length=3, blank=True)
-    
+
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['sport', 'name'], name='unique_position_name_per_sport'),
-            models.UniqueConstraint(fields=['sport', 'abbreviation'], name='unique_position_abbr_per_sport'),
+            models.UniqueConstraint(
+                fields=["sport", "name"], name="unique_position_name_per_sport"
+            ),
+            models.UniqueConstraint(
+                fields=["sport", "abbreviation"], name="unique_position_abbr_per_sport"
+            ),
         ]
 
     def __str__(self):

@@ -22,18 +22,18 @@ class PlayerStatsSummaryService:
             composite_stats__isnull=False, calculation_type="percentage"
         ).prefetch_related("composite_stats")
 
-        # abbreviations
+        # codes
         self.counter_abbrevs = set(
             self.all_stats.filter(is_counter=True, calculation_type="none").values_list(
-                "abbreviation", flat=True
+                "code", flat=True
             )
         )
-        self.base_abbrevs = list(self.base_stats.values_list("abbreviation", flat=True))
+        self.base_abbrevs = list(self.base_stats.values_list("code", flat=True))
         self.sum_abbrevs = list(
-            self.sum_composites.values_list("abbreviation", flat=True)
+            self.sum_composites.values_list("code", flat=True)
         )
         self.pct_abbrevs = list(
-            self.pct_composites.values_list("abbreviation", flat=True)
+            self.pct_composites.values_list("code", flat=True)
         )
         self.all_calc_abbrevs = self.sum_abbrevs + self.pct_abbrevs
 
@@ -51,7 +51,7 @@ class PlayerStatsSummaryService:
                 stat_type__in=self.base_stats,
                 player__team__in=self.teams,
             )
-            .values("player_id", "period", "stat_type__abbreviation")
+            .values("player_id", "period", "stat_type__code")
             .annotate(count=Count("id"))
         )
 
@@ -78,7 +78,7 @@ class PlayerStatsSummaryService:
             pid, per, abbr, cnt = (
                 rec["player_id"],
                 rec["period"],
-                rec["stat_type__abbreviation"],
+                rec["stat_type__code"],
                 rec["count"],
             )
             if pid in summary and per <= self.game.current_period:
@@ -86,18 +86,18 @@ class PlayerStatsSummaryService:
 
     def _compute_sum_composites(self, summary):
         for comp in self.sum_composites:
-            comps = [c.abbreviation for c in comp.composite_stats.all()]
+            comps = [c.code for c in comp.composite_stats.all()]
             for data in summary.values():
                 for pd in data["periods"].values():
                     total = sum(
                         pd["base_stats"].get(c, 0) + pd["calculated_stats"].get(c, 0)
                         for c in comps
                     )
-                    pd["calculated_stats"][comp.abbreviation] = total
+                    pd["calculated_stats"][comp.code] = total
 
     def _compute_pct_composites(self, summary):
         for comp in self.pct_composites:
-            comps = [c.abbreviation for c in comp.composite_stats.all()]
+            comps = [c.code for c in comp.composite_stats.all()]
             if len(comps) != 2:
                 continue
             made_abbr = next((c for c in comps if c.endswith("MA")), None)
@@ -114,7 +114,7 @@ class PlayerStatsSummaryService:
                         "calculated_stats"
                     ].get(att_abbr, 0)
                     pct = round((made / att) * 100, 1) if att else 0.0
-                    pd["calculated_stats"][comp.abbreviation] = pct
+                    pd["calculated_stats"][comp.code] = pct
 
     def _build_response(self, summary):
         response = []
@@ -130,8 +130,8 @@ class PlayerStatsSummaryService:
                 # Points
                 pts = sum(
                     (
-                        pd["base_stats"].get(s.abbreviation, 0)
-                        + pd["calculated_stats"].get(s.abbreviation, 0)
+                        pd["base_stats"].get(s.code, 0)
+                        + pd["calculated_stats"].get(s.code, 0)
                     )
                     * s.point_value
                     for s in self.all_stats
@@ -158,7 +158,7 @@ class PlayerStatsSummaryService:
 
                 # Track components for _PC recalculation
                 for comp in self.pct_composites:
-                    comps = [c.abbreviation for c in comp.composite_stats.all()]
+                    comps = [c.code for c in comp.composite_stats.all()]
                     if len(comps) != 2:
                         continue
                     made_abbr = next((c for c in comps if c.endswith("MA")), None)
@@ -175,8 +175,8 @@ class PlayerStatsSummaryService:
                         "calculated_stats"
                     ].get(att_abbr, 0)
 
-                    pct_components[comp.abbreviation]["made"] += made
-                    pct_components[comp.abbreviation]["att"] += att
+                    pct_components[comp.code]["made"] += made
+                    pct_components[comp.code]["att"] += att
 
                 periods_out.append(
                     {
@@ -274,17 +274,17 @@ class TeamStatsSummaryService:
 
         # Counter stats configuration
         self.counter_abbrevs = set(
-            self.all_stats.filter(is_counter=True).values_list("abbreviation", flat=True)
+            self.all_stats.filter(is_counter=True).values_list("code", flat=True)
         )
-        self.base_abbrevs = list(self.base_stats.values_list("abbreviation", flat=True))
-        self.sum_abbrevs = list(self.sum_composites.values_list("abbreviation", flat=True))
-        self.pct_abbrevs = list(self.pct_composites.values_list("abbreviation", flat=True))
+        self.base_abbrevs = list(self.base_stats.values_list("code", flat=True))
+        self.sum_abbrevs = list(self.sum_composites.values_list("code", flat=True))
+        self.pct_abbrevs = list(self.pct_composites.values_list("code", flat=True))
         self.all_calc_abbrevs = self.sum_abbrevs + self.pct_abbrevs
 
     def _aggregate_base_stats(self):
         return (
             PlayerStat.objects.filter(game=self.game, stat_type__in=self.base_stats)
-            .values("player__team", "period", "stat_type__abbreviation")
+            .values("player__team", "period", "stat_type__code")
             .annotate(total=Count("id"))
         )
 
@@ -312,7 +312,7 @@ class TeamStatsSummaryService:
         for rec in self._aggregate_base_stats():
             team_id = rec["player__team"]
             period = rec["period"]
-            abbr = rec["stat_type__abbreviation"]
+            abbr = rec["stat_type__code"]
             count = rec["total"]
 
             if team_id in summary and period <= self.game.current_period:
@@ -321,7 +321,7 @@ class TeamStatsSummaryService:
     def _compute_sum_composites(self, summary):
         """Calculate sum-based composite stats"""
         for comp in self.sum_composites:
-            components = [c.abbreviation for c in comp.composite_stats.all()]
+            components = [c.code for c in comp.composite_stats.all()]
             for team_data in summary.values():
                 for period_data in team_data["periods"].values():
                     total = sum(
@@ -329,12 +329,12 @@ class TeamStatsSummaryService:
                         period_data["calculated_stats"].get(c, 0)
                         for c in components
                     )
-                    period_data["calculated_stats"][comp.abbreviation] = total
+                    period_data["calculated_stats"][comp.code] = total
 
     def _compute_pct_composites(self, summary):
         """Calculate percentage-based composite stats"""
         for comp in self.pct_composites:
-            components = [c.abbreviation for c in comp.composite_stats.all()]
+            components = [c.code for c in comp.composite_stats.all()]
             if len(components) != 2:
                 continue
                 
@@ -354,7 +354,7 @@ class TeamStatsSummaryService:
                         period_data["base_stats"].get(att_abbr, 0) +
                         period_data["calculated_stats"].get(att_abbr, 0)
                     )
-                    period_data["calculated_stats"][comp.abbreviation] = (
+                    period_data["calculated_stats"][comp.code] = (
                         round((made / att) * 100, 1) if att else 0.0
                     )
 
@@ -371,8 +371,8 @@ class TeamStatsSummaryService:
 
                 # Calculate points (includes counters if they have point_value)
                 points = sum(
-                    (period_data["base_stats"].get(s.abbreviation, 0) +
-                     period_data["calculated_stats"].get(s.abbreviation, 0)
+                    (period_data["base_stats"].get(s.code, 0) +
+                     period_data["calculated_stats"].get(s.code, 0)
                     ) * s.point_value
                     for s in self.all_stats
                     if s.point_value
@@ -393,7 +393,7 @@ class TeamStatsSummaryService:
 
                 # Track components for total percentages
                 for comp in self.pct_composites:
-                    components = [c.abbreviation for c in comp.composite_stats.all()]
+                    components = [c.code for c in comp.composite_stats.all()]
                     if len(components) != 2:
                         continue
                         
@@ -401,11 +401,11 @@ class TeamStatsSummaryService:
                     att_abbr = next((c for c in components if c.endswith(("AT", "MS"))), None)
                     
                     if made_abbr and att_abbr:
-                        pct_components[comp.abbreviation]["made"] += (
+                        pct_components[comp.code]["made"] += (
                             period_data["base_stats"].get(made_abbr, 0) +
                             period_data["calculated_stats"].get(made_abbr, 0)
                         )
-                        pct_components[comp.abbreviation]["att"] += (
+                        pct_components[comp.code]["att"] += (
                             period_data["base_stats"].get(att_abbr, 0) +
                             period_data["calculated_stats"].get(att_abbr, 0)
                         )
@@ -423,7 +423,7 @@ class TeamStatsSummaryService:
 
             # Recalculate total percentages
             for comp in self.pct_composites:
-                abbr = comp.abbreviation
+                abbr = comp.code
                 made = pct_components[abbr]["made"]
                 att = pct_components[abbr]["att"]
                 total_calc[abbr] = round((made / att) * 100, 1) if att else 0.0

@@ -2,6 +2,7 @@ from rest_framework.viewsets import ModelViewSet
 from .models import Sport, Position, SportStatType
 from .serializers import SportSerializer, PositionSerializer, SportStatTypeSerializer
 from django_filters.rest_framework import DjangoFilterBackend
+from .filters import SportStatTypeFilter, SportPositionFilter
 
 class SportsViewSet(ModelViewSet):
     queryset = Sport.objects.all()
@@ -9,15 +10,16 @@ class SportsViewSet(ModelViewSet):
     lookup_field = "slug"
 
 class SportStatTypeViewSet(ModelViewSet):
-    queryset = SportStatType.objects.all()
+    queryset = SportStatType.objects.select_related('sport').all()
     serializer_class = SportStatTypeSerializer
-    filterset_fields = ['sport']
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = SportStatTypeFilter
 
 class PositionViewSet(ModelViewSet):
     serializer_class = PositionSerializer
     queryset = Position.objects.select_related('sport').all()
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['sport']
+    filterset_class = SportPositionFilter
 
     
 
