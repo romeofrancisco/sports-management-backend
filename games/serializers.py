@@ -6,10 +6,12 @@ from sports.models import SportStatType, Position
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
 
+
 class PositionSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Position 
-        fields = ['id', 'name', "abbreviation"] 
+        model = Position
+        fields = ["id", "name", "abbreviation"]
+
 
 class PlayerStatRecordSerializer(serializers.ModelSerializer):
     game = serializers.PrimaryKeyRelatedField(queryset=Game.objects.all())
@@ -22,7 +24,9 @@ class PlayerStatRecordSerializer(serializers.ModelSerializer):
 
 
 class PlayerStatSerializer(serializers.ModelSerializer):
-    player_name = serializers.CharField(source="player.user.get_full_name", read_only=True)
+    player_name = serializers.CharField(
+        source="player.user.get_full_name", read_only=True
+    )
     team = serializers.SerializerMethodField()
     stat_details = serializers.SerializerMethodField()
 
@@ -54,43 +58,27 @@ class PlayerStatSerializer(serializers.ModelSerializer):
 class RecordableStatSerializer(serializers.ModelSerializer):
     current_period = serializers.IntegerField()
     button_type = serializers.SerializerMethodField()
-    paired_stat_id = serializers.SerializerMethodField()  # Renamed for clarity
-    paired_stat_abbrev = serializers.SerializerMethodField()
 
     class Meta:
         model = SportStatType
         fields = [
             "id",
             "name",
+            "display_name",
             "code",
             "point_value",
             "current_period",
             "button_type",
-            "paired_stat_id",
-            "paired_stat_abbrev",
         ]
 
     def get_button_type(self, obj):
         if obj.is_negative:
             return "negative"
-        if obj.related_stat:
+        elif "_MA" in obj.code:
+            return "made"
+        elif "_MS" in obj.code:
             return "miss"
-        return "made" if obj.point_value > 0 else "info"
-
-    def get_paired_stat_id(self, obj):
-        if obj.related_stat:
-            return obj.related_stat.id
-        # For missed stats, find if any stat points to this one as related
-        counterpart = SportStatType.objects.filter(related_stat=obj).first()
-        return counterpart.id if counterpart else None
-
-    def get_paired_stat_abbrev(self, obj):
-        counterpart = (
-            obj.related_stat
-            if obj.related_stat
-            else SportStatType.objects.filter(related_stat=obj).first()
-        )
-        return counterpart.code if counterpart else None
+        return "info"
 
 
 class GameSerializer(serializers.ModelSerializer):
@@ -100,7 +88,9 @@ class GameSerializer(serializers.ModelSerializer):
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
-    max_players_on_field_per_team = serializers.IntegerField(source="sport.max_players_on_field", read_only=True)
+    max_players_on_field_per_team = serializers.IntegerField(
+        source="sport.max_players_on_field", read_only=True
+    )
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -147,9 +137,9 @@ class GameSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         return super().create(validated_data)
-    
+
     def get_winner(self, obj):
-        return obj.winner.id if obj.winner else None    
+        return obj.winner.id if obj.winner else None
 
     def get_lineup_status(self, obj):
         return obj.get_lineup_status()
@@ -178,7 +168,7 @@ class GameSerializer(serializers.ModelSerializer):
 
 class GameActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
-        choices=["start", "complete", "postpone","next_period"], required=True
+        choices=["start", "complete", "postpone", "next_period"], required=True
     )
 
     def validate_action(self, value):
@@ -315,7 +305,7 @@ class CurrentPlayerSerializer(serializers.ModelSerializer):
 
     def get_short_name(self, obj):
         return f"{obj.player.user.first_name} {obj.player.user.last_name[0]}."
-    
+
     def get_team_side(self, obj):
         game = obj.game
         return "home_team" if obj.team == game.home_team else "away_team"
@@ -349,9 +339,16 @@ class StartingLineupSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StartingLineup
-        fields = ["player", "player_name", "position", "team", "team_name", "team_side",]
+        fields = [
+            "player",
+            "player_name",
+            "position",
+            "team",
+            "team_name",
+            "team_side",
+        ]
         extra_kwargs = {
-            "team": {"read_only": True}, 
+            "team": {"read_only": True},
             "game": {"write_only": True},
             "position": {"read_only": True},
         }

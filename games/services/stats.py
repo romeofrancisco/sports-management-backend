@@ -243,17 +243,6 @@ class RecordingService:
             period=self.game.current_period,
         )
 
-        # handle the “counter” or “related” stat if configured
-        rel = self.stat_type.related_stat
-        if rel and self.stat_type.is_counter:
-            PlayerStat.objects.update_or_create(
-                player=self.player,
-                game=self.game,
-                stat_type=rel,
-                period=self.game.current_period,
-                defaults={},  # no extra fields to update
-            )
-
         # bump the game’s score aggregates
         self.game.update_scores()
 

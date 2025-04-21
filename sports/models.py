@@ -55,7 +55,7 @@ class SportStatType(models.Model):
     display_name = models.CharField(
         null=True,
         blank=True,
-        max_length=12,
+        max_length=15,
         help_text="Displayed name for counter stats in recording button",
     )
     code = models.CharField(max_length=10, blank=True, null=True)
@@ -68,13 +68,6 @@ class SportStatType(models.Model):
         max_length=20, choices=CALULATION_TYPE.choices, default="none"
     )
     is_negative = models.BooleanField(default=False)
-    related_stat = models.ForeignKey(
-        "self",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="counterpart_stats",
-    )
     composite_stats = models.ManyToManyField(
         "self", symmetrical=False, blank=True, related_name="component_of_stats"
     )
@@ -84,11 +77,6 @@ class SportStatType(models.Model):
 
     def __str__(self):
         return self.name
-
-    def get_opposite_stat(self):
-        return (
-            self.related_stat or SportStatType.objects.filter(related_stat=self).first()
-        )
 
     def get_all_base_components(self):
         components = set()
