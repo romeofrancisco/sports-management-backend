@@ -1,5 +1,5 @@
 from rest_framework.serializers import ModelSerializer
-from .models import Sport, Position, SportStatType
+from .models import Sport, Position, SportStatType, Formula, FormulaComponent
 from rest_framework import serializers
 
 
@@ -9,15 +9,93 @@ class SportSerializer(ModelSerializer):
         fields = "__all__"
         read_only_fields = ("created_at", "slug")
 
+class FormulaComponentSerializer(serializers.ModelSerializer):
+    stat_type_name = serializers.CharField(source='stat_type.name', read_only=True)
+    stat_type_code = serializers.CharField(source='stat_type.code', read_only=True)
+
+    class Meta:
+        model = FormulaComponent
+        fields = ['id', 'stat_type', 'stat_type_name', 'stat_type_code']
+        extra_kwargs = {
+            'stat_type': {'write_only': True}
+        }
+
+class FormulaSerializer(serializers.ModelSerializer):
+    components = FormulaComponentSerializer(many=True, required=False)
+    sport_name = serializers.CharField(source='sport.name', read_only=True)
+
+    class Meta:
+        model = Formula
+        fields = ['id', 'name', 'expression', 'sport', 'sport_name', 'components']
+        extra_kwargs = {
+            'sport': {'write_only': True}
+        }
+
+    def create(self, validated_data):
+        components_data = validated_data.pop('components', [])
+        formula = Formula.objects.create(**validated_data)
+        
+        for component_data in components_data:
+            FormulaComponent.objects.create(formula=formula, **component_data)
+            
+        return formula
+
+    def update(self, instance, validated_data):
+        components_data = validated_data.pop('components', None)
+        
+        instance.name = validated_data.get('name', instance.name)
+        instance.expression = validated_data.get('expression', instance.expression)
+        instance.sport = validated_data.get('sport', instance.sport)
+        instance.save()
+        
+        if components_data is not None:
+            # Delete existing components not in the new data
+            existing_ids = [c['id'] for c in components_data if 'id' in c]
+            instance.components.exclude(id__in=existing_ids).delete()
+            
+            # Create or update components
+            for component_data in components_data:
+                component_id = component_data.get('id', None)
+                if component_id:
+                    # Update existing component
+                    component = FormulaComponent.objects.get(id=component_id, formula=instance)
+                    component.stat_type = component_data.get('stat_type', component.stat_type)
+                    component.save()
+                else:
+                    # Create new component
+                    FormulaComponent.objects.create(formula=instance, **component_data)
+                    
+        return instance
+
 
 class SportStatTypeSerializer(serializers.ModelSerializer):
     sport = serializers.SlugRelatedField(
         queryset=Sport.objects.all(), slug_field="slug"
     )
+    composite_stats = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=SportStatType.objects.all(), required=False
+    )
 
     class Meta:
         model = SportStatType
         fields = "__all__"
+
+    def validate(self, data):
+        errors = {}
+        formula = data.get('formula')
+        
+        if formula:
+            try:
+                test_vars = {c.stat_type.code: 1 for c in formula.components.all()}
+                eval(formula.expression, {}, test_vars)
+            except Exception as e:
+                errors['formula'] = str(e)
+        
+        if errors:
+            raise serializers.ValidationError(errors)
+        
+        return data
+
 
 
 class PositionSerializer(ModelSerializer):

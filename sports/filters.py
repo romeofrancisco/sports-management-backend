@@ -1,5 +1,5 @@
 import django_filters
-from .models import Position, SportStatType
+from .models import Position, SportStatType, Formula
 
 
 class SportStatTypeFilter(django_filters.FilterSet):

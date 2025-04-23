@@ -44,48 +44,54 @@ class Sport(models.Model):
         super().save(*args, **kwargs)
 
 
-class SportStatType(models.Model):
-    class CALULATION_TYPE(models.TextChoices):
-        NONE = "none", "None"
-        SUM = "sum", "Sum"
-        PERCENTAGE = "percentage", "Percentage"
+class Formula(models.Model):
+    name = models.CharField(max_length=100)
+    expression = models.TextField(help_text="Python formula using component codes as variables")
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+    
+    def __str__(self):
+        return f"{self.name} - {self.expression}"
 
+class FormulaComponent(models.Model):
+    formula = models.ForeignKey(Formula, on_delete=models.CASCADE, related_name='components')
+    stat_type = models.ForeignKey("sports.SportStatType", on_delete=models.CASCADE)
+    
+
+class SportStatType(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=30)
     display_name = models.CharField(
         null=True,
         blank=True,
         max_length=15,
-        help_text="Displayed name for counter stats in recording button",
+        help_text="Displayed name for metrics",
     )
-    code = models.CharField(max_length=10, blank=True, null=True)
+    code = models.CharField(max_length=20, blank=True, null=True)
     point_value = models.IntegerField(default=0)
     is_record = models.BooleanField(
-        default=False, help_text="Check if the stat is use in recording stats else for metrics"
+        default=False,
+        help_text="Check if the stat is used in recording stats else for metrics",
     )
     is_counter = models.BooleanField(default=False)
-    calculation_type = models.CharField(
-        max_length=20, choices=CALULATION_TYPE.choices, default="none"
+    is_metrics = models.BooleanField(
+        default=False,
+        help_text="Check if the stat should be displayed in summary stats or metrics",
+    )
+    formula = models.ForeignKey(
+        Formula,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        help_text="Formula to calculate this stat",
     )
     is_negative = models.BooleanField(default=False)
-    composite_stats = models.ManyToManyField(
-        "self", symmetrical=False, blank=True, related_name="component_of_stats"
-    )
 
     class Meta:
-        unique_together = ["sport", "name"]
+        ordering = ["name"]
+        unique_together = ["sport", "name", "is_record"]
 
     def __str__(self):
-        return self.name
-
-    def get_all_base_components(self):
-        components = set()
-        for component in self.composite_stats.all():
-            if component.composite_stats.exists():
-                components.update(component.get_all_base_components())
-            else:
-                components.add(component)
-        return components
+        return f"{self.name} - {self.code}"
 
 
 class Position(models.Model):

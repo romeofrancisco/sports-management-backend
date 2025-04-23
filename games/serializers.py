@@ -74,9 +74,9 @@ class RecordableStatSerializer(serializers.ModelSerializer):
     def get_button_type(self, obj):
         if obj.is_negative:
             return "negative"
-        elif "_MA" in obj.code:
+        elif obj.is_counter and obj.point_value > 0:
             return "made"
-        elif "_MS" in obj.code:
+        elif obj.is_counter and obj.point_value < 1:
             return "miss"
         return "info"
 
@@ -91,6 +91,7 @@ class GameSerializer(serializers.ModelSerializer):
     max_players_on_field_per_team = serializers.IntegerField(
         source="sport.max_players_on_field", read_only=True
     )
+    scoring_type = serializers.CharField(source="sport.scoring_type", read_only=True)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -107,6 +108,7 @@ class GameSerializer(serializers.ModelSerializer):
             "sport",
             "sport_slug",
             "max_players_on_field_per_team",
+            "scoring_type",
             "league",
             "season",
             "is_recorded",
