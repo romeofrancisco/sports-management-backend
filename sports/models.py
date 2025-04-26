@@ -26,13 +26,24 @@ class Sport(models.Model):
         blank=True, null=True, help_text="Maximum periods/quarters/sets possible"
     )
     has_tie = models.BooleanField(default=False)
+    has_overtime = models.BooleanField(default=False)
+    
+    # Sets
     win_threshold = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="Target value needed to win a match (e.g., 3 sets, 25 points)",
+        help_text="Target value needed to win a match (e.g., 3 sets)",
     )
-    set_point_threshold = models.IntegerField(null=True, blank=True)
-    set_point_cap = models.IntegerField(null=True, blank=True)
+    win_points_threshold = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Target points needed to win a match (e.g., 3 sets)",
+    )
+    win_margin = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Target value needed to win a match (e.g., 3 sets)",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -46,16 +57,21 @@ class Sport(models.Model):
 
 class Formula(models.Model):
     name = models.CharField(max_length=100)
-    expression = models.TextField(help_text="Python formula using component codes as variables")
+    expression = models.TextField(
+        help_text="Python formula using component codes as variables"
+    )
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    
+
     def __str__(self):
         return f"{self.name} - {self.expression}"
 
+
 class FormulaComponent(models.Model):
-    formula = models.ForeignKey(Formula, on_delete=models.CASCADE, related_name='components')
+    formula = models.ForeignKey(
+        Formula, on_delete=models.CASCADE, related_name="components"
+    )
     stat_type = models.ForeignKey("sports.SportStatType", on_delete=models.CASCADE)
-    
+
 
 class SportStatType(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
@@ -97,7 +113,7 @@ class SportStatType(models.Model):
 class Position(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
-    abbreviation = models.CharField(max_length=3, blank=True)
+    abbreviation = models.CharField(max_length=10, blank=True)
 
     class Meta:
         constraints = [

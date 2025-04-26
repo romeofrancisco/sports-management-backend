@@ -5,7 +5,6 @@ from .views import (
     PositionViewSet,
     SportStatTypeViewSet,
     FormulaViewSet,
-    SportStatTypeChoicesView,
 )
 
 router = DefaultRouter()
@@ -16,9 +15,4 @@ router.register(r"formulas", FormulaViewSet, basename="formula")
 
 urlpatterns = [
     path("", include(router.urls)),
-    path(
-        "stat-type-choices/",
-        SportStatTypeChoicesView.as_view({"get": "list"}),
-        name="stat-type-choices",
-    ),
 ]

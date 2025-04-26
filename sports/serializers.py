@@ -10,12 +10,13 @@ class SportSerializer(ModelSerializer):
         read_only_fields = ("created_at", "slug")
 
 class FormulaComponentSerializer(serializers.ModelSerializer):
+    stat_type_id = serializers.CharField(source='stat_type.id', read_only=True)
     stat_type_name = serializers.CharField(source='stat_type.name', read_only=True)
     stat_type_code = serializers.CharField(source='stat_type.code', read_only=True)
 
     class Meta:
         model = FormulaComponent
-        fields = ['id', 'stat_type', 'stat_type_name', 'stat_type_code']
+        fields = ['id', 'stat_type_id', 'stat_type', 'stat_type_name', 'stat_type_code']
         extra_kwargs = {
             'stat_type': {'write_only': True}
         }
@@ -23,12 +24,18 @@ class FormulaComponentSerializer(serializers.ModelSerializer):
 class FormulaSerializer(serializers.ModelSerializer):
     components = FormulaComponentSerializer(many=True, required=False)
     sport_name = serializers.CharField(source='sport.name', read_only=True)
+    sport_slug = serializers.SlugRelatedField(
+        source='sport',
+        slug_field='slug',
+        queryset=Sport.objects.all(),
+        write_only=True
+    )
 
     class Meta:
         model = Formula
-        fields = ['id', 'name', 'expression', 'sport', 'sport_name', 'components']
+        fields = ['id', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
-            'sport': {'write_only': True}
+            'sport': {'write_only': True}  # This will be set via sport_slug
         }
 
     def create(self, validated_data):
@@ -49,32 +56,26 @@ class FormulaSerializer(serializers.ModelSerializer):
         instance.save()
         
         if components_data is not None:
-            # Delete existing components not in the new data
+            # Handle component updates (same as before)
             existing_ids = [c['id'] for c in components_data if 'id' in c]
             instance.components.exclude(id__in=existing_ids).delete()
             
-            # Create or update components
             for component_data in components_data:
                 component_id = component_data.get('id', None)
                 if component_id:
-                    # Update existing component
                     component = FormulaComponent.objects.get(id=component_id, formula=instance)
                     component.stat_type = component_data.get('stat_type', component.stat_type)
                     component.save()
                 else:
-                    # Create new component
                     FormulaComponent.objects.create(formula=instance, **component_data)
                     
         return instance
-
 
 class SportStatTypeSerializer(serializers.ModelSerializer):
     sport = serializers.SlugRelatedField(
         queryset=Sport.objects.all(), slug_field="slug"
     )
-    composite_stats = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=SportStatType.objects.all(), required=False
-    )
+    expression = serializers.CharField(source="formula.expression", read_only=True)
 
     class Meta:
         model = SportStatType

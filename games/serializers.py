@@ -1,10 +1,11 @@
 from rest_framework import serializers
 from .models import Game, PlayerStat, StartingLineup, Substitution
-from teams.serializers import TeamSerializer, PlayerInfoSerializer
+from teams.serializers import TeamSerializer
 from teams.models import Team, Player
 from sports.models import SportStatType, Position
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
+from sports.models import Sport
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -87,11 +88,8 @@ class GameSerializer(serializers.ModelSerializer):
     status = serializers.ChoiceField(choices=Game.Status.choices)
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
+    score_summary = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
-    max_players_on_field_per_team = serializers.IntegerField(
-        source="sport.max_players_on_field", read_only=True
-    )
-    scoring_type = serializers.CharField(source="sport.scoring_type", read_only=True)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -107,11 +105,10 @@ class GameSerializer(serializers.ModelSerializer):
             "id",
             "sport",
             "sport_slug",
-            "max_players_on_field_per_team",
-            "scoring_type",
             "league",
             "season",
             "is_recorded",
+            "score_summary",
             "type",
             "creator",
             "home_team",
@@ -142,12 +139,14 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
+    
+    def get_score_summary(self, obj):
+        return obj.score_summary
 
     def get_lineup_status(self, obj):
         return obj.get_lineup_status()
 
     def validate(self, data):
-        # Get home_team and away_team from different possible sources
         home_team = data.get("home_team") or getattr(self.instance, "home_team", None)
         away_team = data.get("away_team") or getattr(self.instance, "away_team", None)
 
@@ -157,13 +156,10 @@ class GameSerializer(serializers.ModelSerializer):
         if home_team == away_team:
             raise serializers.ValidationError("Home and away teams cannot be the same")
 
-        # Additional validation - teams must belong to the same sport
-        if hasattr(data, "sport"):
+        if "sport" in data:
             sport = data["sport"]
             if home_team.sport != sport or away_team.sport != sport:
-                raise serializers.ValidationError(
-                    "Teams must belong to the game's sport"
-                )
+                raise serializers.ValidationError("Teams must belong to the game's sport")
 
         return data
 
