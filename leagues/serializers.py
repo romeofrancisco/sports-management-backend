@@ -33,21 +33,25 @@ class TeamSerializer(serializers.ModelSerializer):
 class SeasonSerializer(serializers.ModelSerializer):
     teams_list = serializers.SerializerMethodField()
     has_bracket = serializers.SerializerMethodField()
+    league_name = serializers.SerializerMethodField()
     class Meta:
         model = Season
-        fields = ['id', 'name', 'teams', "is_recorded", 'teams_list', 'league', 'year', 'status', 'has_bracket', 'start_date', 'end_date']
+        fields = ['id', 'name', 'teams', "is_recorded", 'league', 'league_name', 'teams_list', 'year', 'status', 'has_bracket', 'start_date', 'end_date']
         read_only_fields = ['league', 'team_lists']
         extra_kwargs = {"teams":{"write_only": True}}
 
     def validate(self, data):
         start = data.get('start_date')
         end = data.get('end_date')
-        if start and end and start.date() >= end:
+        if start and end and start >= end:
             raise serializers.ValidationError("End date must be after start date")
         return data
     
     def get_has_bracket(self, obj):
         return hasattr(obj, 'bracket')
+    
+    def get_league_name(self, obj):
+        return obj.league.name
     
     def get_teams_list(self, obj):
         request = self.context.get("request")

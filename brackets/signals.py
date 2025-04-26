@@ -13,41 +13,72 @@ logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=Game)
 def update_match_winner(sender, instance, **kwargs):
-    if instance.status == Game.Status.COMPLETED and instance.bracket_match:
+    # Only process completed games that are part of a tournament or league
+    if instance.status != Game.Status.COMPLETED or instance.type == Game.Type.NORMAL:
+        return
+
+    try:
+        # Safely check if the game has a bracket_match
+        if not hasattr(instance, 'bracket_match') or not instance.bracket_match:
+            return
+
         match = instance.bracket_match
         winner = instance.winner
 
+        # If winner hasn't changed, no need to proceed
         if match.winner == winner:
             return
 
+        # Update the match winner
         match.winner = winner
         match.save(update_fields=["winner"])
 
-        # --- wait for next round creation ---
-        for _ in range(3):
-            match.refresh_from_db()
-            if match.next_match:
-                break
+        # Wait for next round creation with a maximum of 3 attempts
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                match.refresh_from_db()
+                if match.next_match:
+                    break
+            except Exception:
+                if attempt == max_attempts - 1:
+                    raise
             sleep(0.2)  # Small delay to allow transaction to complete
 
+        # Update the next match if it exists
         if match.next_match:
             next_match = match.next_match
+            update_fields = []
+            
             if not next_match.home_team:
                 next_match.home_team = winner
+                update_fields.append("home_team")
             elif not next_match.away_team:
                 next_match.away_team = winner
-            next_match.save(update_fields=["home_team", "away_team"])
+                update_fields.append("away_team")
+            
+            if update_fields:
+                next_match.save(update_fields=update_fields)
+
+    except Exception as e:
+        # Log the error but don't prevent the game from completing
+        logger.error(f"Error updating bracket match winner: {str(e)}")
 
 
 @receiver(post_save, sender=BracketMatch)
 def handle_match_completion(sender, instance, **kwargs):
-    if instance.winner and instance.round.round_number == instance.bracket.current_round:
+    if (
+        instance.winner
+        and instance.round.round_number == instance.bracket.current_round
+    ):
         bracket = instance.bracket
         current_round_number = bracket.current_round
         current_round = bracket.rounds.get(round_number=current_round_number)
 
         if not current_round.matches.filter(winner__isnull=True).exists():
-            logger.info(f"All matches completed for round {current_round_number} of bracket {bracket.id}")
+            logger.info(
+                f"All matches completed for round {current_round_number} of bracket {bracket.id}"
+            )
             viewset = BracketViewSet()
 
             with transaction.atomic():
@@ -55,14 +86,18 @@ def handle_match_completion(sender, instance, **kwargs):
                 viewset._create_next_round(bracket)
 
                 # Get the next round using the known number
-                next_round = bracket.rounds.filter(round_number=bracket.current_round + 1).first()
+                next_round = bracket.rounds.filter(
+                    round_number=bracket.current_round + 1
+                ).first()
                 if not next_round:
-                    logger.info(f"No next round exists. Bracket {bracket.id} has likely finished.")
+                    logger.info(
+                        f"No next round exists. Bracket {bracket.id} has likely finished."
+                    )
                     return
                 next_match = next_round.matches.first()
 
                 # Get winners from the completed round
-                winners = list(current_round.matches.values_list('winner', flat=True))
+                winners = list(current_round.matches.values_list("winner", flat=True))
 
                 if len(winners) >= 2:
                     next_match.home_team_id = winners[0]
@@ -74,14 +109,13 @@ def handle_match_completion(sender, instance, **kwargs):
                 bracket.save(update_fields=["current_round"])
 
 
-
 @receiver(post_save, sender=BracketMatch)
 def create_or_assign_game(sender, instance, **kwargs):
     # If the bracket is complete, do nothing
     if instance.bracket.is_complete:
         logger.info(f"Bracket {instance.bracket.id} is already complete.")
         return
-     
+
     if instance.game:
         return  # Already linked to a game
 
@@ -98,7 +132,7 @@ def create_or_assign_game(sender, instance, **kwargs):
 
             # Calculate the match order (2 hours per match) within the current round.
             # We simply order matches in this round by their id.
-            matches_in_round = list(instance.round.matches.order_by('id'))
+            matches_in_round = list(instance.round.matches.order_by("id"))
             try:
                 match_index = matches_in_round.index(instance)
             except ValueError:
@@ -112,13 +146,18 @@ def create_or_assign_game(sender, instance, **kwargs):
                 home_team=instance.home_team,
                 away_team=instance.away_team,
                 status=Game.Status.SCHEDULED,
+                type=Game.Type.LEAGUE,
                 season=instance.bracket.season,
-                league=instance.bracket.season.league if instance.bracket.season else None,
-                date=scheduled_datetime 
+                league=(
+                    instance.bracket.season.league if instance.bracket.season else None
+                ),
+                date=scheduled_datetime,
             )
             instance.game = game
             instance.save(update_fields=["game"])
-            logger.info(f"Game created for match {instance.id} scheduled at {scheduled_datetime}")
+            logger.info(
+                f"Game created for match {instance.id} scheduled at {scheduled_datetime}"
+            )
         except Exception as e:
             logger.error(f"Failed to create game for match {instance.id}: {str(e)}")
 

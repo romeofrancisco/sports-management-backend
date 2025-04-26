@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models import Sum, F, Q
+from datetime import date
 
 class League(models.Model):
     name = models.CharField(max_length=255)
@@ -109,7 +110,7 @@ class Season(models.Model):
     year = models.PositiveIntegerField()
     is_recorded = models.BooleanField(default=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
-    start_date = models.DateTimeField()
+    start_date = models.DateField()
     end_date = models.DateField(null=True)
 
     class Meta:
@@ -130,11 +131,39 @@ class Season(models.Model):
     @property
     def get_bracket(self):
         return getattr(self, 'bracket', None)
+    
+    def start_season(self):
+        if self.status != self.Status.UPCOMING:
+            raise ValidationError("Season can only start from Upcoming status")
+        if self.start_date != date.today():
+            raise ValidationError("Season can only start on its start date")
+        
+        self.status = self.Status.ONGOING
+        self.save()
+        
+    def complete_season(self):
+        if self.status != self.Status.ONGOING:
+            raise ValidationError("Season can only be completed from Ongoing status")
+        
+        self.status = self.Status.COMPLETED
+        self.save()
+        
+    def pause_season(self):
+        if self.status != self.Status.ONGOING:
+            raise ValidationError("Season can only be paused from Ongoing status")
+        self.status = self.Status.PAUSED
+        self.save()
+
+    def cancel_season(self):
+        if self.status not in [self.Status.UPCOMING, self.Status.ONGOING]:
+            raise ValidationError("Only upcoming or ongoing seasons can be canceled")
+        self.status = self.Status.CANCELED
+        self.save()
 
     def standings(self):
         sport = self.league.sport
         scoring_type = sport.scoring_type  # "points", "sets", or "goals"
-        games = self.games.filter(status="completed", season=self.id, is_recorded=True)
+        games = self.games.filter(status="completed", season=self.id)
         standings = []
 
         for team in self.teams.all():

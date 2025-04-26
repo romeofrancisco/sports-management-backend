@@ -44,8 +44,8 @@ class User(AbstractUser):
         PLAYER = "Player", "Player"
 
     class Sex(models.TextChoices):
-        MALE = "Male", "male"
-        FEMALE = "Female", "female"
+        MALE = "male", "male"
+        FEMALE = "female", "Female"
 
     username = None
     email = models.EmailField(unique=True)

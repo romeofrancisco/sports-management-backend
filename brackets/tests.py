@@ -45,7 +45,7 @@ class BracketFlowTestCase(TestCase):
         self.team4 = Team.objects.create(name="Team D", sport=self.sport)
         
         # Add teams to the league (through the many-to-many field)
-        self.league.teams.add(self.team1, self.team2, self.team3, self.team4)
+        self.season.teams.add(self.team1, self.team2, self.team3, self.team4)
         
         # Create a Bracket for this season. You may add additional fields as needed.
         self.bracket = Bracket.objects.create(

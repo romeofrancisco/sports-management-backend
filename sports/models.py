@@ -12,6 +12,7 @@ class Sport(models.Model):
     )
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(unique=True, blank=True)
+    banner = models.ImageField(upload_to="sport_banner/", null=True, blank=True)
     max_players_per_team = models.PositiveIntegerField(
         default=12,  # Add default value
         help_text="Maximum players allowed per team roster",
@@ -25,10 +26,23 @@ class Sport(models.Model):
         blank=True, null=True, help_text="Maximum periods/quarters/sets possible"
     )
     has_tie = models.BooleanField(default=False)
+    has_overtime = models.BooleanField(default=False)
+    
+    # Sets
     win_threshold = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="Target value needed to win a match (e.g., 3 sets, 25 points)",
+        help_text="Target value needed to win a match (e.g., 3 sets)",
+    )
+    win_points_threshold = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Target points needed to win a match (e.g., 3 sets)",
+    )
+    win_margin = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Target value needed to win a match (e.g., 3 sets)",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -41,57 +55,75 @@ class Sport(models.Model):
         super().save(*args, **kwargs)
 
 
-class SportStatType(models.Model):
-    class CALULATION_TYPE(models.TextChoices):
-        NONE = "none", "None"
-        SUM = "sum", "Sum"
-        PERCENTAGE = "percentage", "Percentage"
-
-    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+class Formula(models.Model):
     name = models.CharField(max_length=100)
-    abbreviation = models.CharField(max_length=10, blank=True, null=True)
-    point_value = models.IntegerField(default=0)
-    is_counter = models.BooleanField(default=False)
-    calculation_type = models.CharField(
-        max_length=20, choices=CALULATION_TYPE.choices, default="none"
+    expression = models.TextField(
+        help_text="Python formula using component codes as variables"
     )
-    is_negative = models.BooleanField(default=False)
-    related_stat = models.ForeignKey(
-        "self",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="counterpart_stats",
-    )
-    composite_stats = models.ManyToManyField(
-        "self", symmetrical=False, blank=True, related_name="component_of_stats"
-    )
-
-    class Meta:
-        unique_together = ["sport", "name"]
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
 
     def __str__(self):
-        return self.name
+        return f"{self.name} - {self.expression}"
 
-    def get_opposite_stat(self):
-        return (
-            self.related_stat or SportStatType.objects.filter(related_stat=self).first()
-        )
 
-    def get_all_base_components(self):
-        components = set()
-        for component in self.composite_stats.all():
-            if component.composite_stats.exists():
-                components.update(component.get_all_base_components())
-            else:
-                components.add(component)
-        return components
+class FormulaComponent(models.Model):
+    formula = models.ForeignKey(
+        Formula, on_delete=models.CASCADE, related_name="components"
+    )
+    stat_type = models.ForeignKey("sports.SportStatType", on_delete=models.CASCADE)
+
+
+class SportStatType(models.Model):
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+    name = models.CharField(max_length=30)
+    display_name = models.CharField(
+        null=True,
+        blank=True,
+        max_length=15,
+        help_text="Displayed name for metrics",
+    )
+    code = models.CharField(max_length=20, blank=True, null=True)
+    point_value = models.IntegerField(default=0)
+    is_record = models.BooleanField(
+        default=False,
+        help_text="Check if the stat is used in recording stats else for metrics",
+    )
+    is_counter = models.BooleanField(default=False)
+    is_metrics = models.BooleanField(
+        default=False,
+        help_text="Check if the stat should be displayed in summary stats or metrics",
+    )
+    formula = models.ForeignKey(
+        Formula,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        help_text="Formula to calculate this stat",
+    )
+    is_negative = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = ["sport", "name", "is_record"]
+
+    def __str__(self):
+        return f"{self.name} - {self.code}"
 
 
 class Position(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
-    abbreviation = models.CharField(max_length=3, blank=True)
+    abbreviation = models.CharField(max_length=10, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sport", "name"], name="unique_position_name_per_sport"
+            ),
+            models.UniqueConstraint(
+                fields=["sport", "abbreviation"], name="unique_position_abbr_per_sport"
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.sport})"
