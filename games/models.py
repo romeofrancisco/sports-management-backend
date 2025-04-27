@@ -83,7 +83,7 @@ class Game(models.Model):
         scores = self._calculate_team_scores()
         Game.objects.filter(pk=self.pk).update(**scores)
         self.refresh_from_db()
-    
+
     def validate_game_state(self, action):
         """
         Validate game state before proceeding to next period or completing game
@@ -96,48 +96,83 @@ class Game(models.Model):
             return {"error": f"Game must be in progress to {action.replace('_', ' ')}"}
 
         # Set-based sports validation
-        if sport.scoring_type == Sport.SCORING_TYPES.SETS:    
+        if sport.scoring_type == Sport.SCORING_TYPES.SETS:
             # Check win threshold for sets
             home_sets_won = self.sets.filter(winner=self.home_team).count()
             away_sets_won = self.sets.filter(winner=self.away_team).count()
-            
+
             # For next period action
-            if action == 'next_period':
+            if action == "next_period":
                 # Check if we can proceed to next period
-                if sport.max_period and self.current_period >= sport.max_period and not sport.has_overtime:
-                    return {"error": "Cannot proceed beyond maximum periods without overtime"}
-                
-                if sport.win_threshold and (home_sets_won >= sport.win_threshold or away_sets_won >= sport.win_threshold):
-                    return {"error": "Game should be completed as win threshold has been reached"}
-                
+                if (
+                    sport.max_period
+                    and self.current_period >= sport.max_period
+                    and not sport.has_overtime
+                ):
+                    return {
+                        "error": "Cannot proceed beyond maximum periods without overtime"
+                    }
+
+                if sport.win_threshold and (
+                    home_sets_won >= sport.win_threshold
+                    or away_sets_won >= sport.win_threshold
+                ):
+                    return {
+                        "error": "Game should be completed as win threshold has been reached"
+                    }
+
                 # Check win points threshold for current set
                 if sport.win_points_threshold and self:
-                    if (self.home_team_score < sport.win_points_threshold and 
-                        self.away_team_score < sport.win_points_threshold):
-                        return {"error": f"Neither team has reached the win points threshold of {sport.win_points_threshold}"}
-                    
+                    if (
+                        self.home_team_score < sport.win_points_threshold
+                        and self.away_team_score < sport.win_points_threshold
+                    ):
+                        return {
+                            "error": f"Neither team has reached the win points threshold of {sport.win_points_threshold}"
+                        }
+
                     # Check win margin if specified
                     if sport.win_margin:
                         score_diff = abs(self.home_team_score - self.away_team_score)
-                        if (max(self.home_team_score, self.away_team_score) >= sport.win_points_threshold and
-                            score_diff < sport.win_margin):
-                            return {"error": f"Score difference must be at least {sport.win_margin} to complete the set"}
-        
+                        if (
+                            max(self.home_team_score, self.away_team_score)
+                            >= sport.win_points_threshold
+                            and score_diff < sport.win_margin
+                        ):
+                            return {
+                                "error": f"Score difference must be at least {sport.win_margin} to complete the set"
+                            }
+
         # Point-based sports validation
         else:
-            if action == 'complete' and not sport.has_tie and self.home_team_score == self.away_team_score:
-                return {"error": "Cannot complete game with tied score - this sport doesn't allow ties"}
-            
-            if sport.win_points_threshold and action == 'complete':
-                if (self.home_team_score < sport.win_points_threshold and 
-                    self.away_team_score < sport.win_points_threshold):
-                    return {"error": f"Neither team has reached the win points threshold of {sport.win_points_threshold}"}
-                
+            if (
+                action == "complete"
+                and not sport.has_tie
+                and self.home_team_score == self.away_team_score
+            ):
+                return {
+                    "error": "Cannot complete game with tied score - this sport doesn't allow ties"
+                }
+
+            if sport.win_points_threshold and action == "complete":
+                if (
+                    self.home_team_score < sport.win_points_threshold
+                    and self.away_team_score < sport.win_points_threshold
+                ):
+                    return {
+                        "error": f"Neither team has reached the win points threshold of {sport.win_points_threshold}"
+                    }
+
                 if sport.win_margin:
                     score_diff = abs(self.home_team_score - self.away_team_score)
-                    if (max(self.home_team_score, self.away_team_score) >= sport.win_points_threshold and
-                        score_diff < sport.win_margin):
-                        return {"error": f"Score difference must be at least {sport.win_margin} to win"}
+                    if (
+                        max(self.home_team_score, self.away_team_score)
+                        >= sport.win_points_threshold
+                        and score_diff < sport.win_margin
+                    ):
+                        return {
+                            "error": f"Score difference must be at least {sport.win_margin} to win"
+                        }
 
         return None  # No errors
 
@@ -145,11 +180,11 @@ class Game(models.Model):
         def score(team):
             # Filter stats by current period if it's a set-based sport
             filters = {
-                'game': self,
-                'player__team': team,
-                'stat_type__point_value__gt': 0
+                "game": self,
+                "player__team": team,
+                "stat_type__point_value__gt": 0,
             }
-            
+
             if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
                 # Ensure set exists for current period
                 if not self.sets.filter(period=self.current_period).exists():
@@ -158,77 +193,88 @@ class Game(models.Model):
                         period=self.current_period,
                         home_team_score=0,
                         away_team_score=0,
-                        winner=None
+                        winner=None,
                     )
-                filters['period'] = self.current_period
-                
+                filters["period"] = self.current_period
+
             return (
-                PlayerStat.objects.filter(**filters)
-                .aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                PlayerStat.objects.filter(**filters).aggregate(
+                    total=Sum("stat_type__point_value")
+                )["total"]
+                or 0
             )
 
         return {
-            'home_team_score': score(self.home_team),
-            'away_team_score': score(self.away_team),
+            "home_team_score": score(self.home_team),
+            "away_team_score": score(self.away_team),
         }
 
     def start_game(self):
         if self.status != self.Status.SCHEDULED:
-            raise ValidationError({"error": "Game can only start from scheduled status"})
+            raise ValidationError(
+                {"error": "Game can only start from scheduled status"}
+            )
         if not self.date:
             raise ValidationError(
                 {"error": "Please specify a start date before launching the game."}
             )
 
         self.validate_starting_lineup()
-        
+
         # Initialize first set for set-based sports
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
             GameSet.objects.create(
-                game=self,
-                period=1,
-                home_team_score=0,
-                away_team_score=0,
-                winner=None
+                game=self, period=1, home_team_score=0, away_team_score=0, winner=None
             )
-        
+
         self.status = self.Status.IN_PROGRESS
         self.started_at = timezone.now()
         self.save()
 
     def complete_game(self):
         """Complete the game with sport-specific validation"""
-        if error := self.validate_game_state('complete'):
+        if error := self.validate_game_state("complete"):
             raise ValidationError(error)
-        
+
         sport = self.sport
-        
+
         # Additional validation for set-based sports
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
             home_sets_won = self.sets.filter(winner=self.home_team).count()
             away_sets_won = self.sets.filter(winner=self.away_team).count()
-            
+
             # Check if win threshold is met
             if sport.win_threshold:
-                if home_sets_won < sport.win_threshold and away_sets_won < sport.win_threshold:
+                if (
+                    home_sets_won < sport.win_threshold
+                    and away_sets_won < sport.win_threshold
+                ):
                     raise ValidationError(
                         {"error": f"Neither team has won {sport.win_threshold} sets"}
                     )
-            
+
             # Check if current set is complete
             current_set = self.sets.filter(period=self.current_period).first()
             if current_set and sport.win_points_threshold:
-                if (current_set.home_team_score < sport.win_points_threshold and 
-                    current_set.away_team_score < sport.win_points_threshold):
+                if (
+                    current_set.home_team_score < sport.win_points_threshold
+                    and current_set.away_team_score < sport.win_points_threshold
+                ):
                     raise ValidationError(
-                        {"error": f"Current set hasn't reached {sport.win_points_threshold} points"}
+                        {
+                            "error": f"Current set hasn't reached {sport.win_points_threshold} points"
+                        }
                     )
-                
+
                 if sport.win_margin:
-                    score_diff = abs(current_set.home_team_score - current_set.away_team_score)
+                    score_diff = abs(
+                        current_set.home_team_score - current_set.away_team_score
+                    )
                     if score_diff < sport.win_margin:
                         raise ValidationError(
-                            {"error": f"Need {sport.win_margin} point margin to finish set"}
+                            {
+                                "error": f"Need {sport.win_margin} point margin to finish set"
+                            }
                         )
 
         # For set-based sports, ensure current set is saved
@@ -238,22 +284,26 @@ class Game(models.Model):
                 existing_set.home_team_score = self.home_team_score
                 existing_set.away_team_score = self.away_team_score
                 existing_set.winner = (
-                    self.home_team if self.home_team_score > self.away_team_score
-                    else self.away_team if self.away_team_score > self.home_team_score
-                    else None
+                    self.home_team
+                    if self.home_team_score > self.away_team_score
+                    else (
+                        self.away_team
+                        if self.away_team_score > self.home_team_score
+                        else None
+                    )
                 )
                 existing_set.save()
 
         self.status = self.Status.COMPLETED
         self.ended_at = timezone.now()
         self.duration = self.ended_at - self.started_at if self.started_at else None
-        self.save(update_fields=['status', 'ended_at', 'duration', 'updated_at'])
+        self.save(update_fields=["status", "ended_at", "duration", "updated_at"])
 
     def next_period(self):
         """Proceed to next period with sport-specific validation"""
-        if error := self.validate_game_state('next_period'):
+        if error := self.validate_game_state("next_period"):
             raise ValidationError(error)
-        
+
         # For set-based sports, save current set results
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
             existing_set = self.sets.filter(period=self.current_period).first()
@@ -261,30 +311,36 @@ class Game(models.Model):
                 existing_set.home_team_score = self.home_team_score
                 existing_set.away_team_score = self.away_team_score
                 existing_set.winner = (
-                    self.home_team if self.home_team_score > self.away_team_score
-                    else self.away_team if self.away_team_score > self.home_team_score
-                    else None
+                    self.home_team
+                    if self.home_team_score > self.away_team_score
+                    else (
+                        self.away_team
+                        if self.away_team_score > self.home_team_score
+                        else None
+                    )
                 )
                 existing_set.save()
 
             # Check if game should end based on sets won
             home_sets_won = self.sets.filter(winner=self.home_team).count()
             away_sets_won = self.sets.filter(winner=self.away_team).count()
-            
-            if (self.sport.win_threshold and 
-                (home_sets_won >= self.sport.win_threshold or away_sets_won >= self.sport.win_threshold)):
+
+            if self.sport.win_threshold and (
+                home_sets_won >= self.sport.win_threshold
+                or away_sets_won >= self.sport.win_threshold
+            ):
                 return self.complete_game()
 
         # Move to next period
         self.current_period += 1
-        updates = ['current_period']
+        updates = ["current_period"]
 
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
             # Reset game score for new set
             self.home_team_score = 0
             self.away_team_score = 0
-            updates += ['home_team_score', 'away_team_score']
-            
+            updates += ["home_team_score", "away_team_score"]
+
             # Create new set if needed
             if not self.sets.filter(period=self.current_period).exists():
                 GameSet.objects.create(
@@ -292,7 +348,7 @@ class Game(models.Model):
                     period=self.current_period,
                     home_team_score=0,
                     away_team_score=0,
-                    winner=None
+                    winner=None,
                 )
 
         self.save(update_fields=updates)
@@ -374,24 +430,79 @@ class Game(models.Model):
 
     @property
     def score_summary(self):
-        if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
-            return {
-                "sets": [
-                    {
-                        "period": s.period,
-                        "home": s.home_team_score,
-                        "away": s.away_team_score,
-                    }
-                    for s in self.sets.all()
-                ],
-                "home_sets_won": self.sets.filter(winner=self.home_team).count(),
-                "away_sets_won": self.sets.filter(winner=self.away_team).count(),
-            }
-        return {
-            "home": self.home_team_score,
-            "away": self.away_team_score,
-            "difference": abs(self.home_team_score - self.away_team_score),
+        # Common base structure
+        summary = {
+            "periods": [],  # Array of period/set scores
         }
+
+        # For set-based sports (volleyball, tennis, etc.)
+        if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            sets = self.sets.all().order_by("period")
+            summary["periods"] = [
+                {
+                    "period": s.period,
+                    "home": s.home_team_score,
+                    "away": s.away_team_score,
+                    "completed": True,  # Sets are always completed when saved
+                    "winner": s.winner.id if s.winner else None,
+                }
+                for s in sets
+            ]
+            summary["total"] = {
+                "home": self.sets.filter(winner=self.home_team).count(),
+                "away": self.sets.filter(winner=self.away_team).count(),
+            }
+
+        # For point-based sports with periods (basketball, etc.)
+        elif (
+            self.sport.scoring_type == Sport.SCORING_TYPES.POINTS
+            and self.sport.has_period
+        ):
+            for period in range(1, self.current_period + 1):
+                home_score = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.home_team,
+                        stat_type__point_value__gt=0,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
+
+                away_score = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.away_team,
+                        stat_type__point_value__gt=0,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
+
+                summary["total"] = {
+                    "home": self.home_team_score,
+                    "away": self.away_team_score,
+                    "difference": abs(self.home_team_score - self.away_team_score),
+                }
+
+                summary["periods"].append(
+                    {
+                        "period": period,
+                        "home": home_score,
+                        "away": away_score,
+                        "completed": period
+                        < self.current_period,  # Current period is still in progress
+                        "winner": None,  # Winner is determined by total score
+                    }
+                )
+            else:
+                summary["total"] = {
+                    "home": self.home_team_score,
+                    "away": self.away_team_score,
+                    "difference": abs(self.home_team_score - self.away_team_score),
+                }
+
+        return summary
 
 
 # For Set Type Sports
@@ -427,7 +538,9 @@ class PlayerStat(models.Model):
 
     def clean(self):
         if self.game.status != Game.Status.IN_PROGRESS:
-            raise ValidationError({"error": "Stats can only be recorded for in-progress games"})
+            raise ValidationError(
+                {"error": "Stats can only be recorded for in-progress games"}
+            )
         if self.period > self.game.current_period:
             raise ValidationError({"error": "Cannot record stats for future periods"})
         if self.player.team not in [self.game.home_team, self.game.away_team]:
@@ -441,21 +554,45 @@ class PlayerStat(models.Model):
 
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
             if game and sport.win_points_threshold and sport.win_margin:
-                if (game.home_team_score >= sport.win_points_threshold and 
-                    (game.home_team_score - game.away_team_score) >= sport.win_margin):
-                    raise ValidationError({"error": "Home team has already won this set, Please advance to next the set"})
-                if (game.away_team_score >= sport.win_points_threshold and 
-                    (game.away_team_score - game.home_team_score) >= sport.win_margin):
-                    raise ValidationError({"error": "Away team has already won this set, Please advance to next the set"})
+                if (
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score)
+                    >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        {
+                            "error": "Home team has already won this set, Please advance to next the set"
+                        }
+                    )
+                if (
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score)
+                    >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        {
+                            "error": "Away team has already won this set, Please advance to next the set"
+                        }
+                    )
         else:
             # Point-based sports validation
             if sport.win_points_threshold and sport.win_margin:
-                if (self.game.home_team_score >= sport.win_points_threshold and 
-                    (self.game.home_team_score - self.game.away_team_score) >= sport.win_margin):
-                    raise ValidationError({"error": "Home team has already won the game"})
-                if (self.game.away_team_score >= sport.win_points_threshold and 
-                    (self.game.away_team_score - self.game.home_team_score) >= sport.win_margin):
-                    raise ValidationError({"error": "Away team has already won the game"})
+                if (
+                    self.game.home_team_score >= sport.win_points_threshold
+                    and (self.game.home_team_score - self.game.away_team_score)
+                    >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        {"error": "Home team has already won the game"}
+                    )
+                if (
+                    self.game.away_team_score >= sport.win_points_threshold
+                    and (self.game.away_team_score - self.game.home_team_score)
+                    >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        {"error": "Away team has already won the game"}
+                    )
 
         # Rest of your existing validations...
         if self.period > self.game.current_period:

@@ -13,6 +13,8 @@ class Team(models.Model):
         FEMALE = "female", "Female"
     
     name = models.CharField(max_length=100)
+    abbreviation = models.CharField(max_length=5)
+    color = models.CharField(max_length=20, default="#000000")
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
     coach = models.ManyToManyField('teams.Coach', blank=True)
