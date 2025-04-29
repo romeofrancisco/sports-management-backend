@@ -161,24 +161,75 @@ class GameViewSet(viewsets.ModelViewSet):
         elif request.method == "DELETE":
             return self._delete_starting_lineup(game)
 
-    def _get_starting_lineup(self, game):
-        lineup = game.starting_lineup.select_related("player", "team")
-        serializer = StartingLineupSerializer(lineup, many=True)
-
-        # Split players into home/away teams
-        home_players = []
-        away_players = []
-
-        for player_data in serializer.data:
-            if player_data["team_side"] == "home":
-                home_players.append(player_data)
+    @action(detail=True, methods=["get"])
+    def game_flow(self, request, pk=None):
+        game = self.get_object()
+        
+        # Get all player stats for this game in chronological order
+        stats = PlayerStat.objects.filter(
+            game=game,
+            stat_type__is_counter=True,
+            stat_type__point_value__gt=0
+        ).select_related(
+            'player__user',
+            'player__team',
+            'stat_type'
+        ).order_by('timestamp')
+        
+        # Initialize game state
+        game_state = {
+            'home_score': 0,
+            'away_score': 0,
+            'current_period': 1
+        }
+        
+        # Process stats and track scores
+        stats_with_scores = []
+        for stat in stats:
+            # Update scores based on the stat
+            if stat.player.team_id == game.home_team_id:
+                game_state['home_score'] += stat.stat_type.point_value
             else:
-                away_players.append(player_data)
-
-        return Response(
-            {"home_starting_lineup": home_players, "away_starting_lineup": away_players}
-        )
-
+                game_state['away_score'] += stat.stat_type.point_value
+            
+            # Create stat data with current scores
+            stat_data = {
+                'id': stat.id,
+                'player': stat.player.user.get_full_name(),
+                'stat': stat.stat_type.name,
+                'period': stat.period,
+                'timestamp': stat.timestamp,
+                'team': stat.player.team.abbreviation,
+                'score': {
+                    'home': game_state['home_score'],
+                    'away': game_state['away_score']
+                }
+            }
+            stats_with_scores.append(stat_data)
+        
+        # Prepare response
+        response_data = {
+            'game': {
+                'id': game.id,
+                'status': game.status,
+                'home_team': {
+                    'id': game.home_team.id,
+                    'name': game.home_team.name,
+                    'final_score': game.home_team_score
+                },
+                'away_team': {
+                    'id': game.away_team.id,
+                    'name': game.away_team.name,
+                    'final_score': game.away_team_score
+                },
+                'current_period': game.current_period,
+                'started_at': game.started_at,
+            },
+            'stats': stats_with_scores,
+        }
+        
+        return Response(response_data)
+    
     def _update_starting_lineup(self, game, data):
         """Handle lineup updates including empty submissions"""
         if game.status != Game.Status.SCHEDULED:

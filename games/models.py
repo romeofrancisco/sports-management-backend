@@ -433,74 +433,79 @@ class Game(models.Model):
         # Common base structure
         summary = {
             "periods": [],  # Array of period/set scores
+            "current_period": self.current_period,
         }
 
         # For set-based sports (volleyball, tennis, etc.)
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
-            sets = self.sets.all().order_by("period")
-            summary["periods"] = [
+            sets = self.sets.all().order_by('period')
+            summary['periods'] = [
                 {
                     "period": s.period,
+                    "label": s.period,
                     "home": s.home_team_score,
                     "away": s.away_team_score,
-                    "completed": True,  # Sets are always completed when saved
-                    "winner": s.winner.id if s.winner else None,
+                    "completed": True,
+                    "winner": s.winner.id if s.winner else None
                 }
                 for s in sets
             ]
-            summary["total"] = {
+            summary['total'] = {
                 "home": self.sets.filter(winner=self.home_team).count(),
                 "away": self.sets.filter(winner=self.away_team).count(),
+                "difference": abs(self.sets.filter(winner=self.home_team).count() - 
+                            self.sets.filter(winner=self.away_team).count())
             }
+            summary['win_threshold'] = self.sport.win_threshold
 
         # For point-based sports with periods (basketball, etc.)
-        elif (
-            self.sport.scoring_type == Sport.SCORING_TYPES.POINTS
-            and self.sport.has_period
-        ):
+        elif self.sport.scoring_type == Sport.SCORING_TYPES.POINTS and self.sport.has_period:
             for period in range(1, self.current_period + 1):
-                home_score = (
-                    PlayerStat.objects.filter(
-                        game=self,
-                        player__team=self.home_team,
-                        stat_type__point_value__gt=0,
-                        period=period,
-                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
-                    or 0
-                )
+                # Determine period label
+                if period <= self.sport.max_period:
+                    label = period
+                else:
+                    ot_number = period - self.sport.max_period
+                    label = "OT" if ot_number == 1 else f"{ot_number}OT"  # OT, 2OT, 3OT etc.
+                
+                # Calculate period scores
+                home_score = PlayerStat.objects.filter(
+                    game=self,
+                    player__team=self.home_team,
+                    stat_type__point_value__gt=0,
+                    period=period
+                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                
+                away_score = PlayerStat.objects.filter(
+                    game=self,
+                    player__team=self.away_team,
+                    stat_type__point_value__gt=0,
+                    period=period
+                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                
+                summary['periods'].append({
+                    "period": period,
+                    "label": label,
+                    "home": home_score,
+                    "away": away_score,
+                    "completed": period < self.current_period,
+                    "winner": None  # Winner determined by total score
+                })
 
-                away_score = (
-                    PlayerStat.objects.filter(
-                        game=self,
-                        player__team=self.away_team,
-                        stat_type__point_value__gt=0,
-                        period=period,
-                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
-                    or 0
-                )
+            # Add total scores
+            summary['total'] = {
+                "home": self.home_team_score,
+                "away": self.away_team_score,
+                "difference": abs(self.home_team_score - self.away_team_score)
+            }
 
-                summary["total"] = {
-                    "home": self.home_team_score,
-                    "away": self.away_team_score,
-                    "difference": abs(self.home_team_score - self.away_team_score),
-                }
-
-                summary["periods"].append(
-                    {
-                        "period": period,
-                        "home": home_score,
-                        "away": away_score,
-                        "completed": period
-                        < self.current_period,  # Current period is still in progress
-                        "winner": None,  # Winner is determined by total score
-                    }
-                )
-            else:
-                summary["total"] = {
-                    "home": self.home_team_score,
-                    "away": self.away_team_score,
-                    "difference": abs(self.home_team_score - self.away_team_score),
-                }
+        # Default for point-based sports without periods
+        else:
+            summary['total'] = {
+                "home": self.home_team_score,
+                "away": self.away_team_score,
+                "difference": abs(self.home_team_score - self.away_team_score)
+            }
 
         return summary
 
