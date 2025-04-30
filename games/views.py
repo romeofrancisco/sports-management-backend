@@ -6,7 +6,7 @@ from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField
 from .models import Game, PlayerStat, Substitution
 from teams.models import Player
-from sports.models import SportStatType
+from sports.models import SportStatType, Sport
 from .serializers import (
     GameSerializer,
     GameActionSerializer,
@@ -26,6 +26,7 @@ from .services import (
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
+from collections import defaultdict
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -164,70 +165,257 @@ class GameViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def game_flow(self, request, pk=None):
         game = self.get_object()
-        
-        # Get all player stats for this game in chronological order
-        stats = PlayerStat.objects.filter(
-            game=game,
-            stat_type__is_counter=True,
-            stat_type__point_value__gt=0
-        ).select_related(
-            'player__user',
-            'player__team',
-            'stat_type'
-        ).order_by('timestamp')
-        
-        # Initialize game state
-        game_state = {
-            'home_score': 0,
-            'away_score': 0,
-            'current_period': 1
-        }
-        
-        # Process stats and track scores
-        stats_with_scores = []
-        for stat in stats:
-            # Update scores based on the stat
-            if stat.player.team_id == game.home_team_id:
-                game_state['home_score'] += stat.stat_type.point_value
-            else:
-                game_state['away_score'] += stat.stat_type.point_value
+
+        if game.status != Game.Status.COMPLETED:
+            return Response(
+                {"error": "Game flow data is only available for completed games"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stats = (
+            PlayerStat.objects.filter(
+                game=game, 
+                stat_type__is_counter=True, 
+                stat_type__point_value__gt=0
+            )
+            .select_related("player__user", "player__team", "stat_type")
+            .order_by("timestamp")
+        )
+
+        scoring_type = "sets" if game.sport.scoring_type == Sport.SCORING_TYPES.SETS else "points"
+        periods = []
+
+        def format_period_label(period_num, sport):
+            if scoring_type == "sets":
+                return f"{ordinal(period_num)} Set"
             
-            # Create stat data with current scores
-            stat_data = {
-                'id': stat.id,
-                'player': stat.player.user.get_full_name(),
-                'stat': stat.stat_type.name,
-                'period': stat.period,
-                'timestamp': stat.timestamp,
-                'team': stat.player.team.abbreviation,
-                'score': {
-                    'home': game_state['home_score'],
-                    'away': game_state['away_score']
+            if sport.has_period:
+                if sport.has_overtime and period_num > sport.max_period:
+                    ot_num = period_num - sport.max_period
+                    return "OT" if ot_num == 1 else f"{ot_num}OT"
+                return f"{ordinal(period_num)}"
+            return "Game"
+
+        def ordinal(n):
+            if 11 <= (n % 100) <= 13:
+                suffix = 'th'
+            else:
+                suffix = ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
+            return f"{n}{suffix}"
+
+        # Get actual periods from stats
+        stat_periods = sorted({stat.period for stat in stats})
+        first_period = min(stat_periods) if stat_periods else 1
+        last_period = max(stat_periods) if stat_periods else 1
+
+        if scoring_type == "sets":
+            sets = game.sets.all().order_by("period")
+            for s in sets:
+                periods.append({
+                    "number": s.period,
+                    "label": format_period_label(s.period, game.sport),
+                    "home_score": s.home_team_score,
+                    "away_score": s.away_team_score,
+                    "winner": s.winner_id,
+                    "completed": True,
+                    "events_count": stats.filter(period=s.period).count(),
+                })
+            home_total = game.sets.filter(winner=game.home_team).count()
+            away_total = game.sets.filter(winner=game.away_team).count()
+        else:
+            for period in range(1, game.current_period + 1):
+                period_stats = stats.filter(period=period)
+                home_score = sum(s.stat_type.point_value for s in period_stats 
+                            if s.player.team_id == game.home_team_id)
+                away_score = sum(s.stat_type.point_value for s in period_stats 
+                            if s.player.team_id == game.away_team_id)
+                
+                periods.append({
+                    "number": period,
+                    "label": format_period_label(period, game.sport),
+                    "home_score": home_score,
+                    "away_score": away_score,
+                    "winner": (
+                        game.home_team_id if home_score > away_score
+                        else game.away_team_id if away_score > home_score 
+                        else None
+                    ),
+                    "completed": True,
+                    "events_count": period_stats.count(),
+                })
+            home_total = game.home_team_score
+            away_total = game.away_team_score
+
+        # Track live score per event
+        if scoring_type == "sets":
+            events_by_period = defaultdict(list)
+            
+            # Add starting event for each period with correct label
+            for period in periods:
+                events_by_period[period["number"]].append({
+                    "id": None,
+                    "player": "",
+                    "stat_name": "Start of Set",
+                    "point_value": 0,
+                    "team": "",
+                    "team_side": "",
+                    "period": period["number"],
+                    "period_label": format_period_label(period["number"], game.sport),
+                    "timestamp": game.started_at.isoformat() if game.started_at else "",
+                    "current_score": {
+                        "home": 0,
+                        "away": 0
+                    }
+                })
+
+            # Process actual events
+            for stat in stats:
+                team_side = "home" if stat.player.team_id == game.home_team_id else "away"
+                period_events = events_by_period[stat.period]
+                
+                current_score = period_events[-1]["current_score"].copy()
+                current_score[team_side] += stat.stat_type.point_value
+                
+                period_events.append({
+                    "id": stat.id,
+                    "player": stat.player.user.get_full_name(),
+                    "stat_name": stat.stat_type.name,
+                    "point_value": stat.stat_type.point_value,
+                    "team": stat.player.team.abbreviation,
+                    "team_side": team_side,
+                    "period": stat.period,
+                    "period_label": format_period_label(stat.period, game.sport),
+                    "timestamp": stat.timestamp.isoformat(),
+                    "current_score": current_score
+                })
+
+            # Add ending event for each period with correct label
+            for period in periods:
+                period_num = period["number"]
+                
+                events_by_period[period_num].append({
+                    "id": None,
+                    "player": "",
+                    "stat_name": "End of Set",
+                    "point_value": 0,
+                    "team": "",
+                    "team_side": "",
+                    "period": period_num,
+                    "period_label": format_period_label(period_num, game.sport),
+                    "timestamp": game.ended_at.isoformat() if game.ended_at else "",
+                    "current_score": {
+                        "home": period["home_score"],
+                        "away": period["away_score"]
+                    }
+                })
+
+            events = dict(events_by_period)
+        else:
+            events = []
+            
+            # Add starting event with first period's label
+            first_period_label = format_period_label(first_period, game.sport)
+            events.append({
+                "id": None,
+                "player": "",
+                "stat_name": "Start of Game",
+                "point_value": 0,
+                "team": "",
+                "team_side": "",
+                "period": first_period,
+                "period_label": first_period_label,
+                "timestamp": game.started_at.isoformat() if game.started_at else "",
+                "current_score": {
+                    "home": 0,
+                    "away": 0
                 }
-            }
-            stats_with_scores.append(stat_data)
-        
-        # Prepare response
+            })
+
+            # Process actual events
+            current_score = {"home": 0, "away": 0}
+            for stat in stats:
+                team_side = "home" if stat.player.team_id == game.home_team_id else "away"
+                current_score[team_side] += stat.stat_type.point_value
+                
+                events.append({
+                    "id": stat.id,
+                    "player": stat.player.user.get_full_name(),
+                    "stat_name": stat.stat_type.name,
+                    "point_value": stat.stat_type.point_value,
+                    "team": stat.player.team.abbreviation,
+                    "team_side": team_side,
+                    "period": stat.period,
+                    "period_label": format_period_label(stat.period, game.sport),
+                    "timestamp": stat.timestamp.isoformat(),
+                    "current_score": current_score.copy()
+                })
+
+            # Add ending event with last period's label
+            last_period_label = format_period_label(last_period, game.sport)
+            events.append({
+                "id": None,
+                "player": "",
+                "stat_name": "End of Game",
+                "point_value": 0,
+                "team": "",
+                "team_side": "",
+                "period": last_period,
+                "period_label": last_period_label,
+                "timestamp": game.ended_at.isoformat() if game.ended_at else "",
+                "current_score": {
+                    "home": home_total,
+                    "away": away_total
+                }
+            })  
+
         response_data = {
-            'game': {
-                'id': game.id,
-                'status': game.status,
-                'home_team': {
-                    'id': game.home_team.id,
-                    'name': game.home_team.name,
-                    'final_score': game.home_team_score
+            "game": {
+                "id": game.id,
+                "name": f"{game.home_team.name} vs {game.away_team.name}",
+                "status": game.status,
+                "started_at": game.started_at.isoformat() if game.started_at else None,
+                "ended_at": game.ended_at.isoformat() if game.ended_at else None,
+                "duration": str(game.duration) if game.duration else None,
+                "winner": game.winner.id if game.winner else None,
+                "sport": {
+                    "id": game.sport.id,
+                    "name": game.sport.name,
+                    "scoring_type": scoring_type,
+                    "has_periods": game.sport.has_period,
+                    "has_overtime": game.sport.has_overtime,
+                    "max_period": game.sport.max_period
                 },
-                'away_team': {
-                    'id': game.away_team.id,
-                    'name': game.away_team.name,
-                    'final_score': game.away_team_score
-                },
-                'current_period': game.current_period,
-                'started_at': game.started_at,
+                "teams": {
+                    "home": {
+                        "id": game.home_team.id,
+                        "name": game.home_team.name,
+                        "abbreviation": game.home_team.abbreviation,
+                        "score": home_total,
+                        "color": game.home_team.color or "#000000"
+                    },
+                    "away": {
+                        "id": game.away_team.id,
+                        "name": game.away_team.name,
+                        "abbreviation": game.away_team.abbreviation,
+                        "score": away_total,
+                        "color": game.away_team.color or "#900029"
+                    }
+                }
             },
-            'stats': stats_with_scores,
+            "scoring": {
+                "type": scoring_type,
+                "periods": periods,
+                "home_total": home_total,
+                "away_total": away_total,
+                "win_threshold": (
+                    game.sport.win_threshold 
+                    if scoring_type == "sets" 
+                    else None
+                )
+            },
+            "events": events
         }
-        
+
         return Response(response_data)
     
     def _update_starting_lineup(self, game, data):
