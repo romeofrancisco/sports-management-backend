@@ -27,7 +27,7 @@ class Sport(models.Model):
     )
     has_tie = models.BooleanField(default=False)
     has_overtime = models.BooleanField(default=False)
-    
+
     # Sets
     win_threshold = models.PositiveIntegerField(
         null=True,
@@ -58,7 +58,16 @@ class Sport(models.Model):
 class Formula(models.Model):
     name = models.CharField(max_length=100)
     expression = models.TextField(
-        help_text="Python formula using component codes as variables"
+        help_text="Python formula using component codes as variables",
+        null=True,
+        blank=True,
+    )
+    is_ratio = models.BooleanField(
+        default=False, help_text="Is this formula a ratio (e.g., made/attempt)?"
+    )
+    decimal_places = models.PositiveSmallIntegerField(
+        default=3,
+        help_text="Number of decimal places to round the result to"
     )
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
 
@@ -71,6 +80,13 @@ class FormulaComponent(models.Model):
         Formula, on_delete=models.CASCADE, related_name="components"
     )
     stat_type = models.ForeignKey("sports.SportStatType", on_delete=models.CASCADE)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order"]
+
+    def __str__(self):
+        return f"{self.formula.name} - {self.stat_type.name} ({self.order})"
 
 
 class SportStatType(models.Model):
@@ -84,15 +100,11 @@ class SportStatType(models.Model):
     )
     code = models.CharField(max_length=20, blank=True, null=True)
     point_value = models.IntegerField(default=0)
-    is_record = models.BooleanField(
-        default=False,
-        help_text="Check if the stat is used in recording stats else for metrics",
-    )
+    is_team_summary = models.BooleanField(default=False)
+    is_player_summary = models.BooleanField(default=False)
+    is_record = models.BooleanField(default=False)
     is_counter = models.BooleanField(default=False)
-    is_metrics = models.BooleanField(
-        default=False,
-        help_text="Check if the stat should be displayed in summary stats or metrics",
-    )
+    is_box_score = models.BooleanField(default=False)
     formula = models.ForeignKey(
         Formula,
         null=True,

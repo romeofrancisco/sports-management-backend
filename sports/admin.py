@@ -17,8 +17,8 @@ class FormulaAdmin(admin.ModelAdmin):
 
 @admin.register(SportStatType)
 class SportStatTypeAdmin(admin.ModelAdmin):
-    list_display = ('name', 'display_name', 'code', 'is_record', 'is_metrics', 'get_formula_name')
-    list_filter = ('sport', 'is_record', 'is_counter', 'is_metrics')
+    list_display = ('name', 'display_name', 'code', 'is_record', 'is_counter', 'is_box_score', 'is_player_summary', 'is_team_summary', 'get_formula_name')
+    list_filter = ('sport', 'is_record', 'is_counter', 'is_box_score', 'is_player_summary', 'is_team_summary')
 
     def get_formula_name(self, obj):
         return obj.formula.expression if obj.formula else '-'

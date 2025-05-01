@@ -1,9 +1,9 @@
-from rest_framework.serializers import ModelSerializer
-from .models import Sport, Position, SportStatType, Formula, FormulaComponent
 from rest_framework import serializers
+from .models import Sport, Position, SportStatType, Formula, FormulaComponent
+from games.models import PlayerStat
+from django.db.models import Count
 
-
-class SportSerializer(ModelSerializer):
+class SportSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sport
         fields = "__all__"
@@ -33,7 +33,7 @@ class FormulaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Formula
-        fields = ['id', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
+        fields = ['id', 'is_ratio', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
             'sport': {'write_only': True}  # This will be set via sport_slug
         }
@@ -50,13 +50,16 @@ class FormulaSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         components_data = validated_data.pop('components', None)
         
+        # Update all fields, including is_ratio
         instance.name = validated_data.get('name', instance.name)
         instance.expression = validated_data.get('expression', instance.expression)
+        instance.is_ratio = validated_data.get('is_ratio', instance.is_ratio)
+        instance.decimal_places = validated_data.get('decimal_places', instance.decimal_places)
         instance.sport = validated_data.get('sport', instance.sport)
         instance.save()
         
         if components_data is not None:
-            # Handle component updates (same as before)
+            # Handle component updates
             existing_ids = [c['id'] for c in components_data if 'id' in c]
             instance.components.exclude(id__in=existing_ids).delete()
             
@@ -85,10 +88,11 @@ class SportStatTypeSerializer(serializers.ModelSerializer):
         errors = {}
         formula = data.get('formula')
         
-        if formula:
+        if formula and not formula.is_ratio:  # Only validate expression for non-ratio formulas
             try:
                 test_vars = {c.stat_type.code: 1 for c in formula.components.all()}
-                eval(formula.expression, {}, test_vars)
+                if formula.expression:  # Only evaluate if expression exists
+                    eval(formula.expression, {}, test_vars)
             except Exception as e:
                 errors['formula'] = str(e)
         
@@ -97,9 +101,7 @@ class SportStatTypeSerializer(serializers.ModelSerializer):
         
         return data
 
-
-
-class PositionSerializer(ModelSerializer):
+class PositionSerializer(serializers.ModelSerializer):
     sport = serializers.SlugRelatedField(
         slug_field="slug",
         queryset=Sport.objects.all()
