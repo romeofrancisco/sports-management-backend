@@ -22,7 +22,7 @@ from sports_management.permissions import IsAdminOrCoachUser
 from .services import (
     PlayerStatsSummaryService,
     RecordingService,
-    TeamStatsSummaryService,
+    TeamStatsSummaryService
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
@@ -279,7 +279,7 @@ class GameViewSet(viewsets.ModelViewSet):
                 period_events.append({
                     "id": stat.id,
                     "player": stat.player.user.get_full_name(),
-                    "stat_name": stat.stat_type.name,
+                    "stat_name": stat.stat_type.display_name,
                     "point_value": stat.stat_type.point_value,
                     "team": stat.player.team.abbreviation,
                     "team_side": team_side,
@@ -340,7 +340,7 @@ class GameViewSet(viewsets.ModelViewSet):
                 events.append({
                     "id": stat.id,
                     "player": stat.player.user.get_full_name(),
-                    "stat_name": stat.stat_type.name,
+                    "stat_name": stat.stat_type.display_name,
                     "point_value": stat.stat_type.point_value,
                     "team": stat.player.team.abbreviation,
                     "team_side": team_side,

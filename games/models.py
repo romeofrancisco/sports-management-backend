@@ -177,11 +177,10 @@ class Game(models.Model):
         return None  # No errors
 
     def _calculate_team_scores(self):
-        def score(team):
+        def score(team, opposing_team):
             # Filter stats by current period if it's a set-based sport
             filters = {
                 "game": self,
-                "player__team": team,
                 "stat_type__point_value__gt": 0,
             }
 
@@ -197,16 +196,37 @@ class Game(models.Model):
                     )
                 filters["period"] = self.current_period
 
-            return (
-                PlayerStat.objects.filter(**filters).aggregate(
+            # Add points from positive stats for this team
+            positive_points = (
+                PlayerStat.objects.filter(
+                    **filters,
+                    player__team=team,
+                    stat_type__is_negative=False
+                ).aggregate(
                     total=Sum("stat_type__point_value")
-                )["total"]
-                or 0
+                )["total"] or 0
             )
 
+            # Add points from negative stats from opposing team
+            negative_points = (
+                PlayerStat.objects.filter(
+                    **filters,
+                    player__team=opposing_team,
+                    stat_type__is_negative=True
+                ).aggregate(
+                    total=Sum("stat_type__point_value")
+                )["total"] or 0
+            )
+
+            return positive_points + negative_points
+
+        # Calculate scores with negative stats adding to opposing team
+        home_score = score(self.home_team, self.away_team)
+        away_score = score(self.away_team, self.home_team)
+
         return {
-            "home_team_score": score(self.home_team),
-            "away_team_score": score(self.away_team),
+            "home_team_score": home_score,
+            "away_team_score": away_score,
         }
 
     def start_game(self):
@@ -468,20 +488,43 @@ class Game(models.Model):
                     ot_number = period - self.sport.max_period
                     label = "OT" if ot_number == 1 else f"{ot_number}OT"  # OT, 2OT, 3OT etc.
                 
-                # Calculate period scores
-                home_score = PlayerStat.objects.filter(
+                # Calculate home team points
+                home_positive_points = PlayerStat.objects.filter(
                     game=self,
                     player__team=self.home_team,
                     stat_type__point_value__gt=0,
+                    stat_type__is_negative=False,
                     period=period
                 ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
                 
-                away_score = PlayerStat.objects.filter(
+                away_negative_points = PlayerStat.objects.filter(
                     game=self,
                     player__team=self.away_team,
                     stat_type__point_value__gt=0,
+                    stat_type__is_negative=True,
                     period=period
                 ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+
+                home_score = home_positive_points + away_negative_points
+
+                # Calculate away team points
+                away_positive_points = PlayerStat.objects.filter(
+                    game=self,
+                    player__team=self.away_team,
+                    stat_type__point_value__gt=0,
+                    stat_type__is_negative=False,
+                    period=period
+                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                
+                home_negative_points = PlayerStat.objects.filter(
+                    game=self,
+                    player__team=self.home_team,
+                    stat_type__point_value__gt=0,
+                    stat_type__is_negative=True,
+                    period=period
+                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+
+                away_score = away_positive_points + home_negative_points
                 
                 summary['periods'].append({
                     "period": period,
