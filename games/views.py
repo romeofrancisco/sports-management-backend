@@ -23,7 +23,8 @@ from .services import (
     PlayerStatsSummaryService,
     RecordingService,
     TeamStatsSummaryService,
-    TeamStatsComparisonService
+    TeamStatsComparisonService,
+    BoxscoreService
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
@@ -96,6 +97,18 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
         data = service.get_comparison()
+        return Response(data)
+    
+    @action(detail=False, methods=["get"])
+    def boxscore(self, request):
+        game_id = request.query_params.get("game_id")
+        if not game_id:
+            return Response({"error": "game_id parameter required"}, status=400)
+        try:
+            service = BoxscoreService(game_id=game_id)
+        except Game.DoesNotExist:
+            return Response({"error": "Game not found"}, status=404)
+        data = service.get_boxscore()
         return Response(data)
 
 

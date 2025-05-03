@@ -111,7 +111,7 @@ class SportStatType(models.Model):
     
     is_record = models.BooleanField(default=False)
     is_counter = models.BooleanField(default=False)
-    is_box_score = models.BooleanField(default=False)
+    is_boxscore = models.BooleanField(default=False)
     
     formula = models.ForeignKey(
         Formula,
