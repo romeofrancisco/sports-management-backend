@@ -1,1 +1,1 @@
-from .stats import PlayerStatsSummaryService, RecordingService, TeamStatsSummaryService
+from .stats import PlayerStatsSummaryService, RecordingService, TeamStatsSummaryService, TeamStatsComparisonService

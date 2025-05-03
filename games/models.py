@@ -258,8 +258,24 @@ class Game(models.Model):
 
         sport = self.sport
 
-        # Additional validation for set-based sports
+        # For set-based sports, ensure current set is saved FIRST
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            existing_set = self.sets.filter(period=self.current_period).first()
+            if existing_set:
+                existing_set.home_team_score = self.home_team_score
+                existing_set.away_team_score = self.away_team_score
+                existing_set.winner = (
+                    self.home_team
+                    if self.home_team_score > self.away_team_score
+                    else (
+                        self.away_team
+                        if self.away_team_score > self.home_team_score
+                        else None
+                    )
+                )
+                existing_set.save()
+
+            # Now perform validation AFTER saving the current set
             home_sets_won = self.sets.filter(winner=self.home_team).count()
             away_sets_won = self.sets.filter(winner=self.away_team).count()
 
@@ -273,9 +289,9 @@ class Game(models.Model):
                         {"error": f"Neither team has won {sport.win_threshold} sets"}
                     )
 
-            # Check if current set is complete
+            # Check if current set is complete only if it's not already won/lost
             current_set = self.sets.filter(period=self.current_period).first()
-            if current_set and sport.win_points_threshold:
+            if current_set and not current_set.winner and sport.win_points_threshold:
                 if (
                     current_set.home_team_score < sport.win_points_threshold
                     and current_set.away_team_score < sport.win_points_threshold
@@ -296,23 +312,6 @@ class Game(models.Model):
                                 "error": f"Need {sport.win_margin} point margin to finish set"
                             }
                         )
-
-        # For set-based sports, ensure current set is saved
-        if sport.scoring_type == Sport.SCORING_TYPES.SETS:
-            existing_set = self.sets.filter(period=self.current_period).first()
-            if existing_set:
-                existing_set.home_team_score = self.home_team_score
-                existing_set.away_team_score = self.away_team_score
-                existing_set.winner = (
-                    self.home_team
-                    if self.home_team_score > self.away_team_score
-                    else (
-                        self.away_team
-                        if self.away_team_score > self.home_team_score
-                        else None
-                    )
-                )
-                existing_set.save()
 
         self.status = self.Status.COMPLETED
         self.ended_at = timezone.now()

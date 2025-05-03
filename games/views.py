@@ -22,7 +22,8 @@ from sports_management.permissions import IsAdminOrCoachUser
 from .services import (
     PlayerStatsSummaryService,
     RecordingService,
-    TeamStatsSummaryService
+    TeamStatsSummaryService,
+    TeamStatsComparisonService
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
@@ -83,6 +84,18 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
         data = service.get_summary()
+        return Response(data)
+    
+    @action(detail=False, methods=["get"])
+    def team_stats_comparison(self, request):
+        game_id = request.query_params.get("game_id")
+        if not game_id:
+            return Response({"error": "game_id parameter required"}, status=400)
+        try:
+            service = TeamStatsComparisonService(game_id=game_id)
+        except Game.DoesNotExist:
+            return Response({"error": "Game not found"}, status=404)
+        data = service.get_comparison()
         return Response(data)
 
 
@@ -161,6 +174,21 @@ class GameViewSet(viewsets.ModelViewSet):
             return self._update_starting_lineup(game, request.data)
         elif request.method == "DELETE":
             return self._delete_starting_lineup(game)
+
+    def _get_starting_lineup(self, game):
+        """Get the current starting lineup for a game"""
+        return Response(
+            {
+                "home_team": StartingLineupSerializer(
+                    game.starting_lineup.filter(team=game.home_team), many=True
+                ).data,
+                "away_team": StartingLineupSerializer(
+                    game.starting_lineup.filter(team=game.away_team), many=True
+                ).data,
+                "lineup_status": game.get_lineup_status(),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["get"])
     def game_flow(self, request, pk=None):

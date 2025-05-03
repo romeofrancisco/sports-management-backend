@@ -100,11 +100,19 @@ class SportStatType(models.Model):
     )
     code = models.CharField(max_length=20, blank=True, null=True)
     point_value = models.IntegerField(default=0)
+    
+    is_team_stat = models.BooleanField(default=False)
+    is_player_stat = models.BooleanField(default=False)
+    
     is_team_summary = models.BooleanField(default=False)
     is_player_summary = models.BooleanField(default=False)
+    
+    is_team_comparison = models.BooleanField(default=False)
+    
     is_record = models.BooleanField(default=False)
     is_counter = models.BooleanField(default=False)
     is_box_score = models.BooleanField(default=False)
+    
     formula = models.ForeignKey(
         Formula,
         null=True,
