@@ -71,6 +71,7 @@ class League(models.Model):
             team_data = {
                 "team_id": team.id,
                 "team_name": team.name,
+                "team_slug": team.slug,
                 "team_logo": request.build_absolute_uri(team.logo.url) if team.logo and request else None,
                 "championships": championships,
                 "seasons_participated": seasons_participated,

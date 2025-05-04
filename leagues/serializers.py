@@ -71,3 +71,43 @@ class TeamStandingsSerializer(serializers.ModelSerializer):
 
     def get_standings(self, obj):
         return self.context['standings_data'].get(obj.id, {})
+
+class LeagueStatisticsSerializer(serializers.Serializer):
+    """Serializer for league statistics endpoint"""
+    teams_count = serializers.IntegerField()
+    seasons_count = serializers.IntegerField()
+    active_seasons = serializers.IntegerField()
+    games_count = serializers.IntegerField()
+    current_season = SeasonSerializer(required=False, allow_null=True)
+
+class TeamFormSerializer(serializers.Serializer):
+    """Serializer for team form data"""
+    result = serializers.CharField(max_length=1)  # W, L, D
+    score = serializers.CharField(max_length=10)
+    opponent = serializers.CharField()
+    date = serializers.CharField()
+
+class TeamPerformanceSerializer(serializers.Serializer):
+    """Serializer for detailed team performance metrics"""
+    team_id = serializers.IntegerField()
+    team_name = serializers.CharField()
+    team_logo = serializers.URLField(allow_null=True)
+    games_played = serializers.IntegerField()
+    avg_points_scored = serializers.FloatField()
+    avg_points_conceded = serializers.FloatField()
+    first_half_wins = serializers.IntegerField()
+    second_half_wins = serializers.IntegerField()
+    point_differential = serializers.FloatField()
+    max_win_streak = serializers.IntegerField()
+    current_streak = serializers.IntegerField()
+
+class SeasonComparisonSerializer(serializers.Serializer):
+    """Serializer for season comparison data"""
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    year = serializers.IntegerField()
+    champion = serializers.CharField(allow_null=True)
+    teams_count = serializers.IntegerField()
+    games_count = serializers.IntegerField()
+    avg_points_per_game = serializers.FloatField()
+    top_team = serializers.CharField(allow_null=True)
