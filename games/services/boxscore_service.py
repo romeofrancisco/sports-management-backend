@@ -237,10 +237,21 @@ class BoxscoreService:
                 components = list(stat.formula.components.all().order_by('order'))
                 formula_component_map[stat.code] = [comp.stat_type.code for comp in components]
         
-        # Organize players by team
+        # Organize players by team and prepare for team totals
         home_team_players = []
         away_team_players = []
         
+        # Initialize team totals
+        home_team_recording_totals = defaultdict(int)
+        away_team_recording_totals = defaultdict(int)
+        home_team_ratio_makes_attempts = defaultdict(lambda: {'makes': 0, 'attempts': 0})
+        away_team_ratio_makes_attempts = defaultdict(lambda: {'makes': 0, 'attempts': 0})
+        home_team_formula_values = defaultdict(int)
+        away_team_formula_values = defaultdict(int)
+        home_team_total_points = 0
+        away_team_total_points = 0
+        
+        # Process player stats and collect team totals
         for pid, data in summary.items():
             response_entry = {
                 "id": data["player_id"],
@@ -248,6 +259,12 @@ class BoxscoreService:
                 "jersey_number": data["jersey_number"],
                 "team_id": data["team_id"],
             }
+            
+            # Determine which team's totals to update
+            is_home_team = data["team_id"] == self.game.home_team.id
+            team_recording_totals = home_team_recording_totals if is_home_team else away_team_recording_totals
+            team_ratio_makes_attempts = home_team_ratio_makes_attempts if is_home_team else away_team_ratio_makes_attempts
+            team_formula_values = home_team_formula_values if is_home_team else away_team_formula_values
 
             # For point-based sports, calculate total stats directly
             if self.game.sport.scoring_type != Sport.SCORING_TYPES.SETS:
@@ -258,13 +275,21 @@ class BoxscoreService:
                 # Calculate total points from ALL scoring stats, regardless of boxscore flag
                 for code, value in data["recording_stats"].items():
                     if code in scoring_stat_points:
-                        total_points += value * scoring_stat_points[code]
+                        points = value * scoring_stat_points[code]
+                        total_points += points
+                        if is_home_team:
+                            home_team_total_points += points
+                        else:
+                            away_team_total_points += points
                         
                     # Only include in display stats if marked as boxscore
                     if code in stat_display_names:
                         display_name = stat_display_names[code]
                         total_stats[display_name] = value
                         combined_totals[display_name]['value'] += value
+                        
+                    # Add to team totals regardless of boxscore flag (for calculations)
+                    team_recording_totals[code] += value or 0
                 
                 # Process calculated stats and ratios - only boxscore stats for display
                 for code, value in data["calculated_stats"].items():
@@ -278,15 +303,21 @@ class BoxscoreService:
                                 combined_totals[display_name]['makes'] += made
                                 combined_totals[display_name]['attempts'] += attempted
                                 total_stats[display_name] = ratio_value
+                                
+                                # Add to team totals for ratios
+                                team_ratio_makes_attempts[code]['makes'] += made
+                                team_ratio_makes_attempts[code]['attempts'] += attempted
                             except (ValueError, AttributeError):
                                 total_stats[display_name] = value
                                 combined_totals[display_name]['value'] += value
+                                team_formula_values[code] += value or 0
                         else:
                             formula = next((stat.formula for stat in self.formula_stats if stat.code == code), None)
                             decimal_places = formula.decimal_places if formula else None
                             is_float = isinstance(value, float)
                             total_stats[display_name] = round(value, decimal_places) if (is_float and decimal_places is not None) else value
                             combined_totals[display_name]['value'] += value
+                            team_formula_values[code] += value or 0
 
                 response_entry["total_stats"] = total_stats
                 response_entry["total_points"] = total_points
@@ -316,10 +347,16 @@ class BoxscoreService:
                     # Calculate period points from ALL scoring stats
                     for code, value in period_data["recording_stats"].items():
                         if code in scoring_stat_points and value:
-                            period_points += value * scoring_stat_points[code]
-                    
+                            points = value * scoring_stat_points[code]
+                            period_points += points
+                            if is_home_team:
+                                home_team_total_points += points
+                            else:
+                                away_team_total_points += points
+                        
                         # Also collect raw stats for totals calculation
                         recording_totals[code] += value or 0
+                        team_recording_totals[code] += value or 0
                     
                     # Process ratio stats for period
                     for code, ratio_value in period_data["ratio_stats"].items():
@@ -328,6 +365,10 @@ class BoxscoreService:
                                 made, attempted = map(int, ratio_value.split('/'))
                                 ratio_makes_attempts[code]['makes'] += made
                                 ratio_makes_attempts[code]['attempts'] += attempted
+                                
+                                # Add to team totals for ratios
+                                team_ratio_makes_attempts[code]['makes'] += made
+                                team_ratio_makes_attempts[code]['attempts'] += attempted
                             except (ValueError, AttributeError):
                                 pass
                     
@@ -335,6 +376,7 @@ class BoxscoreService:
                     for code, value in period_data["calculated_stats"].items():
                         if not code in ratio_component_lookup and value is not None:
                             formula_values[code] += value
+                            team_formula_values[code] += value
                     
                     # Add recording stats to period display - only boxscore stats
                     for code, value in period_data["recording_stats"].items():
@@ -436,10 +478,166 @@ class BoxscoreService:
                 response_entry["total_points"] = total_points
             
             # Add to appropriate team list
-            if data["team_id"] == self.game.home_team.id:
+            if is_home_team:
                 home_team_players.append(response_entry)
             else:
                 away_team_players.append(response_entry)
+        
+        # Calculate team totals for home team
+        home_team_totals = {}
+        
+        # Add recording stats to home team totals - only boxscore stats
+        for code, value in home_team_recording_totals.items():
+            if code in stat_display_names:
+                display_name = stat_display_names[code]
+                home_team_totals[display_name] = value
+        
+        # Add ratio stats to home team totals - only boxscore stats
+        for code, components in ratio_component_lookup.items():
+            if code in stat_display_names:
+                display_name = stat_display_names[code]
+                makes = home_team_ratio_makes_attempts[code]['makes']
+                attempts = home_team_ratio_makes_attempts[code]['attempts']
+                if attempts > 0:
+                    home_team_totals[display_name] = f"{makes}/{attempts}"
+        
+        # Calculate derived formulas for home team totals
+        for stat in self.formula_stats:
+            if stat.is_boxscore and not stat.formula.is_ratio and stat.formula.expression:
+                code = stat.code
+                display_name = stat_display_names.get(code)
+                
+                if not display_name:
+                    continue
+                
+                components = formula_component_map.get(code, [])
+                if not components:
+                    continue
+                
+                variables = {}
+                all_components_found = True
+                
+                # Build variables for formula calculation
+                for comp_code in components:
+                    if comp_code in home_team_recording_totals:
+                        variables[comp_code] = home_team_recording_totals[comp_code]
+                    elif comp_code in home_team_formula_values:
+                        variables[comp_code] = home_team_formula_values[comp_code]
+                    elif comp_code in ratio_component_lookup:
+                        if comp_code in home_team_ratio_makes_attempts:
+                            variables[comp_code] = home_team_ratio_makes_attempts[comp_code]['makes']
+                            
+                            # For ratio component that might be needed in the formula
+                            for ratio_code, (makes_code, attempts_code) in ratio_component_lookup.items():
+                                if comp_code == attempts_code and makes_code in variables:
+                                    variables[attempts_code] = home_team_ratio_makes_attempts[ratio_code]['attempts']
+                        else:
+                            variables[comp_code] = 0
+                            all_components_found = False
+                    else:
+                        variables[comp_code] = 0
+                        all_components_found = False
+                
+                # Calculate formula result if we have all components
+                if all_components_found and variables:
+                    try:
+                        result = eval(stat.formula.expression, {}, variables)
+                        if isinstance(result, float):
+                            decimal_places = stat.formula.decimal_places
+                            result = round(result, decimal_places)
+                        home_team_totals[display_name] = result
+                    except Exception as e:
+                        home_team_totals[display_name] = 0
+        
+        # Calculate team totals for away team
+        away_team_totals = {}
+        
+        # Add recording stats to away team totals - only boxscore stats
+        for code, value in away_team_recording_totals.items():
+            if code in stat_display_names:
+                display_name = stat_display_names[code]
+                away_team_totals[display_name] = value
+        
+        # Add ratio stats to away team totals - only boxscore stats
+        for code, components in ratio_component_lookup.items():
+            if code in stat_display_names:
+                display_name = stat_display_names[code]
+                makes = away_team_ratio_makes_attempts[code]['makes']
+                attempts = away_team_ratio_makes_attempts[code]['attempts']
+                if attempts > 0:
+                    away_team_totals[display_name] = f"{makes}/{attempts}"
+        
+        # Calculate derived formulas for away team totals
+        for stat in self.formula_stats:
+            if stat.is_boxscore and not stat.formula.is_ratio and stat.formula.expression:
+                code = stat.code
+                display_name = stat_display_names.get(code)
+                
+                if not display_name:
+                    continue
+                
+                components = formula_component_map.get(code, [])
+                if not components:
+                    continue
+                
+                variables = {}
+                all_components_found = True
+                
+                # Build variables for formula calculation
+                for comp_code in components:
+                    if comp_code in away_team_recording_totals:
+                        variables[comp_code] = away_team_recording_totals[comp_code]
+                    elif comp_code in away_team_formula_values:
+                        variables[comp_code] = away_team_formula_values[comp_code]
+                    elif comp_code in ratio_component_lookup:
+                        if comp_code in away_team_ratio_makes_attempts:
+                            variables[comp_code] = away_team_ratio_makes_attempts[comp_code]['makes']
+                            
+                            # For ratio component that might be needed in the formula
+                            for ratio_code, (makes_code, attempts_code) in ratio_component_lookup.items():
+                                if comp_code == attempts_code and makes_code in variables:
+                                    variables[attempts_code] = away_team_ratio_makes_attempts[ratio_code]['attempts']
+                        else:
+                            variables[comp_code] = 0
+                            all_components_found = False
+                    else:
+                        variables[comp_code] = 0
+                        all_components_found = False
+                
+                # Calculate formula result if we have all components
+                if all_components_found and variables:
+                    try:
+                        result = eval(stat.formula.expression, {}, variables)
+                        if isinstance(result, float):
+                            decimal_places = stat.formula.decimal_places
+                            result = round(result, decimal_places)
+                        away_team_totals[display_name] = result
+                    except Exception as e:
+                        away_team_totals[display_name] = 0
+        
+        # Create a team summary player for the home team
+        home_team_summary = {
+            "id": "home_team_total",
+            "name": "TEAM",
+            "jersey_number": None,
+            "team_id": self.game.home_team.id,
+            "total_stats": home_team_totals,
+            "total_points": home_team_total_points
+        }
+        
+        # Create a team summary player for the away team
+        away_team_summary = {
+            "id": "away_team_total",
+            "name": "TEAM",
+            "jersey_number": None,
+            "team_id": self.game.away_team.id,
+            "total_stats": away_team_totals,
+            "total_points": away_team_total_points
+        }
+        
+        # Add team totals to the player lists
+        home_team_players.append(home_team_summary)
+        away_team_players.append(away_team_summary)
         
         return {
             "home_team": {
