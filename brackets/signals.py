@@ -79,6 +79,33 @@ def handle_match_completion(sender, instance, **kwargs):
             logger.info(
                 f"All matches completed for round {current_round_number} of bracket {bracket.id}"
             )
+            
+            # Stop here for round robin tournaments if we've reached the expected number of rounds
+            if bracket.elimination_type == 'round_robin':
+                # Get total teams to calculate expected rounds
+                teams_count = bracket.season.teams.count()
+                expected_rounds = teams_count - 1 if teams_count > 1 else 0
+                
+                # If we've completed all rounds for round robin, mark as complete and exit
+                if current_round_number >= expected_rounds:
+                    logger.info(f"Round robin tournament completed with {current_round_number} rounds.")
+                    bracket.is_complete = True
+                    # Determine the bracket winner based on team with most wins
+                    from django.db.models import Count
+                    winner_team = BracketMatch.objects.filter(
+                        bracket=bracket, 
+                        winner__isnull=False
+                    ).values('winner').annotate(
+                        win_count=Count('winner')
+                    ).order_by('-win_count').first()
+                    
+                    if winner_team:
+                        bracket.winner_id = winner_team['winner']
+                        bracket.save(update_fields=["is_complete", "winner"])
+                    else:
+                        bracket.save(update_fields=["is_complete"])
+                    return
+            
             viewset = BracketViewSet()
 
             with transaction.atomic():

@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Sum, Avg, F, Q
 from teams.models import Team
+from sports.models import Sport
 
 class LeagueViewSet(viewsets.ModelViewSet):
     queryset = League.objects.all()
@@ -217,10 +218,20 @@ class SeasonViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def team_performance(self, request, league_pk=None, pk=None):
         """Get detailed performance metrics for teams in a season"""
-        season = self.get_object()
+        try:
+            season = self.get_object()
+        except Season.DoesNotExist:
+            return Response(
+                {"detail": "Season not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get the sport type to determine scoring metrics
+        sport = season.league.sport
+        is_set_based = sport.scoring_type == Sport.SCORING_TYPES.SETS
         
         # Get completed games in this season
-        from games.models import Game
+        from games.models import Game, GameSet
         games = Game.objects.filter(
             season=season,
             status="completed"
@@ -236,77 +247,230 @@ class SeasonViewSet(viewsets.ModelViewSet):
                 Q(home_team=team) | Q(away_team=team)
             )
             
-            # Calculate average points scored and conceded
-            points_scored = 0
-            points_conceded = 0
-            
-            for game in team_games:
-                if game.home_team == team:
-                    points_scored += game.home_team_score
-                    points_conceded += game.away_team_score
-                else:
-                    points_scored += game.away_team_score
-                    points_conceded += game.home_team_score
-                    
             games_count = team_games.count()
             
-            # Calculate averages
-            avg_points_scored = points_scored / games_count if games_count > 0 else 0
-            avg_points_conceded = points_conceded / games_count if games_count > 0 else 0
-            
-            # Get first and second half performance
-            first_half_wins = 0
-            second_half_wins = 0
-            
-            half_count = len(team_games) // 2
-            first_half_games = list(team_games.order_by('date'))[:half_count]  # Changed from scheduled_date to date
-            second_half_games = list(team_games.order_by('date'))[half_count:]  # Changed from scheduled_date to date
-            
-            for game in first_half_games:
-                if (game.home_team == team and game.home_team_score > game.away_team_score) or \
-                   (game.away_team == team and game.away_team_score > game.home_team_score):
-                    first_half_wins += 1
+            if is_set_based:
+                # For set-based sports like volleyball, tennis
+                
+                # Get sets played by this team
+                total_sets_played = 0
+                sets_won = 0
+                total_points_scored = 0
+                total_points_conceded = 0
+                
+                # Track efficiency metrics
+                total_set_efficiency = 0  # Percentage of points won vs total points in sets
+                
+                for game in team_games:
+                    # Get all sets for this game
+                    game_sets = GameSet.objects.filter(game=game)
                     
-            for game in second_half_games:
-                if (game.home_team == team and game.home_team_score > game.away_team_score) or \
-                   (game.away_team == team and game.away_team_score > game.home_team_score):
-                    second_half_wins += 1
-            
-            # Get win streaks
-            current_streak = 0
-            max_streak = 0
-            
-            for game in team_games.order_by('date'):  # Changed from scheduled_date to date
-                is_win = (game.home_team == team and game.home_team_score > game.away_team_score) or \
-                         (game.away_team == team and game.away_team_score > game.home_team_score)
+                    # If no game sets exist but the game has a final score, treat the game itself as a single set
+                    if not game_sets.exists():
+                        total_sets_played += 1
+                        
+                        if game.home_team == team:
+                            # Team is home team
+                            total_points_scored += game.home_team_score
+                            total_points_conceded += game.away_team_score
+                            if game.winner == team:
+                                sets_won += 1
+                                
+                            # Calculate set efficiency for this single-set game
+                            total_points = game.home_team_score + game.away_team_score
+                            if total_points > 0:
+                                total_set_efficiency += (game.home_team_score / total_points) * 100
+                        else:  # Away team
+                            total_points_scored += game.away_team_score
+                            total_points_conceded += game.home_team_score
+                            if game.winner == team:
+                                sets_won += 1
+                                
+                            # Calculate set efficiency for this single-set game
+                            total_points = game.home_team_score + game.away_team_score
+                            if total_points > 0:
+                                total_set_efficiency += (game.away_team_score / total_points) * 100
+                    else:
+                        # Process all individual sets
+                        for game_set in game_sets:
+                            if game.home_team == team:
+                                # Team is home team
+                                total_points_scored += game_set.home_team_score
+                                total_points_conceded += game_set.away_team_score
+                                if game_set.winner == team:
+                                    sets_won += 1
+                            else:  # Away team
+                                total_points_scored += game_set.away_team_score
+                                total_points_conceded += game_set.home_team_score
+                                if game_set.winner == team:
+                                    sets_won += 1
+                            
+                            total_sets_played += 1
+                            
+                            # Calculate set efficiency (% of total points won)
+                            points_in_set = game_set.home_team_score + game_set.away_team_score
+                            team_points = game_set.home_team_score if game.home_team == team else game_set.away_team_score
+                            if points_in_set > 0:
+                                total_set_efficiency += (team_points / points_in_set) * 100
                 
-                if is_win:
-                    current_streak = current_streak + 1 if current_streak >= 0 else 1
-                else:
-                    current_streak = current_streak - 1 if current_streak <= 0 else -1
+                # Calculate averages
+                avg_set_efficiency = round(total_set_efficiency / total_sets_played, 2) if total_sets_played > 0 else 0
+                set_win_percentage = round(sets_won / total_sets_played * 100, 2) if total_sets_played > 0 else 0
+                points_ratio = round(total_points_scored / total_points_conceded, 3) if total_points_conceded > 0 else 0
                 
-                max_streak = max(max_streak, current_streak)
-            
-            # Compile team performance data
-            performance = {
-                'team_id': team.id,
-                'team_name': team.name,
-                'team_name': team.slug,
-                'team_logo': request.build_absolute_uri(team.logo.url) if team.logo and request else None,
-                'games_played': games_count,
-                'avg_points_scored': round(avg_points_scored, 2),
-                'avg_points_conceded': round(avg_points_conceded, 2),
-                'first_half_wins': first_half_wins,
-                'second_half_wins': second_half_wins,
-                'point_differential': round(avg_points_scored - avg_points_conceded, 2),
-                'max_win_streak': max_streak,
-                'current_streak': current_streak
-            }
+                # Calculate exact points per set values - explicit calculations for frontend
+                points_per_set = round(total_points_scored / total_sets_played, 1) if total_sets_played > 0 else 0
+                points_against_per_set = round(total_points_conceded / total_sets_played, 1) if total_sets_played > 0 else 0
+                
+                # Get match wins/losses for set-based sports
+                wins = 0
+                for game in team_games:
+                    if game.winner == team:
+                        wins += 1
+                
+                # Calculate match win percentage
+                match_win_percentage = round((wins / games_count) * 100, 2) if games_count > 0 else 0
+                
+                # Use relevant set-based metrics
+                performance = {
+                    'team_id': team.id,
+                    'team_name': team.name,
+                    'team_slug': team.slug,
+                    'team_logo': request.build_absolute_uri(team.logo.url) if team.logo and request else None,
+                    'matches_played': games_count,
+                    'matches_won': wins,
+                    'matches_lost': games_count - wins,
+                    'match_win_percentage': match_win_percentage,
+                    'sets_played': total_sets_played,
+                    'sets_won': sets_won,
+                    'sets_lost': total_sets_played - sets_won,
+                    'set_win_percentage': set_win_percentage,
+                    'points_ratio': points_ratio,
+                    'set_efficiency': avg_set_efficiency,
+                    'total_points_scored': total_points_scored,
+                    'total_points_conceded': total_points_conceded,
+                    'points_per_set': points_per_set,
+                    'points_against_per_set': points_against_per_set
+                }
+                
+                # Add first half and second half performance
+                # Calculate this based on match wins rather than set wins
+                first_half_wins = 0
+                second_half_wins = 0
+                
+                half_count = len(team_games) // 2
+                first_half_games = list(team_games.order_by('date'))[:half_count]
+                second_half_games = list(team_games.order_by('date'))[half_count:]
+                
+                for game in first_half_games:
+                    if game.winner == team:
+                        first_half_wins += 1
+                
+                for game in second_half_games:
+                    if game.winner == team:
+                        second_half_wins += 1
+                
+                performance.update({
+                    'first_half_wins': first_half_wins,
+                    'second_half_wins': second_half_wins,
+                })
+                
+                # Calculate streak based on matches
+                current_streak = 0
+                max_streak = 0
+                
+                for game in team_games.order_by('date'):
+                    is_win = game.winner == team
+                    
+                    if is_win:
+                        current_streak = current_streak + 1 if current_streak >= 0 else 1
+                    else:
+                        current_streak = current_streak - 1 if current_streak <= 0 else -1
+                    
+                    max_streak = max(max_streak, current_streak)
+                
+                performance.update({
+                    'max_streak': max_streak,
+                    'current_streak': current_streak,
+                    'total_games': games_count
+                })
+                
+            else:
+                # Original code for point-based sports
+                points_scored = 0
+                points_conceded = 0
+                
+                for game in team_games:
+                    if game.home_team == team:
+                        points_scored += game.home_team_score
+                        points_conceded += game.away_team_score
+                    else:
+                        points_scored += game.away_team_score
+                        points_conceded += game.home_team_score
+                        
+                # Calculate averages
+                avg_points_scored = points_scored / games_count if games_count > 0 else 0
+                avg_points_conceded = points_conceded / games_count if games_count > 0 else 0
+                
+                # Get first and second half performance
+                first_half_wins = 0
+                second_half_wins = 0
+                
+                half_count = len(team_games) // 2
+                first_half_games = list(team_games.order_by('date'))[:half_count]
+                second_half_games = list(team_games.order_by('date'))[half_count:]
+                
+                for game in first_half_games:
+                    if (game.home_team == team and game.home_team_score > game.away_team_score) or \
+                       (game.away_team == team and game.away_team_score > game.home_team_score):
+                        first_half_wins += 1
+                        
+                for game in second_half_games:
+                    if (game.home_team == team and game.home_team_score > game.away_team_score) or \
+                       (game.away_team == team and game.away_team_score > game.home_team_score):
+                        second_half_wins += 1
+                
+                # Get win streaks
+                current_streak = 0
+                max_streak = 0
+                
+                for game in team_games.order_by('date'):
+                    is_win = (game.home_team == team and game.home_team_score > game.away_team_score) or \
+                             (game.away_team == team and game.away_team_score > game.home_team_score)
+                    
+                    if is_win:
+                        current_streak = current_streak + 1 if current_streak >= 0 else 1
+                    else:
+                        current_streak = current_streak - 1 if current_streak <= 0 else -1
+                    
+                    max_streak = max(max_streak, current_streak)
+                
+                # Compile team performance data
+                performance = {
+                    'team_id': team.id,
+                    'team_name': team.name,
+                    'team_slug': team.slug,
+                    'team_logo': request.build_absolute_uri(team.logo.url) if team.logo and request else None,
+                    'games_played': games_count,
+                    'avg_points_scored': round(avg_points_scored, 2),
+                    'avg_points_conceded': round(avg_points_conceded, 2),
+                    'first_half_wins': first_half_wins,
+                    'second_half_wins': second_half_wins,
+                    'point_differential': round(avg_points_scored - avg_points_conceded, 2),
+                    'max_streak': max_streak,
+                    'current_streak': current_streak,
+                    'total_games': games_count
+                }
             
             team_performance.append(performance)
         
-        # Sort by point differential
-        team_performance.sort(key=lambda x: -x['point_differential'])
+        # Sort by appropriate metric
+        if is_set_based:
+            # Sort by set win percentage for set-based sports
+            team_performance.sort(key=lambda x: (-x['match_win_percentage'], -x['set_win_percentage']))
+        else:
+            # Sort by point differential for point-based sports
+            team_performance.sort(key=lambda x: -x['point_differential'])
         
         return Response(team_performance)
         
@@ -370,3 +534,114 @@ class SeasonViewSet(viewsets.ModelViewSet):
             comparison_data.append(season_data)
             
         return Response(comparison_data)
+        
+    @action(detail=True, methods=['get'])
+    def games(self, request, league_pk=None, pk=None):
+        """Get all games in a season with filtering options"""
+        season = self.get_object()
+        
+        # Get games for this season
+        from games.models import Game
+        from games.serializers import GameSerializer
+        
+        games = Game.objects.filter(season=season).select_related(
+            'home_team', 'away_team', 'season'
+        ).order_by('date')
+        
+        # Apply filters if provided
+        status = request.query_params.get('status')
+        if status:
+            games = games.filter(status=status)
+            
+        team_id = request.query_params.get('team')
+        if team_id:
+            games = games.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
+            
+        # Filter by date if provided (exact date match)
+        date = request.query_params.get('date')
+        if date:
+            from datetime import datetime
+            try:
+                # Parse the date and filter games on that specific date
+                parsed_date = datetime.strptime(date, '%Y-%m-%d').date()
+                games = games.filter(date__date=parsed_date)
+            except ValueError:
+                pass
+            
+        # Serialize and return
+        serializer = GameSerializer(games, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def teams(self, request, league_pk=None, pk=None):
+        """Get all teams in a season with extended information"""
+        season = self.get_object()
+        
+        # Get teams for this season
+        from teams.models import Team
+        from teams.serializers import TeamSerializer
+        
+        # Changed 'coaches' to 'coach' to match the field name in the Team model
+        teams = season.teams.prefetch_related('coach', 'players').all()
+        
+        # Get win/loss records for each team
+        from django.db.models import Q, Count, Case, When, IntegerField, F, Sum
+        from games.models import Game
+        
+        team_stats = {}
+        for team in teams:
+            games = Game.objects.filter(
+                Q(home_team=team) | Q(away_team=team),
+                season=season,
+                status='completed'
+            )
+            
+            # Get win/loss record
+            wins = 0
+            losses = 0
+            games_played = games.count()
+            
+            # Calculate recent form (last 5 games)
+            form = ""
+            recent_games = games.order_by('-date')[:5]
+            
+            for game in games:
+                if game.home_team == team:
+                    if game.home_team_score > game.away_team_score:
+                        wins += 1
+                    else:
+                        losses += 1
+                else:  # away team
+                    if game.away_team_score > game.home_team_score:
+                        wins += 1
+                    else:
+                        losses += 1
+            
+            # Generate form string (W for win, L for loss)
+            for game in recent_games:
+                if game.home_team == team:
+                    form += "W" if game.home_team_score > game.away_team_score else "L"
+                else:
+                    form += "W" if game.away_team_score > game.home_team_score else "L"
+            
+            team_stats[team.id] = {
+                'wins': wins,
+                'losses': losses,
+                'games_played': games_played,
+                'form': form
+            }
+        
+        # Combine team data with stats
+        serializer = TeamSerializer(teams, many=True, context={'request': request})
+        team_data = serializer.data
+        
+        # Add stats to each team
+        for team in team_data:
+            team_id = team['id']
+            if team_id in team_stats:
+                team.update(team_stats[team_id])
+        
+        # Sort by wins (descending)
+        team_data = sorted(team_data, key=lambda x: x.get('wins', 0), reverse=True)
+        
+        return Response(team_data)

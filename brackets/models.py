@@ -16,7 +16,7 @@ class Bracket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.sport} - {self.season} ({self.elimination_type})"
+        return f"{self.season.league.sport} - {self.season} ({self.elimination_type})"
  
 class BracketRound(models.Model):
     bracket = models.ForeignKey(Bracket, on_delete=models.CASCADE, related_name="rounds")

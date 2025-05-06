@@ -2,6 +2,7 @@ from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models import Sum, F, Q
 from datetime import date
+from sports.models import Sport
 
 class League(models.Model):
     name = models.CharField(max_length=255)
@@ -133,10 +134,36 @@ class Season(models.Model):
     def get_bracket(self):
         return getattr(self, 'bracket', None)
     
-    def start_season(self):
+    @property
+    def games_count(self):
+        """Return the number of games in the season"""
+        return self.games.count()
+        
+    @property
+    def games_played(self):
+        """Return the number of completed games in the season"""
+        return self.games.filter(status="completed").count()
+        
+    @property
+    def avg_points_per_game(self):
+        """Calculate the average points per game across all completed games in the season"""
+        from django.db.models import Sum, F
+        
+        completed_games = self.games.filter(status="completed")
+        if not completed_games.exists():
+            return 0
+            
+        total_points = sum(game.home_team_score + game.away_team_score for game in completed_games)
+        return round(total_points / completed_games.count(), 2) if completed_games.count() > 0 else 0
+    
+    def start_season(self, current_date=None):
         if self.status != self.Status.UPCOMING:
             raise ValidationError("Season can only start from Upcoming status")
-        if self.start_date != date.today():
+        
+        # Use provided date for testing or date.today() by default
+        today = current_date if current_date is not None else date.today()
+        
+        if self.start_date != today:
             raise ValidationError("Season can only start on its start date")
         
         self.status = self.Status.ONGOING
@@ -162,6 +189,8 @@ class Season(models.Model):
         self.save()
 
     def standings(self):
+        from games.models import Game, GameSet
+        
         sport = self.league.sport
         scoring_type = sport.scoring_type  # "points", "sets", or "goals"
         games = self.games.filter(status="completed", season=self.id)
@@ -171,6 +200,7 @@ class Season(models.Model):
             team_games = games.filter(Q(home_team=team) | Q(away_team=team))
             matches_played = team_games.count()
 
+            # Calculate match wins/losses
             wins = team_games.filter(
                 Q(home_team=team, home_team_score__gt=F("away_team_score")) |
                 Q(away_team=team, away_team_score__gt=F("home_team_score"))
@@ -188,19 +218,6 @@ class Season(models.Model):
                     Q(away_team=team, away_team_score=F("home_team_score"))
                 ).count()
 
-            # Scoring values
-            home = games.filter(home_team=team).aggregate(
-                scored=Sum('home_team_score'),
-                conceded=Sum('away_team_score')
-            )
-            away = games.filter(away_team=team).aggregate(
-                scored=Sum('away_team_score'),
-                conceded=Sum('home_team_score')
-            )
-            scored = (home['scored'] or 0) + (away['scored'] or 0)
-            conceded = (home['conceded'] or 0) + (away['conceded'] or 0)
-            goal_difference = scored - conceded
-
             team_data = {
                 "team_id": team.id,
                 "team_name": team.name,
@@ -212,41 +229,84 @@ class Season(models.Model):
             if sport.has_tie:
                 team_data["ties"] = ties
 
-            if scoring_type == "points":
-                points = wins * 3
+            # Different calculation logic based on scoring type
+            if scoring_type == Sport.SCORING_TYPES.POINTS:
+                points = wins * 3 + ties * 1  # Standard 3 points for win, 1 for tie
                 win_percentage = round(wins / matches_played, 3) if matches_played else 0
                 team_data.update({
                     "points": points,
                     "win_percentage": win_percentage,
                 })
 
-            elif scoring_type == "sets":
-                set_ratio = round(scored / conceded, 2) if conceded else scored
+            elif scoring_type == Sport.SCORING_TYPES.SETS:
+                # For set-based scoring (volleyball, tennis), we care about:
+                # 1. Match points (typically 2 for win, 1 for loss with sets won)
+                # 2. Sets won/lost
+                # 3. Set ratio
+                
+                # Get sets from completed games involving this team
+                sets_won = 0
+                sets_lost = 0
+                points = wins * 2  # Standard 2 points for match win in volleyball/tennis
+                
+                # Count sets won and lost by this team
+                for game in team_games:
+                    if game.home_team == team:
+                        sets_won += GameSet.objects.filter(game=game, winner=team).count()
+                        sets_lost += GameSet.objects.filter(game=game, winner=game.away_team).count()
+                    else:  # Away team
+                        sets_won += GameSet.objects.filter(game=game, winner=team).count()
+                        sets_lost += GameSet.objects.filter(game=game, winner=game.home_team).count()
+                
+                # Calculate set ratio
+                set_ratio = round(sets_won / sets_lost, 3) if sets_lost > 0 else sets_won
+                win_percentage = round(wins / matches_played, 3) if matches_played else 0
+                
                 team_data.update({
-                    "sets_won": scored,
-                    "sets_lost": conceded,
+                    "sets_won": sets_won,
+                    "sets_lost": sets_lost,
                     "set_ratio": set_ratio,
+                    "points": points,  # Match points, not set points
+                    "win_percentage": win_percentage,
                 })
 
-            elif scoring_type == "goals":
+            elif scoring_type == Sport.SCORING_TYPES.GOALS:
+                # For goal-based sports like soccer
+                home = games.filter(home_team=team).aggregate(
+                    scored=Sum('home_team_score'),
+                    conceded=Sum('away_team_score')
+                )
+                away = games.filter(away_team=team).aggregate(
+                    scored=Sum('away_team_score'),
+                    conceded=Sum('home_team_score')
+                )
+                scored = (home['scored'] or 0) + (away['scored'] or 0)
+                conceded = (home['conceded'] or 0) + (away['conceded'] or 0)
+                goal_difference = scored - conceded
+                points = wins * 3 + ties * 1
+                
                 point_ratio = round(scored / conceded, 2) if conceded else scored
                 team_data.update({
-                    "points_won": scored,
-                    "points_lost": conceded,
-                    "point_ratio": point_ratio,
+                    "goals_scored": scored,
+                    "goals_conceded": conceded,
                     "goal_difference": goal_difference,
+                    "points": points,
+                    "point_ratio": point_ratio,
                 })
 
             standings.append(team_data)
 
         # Custom sorting based on scoring type
         def sort_key(team):
-            if scoring_type == "points":
+            if scoring_type == Sport.SCORING_TYPES.POINTS:
+                # Sort by points, then win percentage
                 return (-team["points"], -team.get("win_percentage", 0))
-            elif scoring_type == "sets":
-                return (-team.get("set_ratio", 0), -team.get("sets_won", 0))
-            elif scoring_type == "goals":
-                return (-team.get("point_ratio", 0), -team.get("goal_difference", 0))
+            elif scoring_type == Sport.SCORING_TYPES.SETS:
+                # Sort by match points, then set ratio, then sets won
+                return (-team["points"], -team.get("win_percentage", 0), -team.get("set_ratio", 0), -team.get("sets_won", 0))
+            elif scoring_type == Sport.SCORING_TYPES.GOALS:
+                # Sort by points, then goal difference, then goals scored
+                return (-team["points"], -team.get("goal_difference", 0), -team.get("goals_scored", 0))
             return (-team.get("wins", 0),)
 
         sorted_standings = sorted(standings, key=sort_key)
