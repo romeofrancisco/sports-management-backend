@@ -557,6 +557,17 @@ class SeasonViewSet(viewsets.ModelViewSet):
         if team_id:
             games = games.filter(Q(home_team_id=team_id) | Q(away_team_id=team_id))
             
+        # Filter by date if provided (exact date match)
+        date = request.query_params.get('date')
+        if date:
+            from datetime import datetime
+            try:
+                # Parse the date and filter games on that specific date
+                parsed_date = datetime.strptime(date, '%Y-%m-%d').date()
+                games = games.filter(date__date=parsed_date)
+            except ValueError:
+                pass
+            
         # Serialize and return
         serializer = GameSerializer(games, many=True, context={'request': request})
         return Response(serializer.data)

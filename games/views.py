@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField
+from rest_framework.pagination import PageNumberPagination
 from .models import Game, PlayerStat, Substitution
 from teams.models import Player
 from sports.models import SportStatType, Sport
@@ -29,6 +30,13 @@ from .services import (
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
 from collections import defaultdict
+
+
+# Custom pagination class specifically for games
+class GamePagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
@@ -124,6 +132,7 @@ class GameViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrCoachUser]
     filter_backends = [DjangoFilterBackend]
     filterset_class = GameFilter
+    pagination_class = GamePagination
 
     def perform_create(self, serializer):
         serializer.save(creator=self.request.user)

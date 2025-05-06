@@ -10,6 +10,13 @@ from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import F
 from .filters import CoachFilter, PlayerFilter
+from rest_framework.pagination import PageNumberPagination
+
+
+class PlayerPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 class TeamViewSet(ModelViewSet):
@@ -43,6 +50,7 @@ class PlayerViews(ModelViewSet):
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["first_name", "last_name"]
     filterset_class = PlayerFilter
+    pagination_class = PlayerPagination
 
     def get_queryset(self):
         return Player.objects.select_related("user").annotate(
