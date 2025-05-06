@@ -34,9 +34,16 @@ class SeasonSerializer(serializers.ModelSerializer):
     teams_list = serializers.SerializerMethodField()
     has_bracket = serializers.SerializerMethodField()
     league_name = serializers.SerializerMethodField()
+    league = LeagueSerializer(read_only=True)
+    has_bracket = serializers.SerializerMethodField()
+    games_count = serializers.IntegerField(read_only=True)
+    games_played = serializers.IntegerField(read_only=True)
+    avg_points_per_game = serializers.FloatField(read_only=True)
+    
     class Meta:
         model = Season
-        fields = ['id', 'name', 'teams', "is_recorded", 'league', 'league_name', 'teams_list', 'year', 'status', 'has_bracket', 'start_date', 'end_date']
+        fields = ['id', 'name', 'league', 'year', 'status', 'start_date', 'end_date', 
+                 'has_bracket', 'games_count', 'games_played', 'avg_points_per_game', 'teams', 'is_recorded', 'league_name', 'teams_list']
         read_only_fields = ['league', 'team_lists']
         extra_kwargs = {"teams":{"write_only": True}}
 

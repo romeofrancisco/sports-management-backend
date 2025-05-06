@@ -37,6 +37,12 @@ class Game(models.Model):
     )
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
+    
+    # Add an explicit winner field that can be set directly
+    winner_team = models.ForeignKey(
+        "teams.Team", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="games_won"
+    )
 
     date = models.DateTimeField(null=True, blank=True)
     location = models.CharField(max_length=255, blank=True)
@@ -419,6 +425,11 @@ class Game(models.Model):
 
     @property
     def winner(self):
+        # First, check if we have an explicitly set winner
+        if self.winner_team is not None:
+            return self.winner_team
+            
+        # If no explicit winner is set, calculate based on scores
         if self.status != self.Status.COMPLETED:
             return None  # Match is still in progress
 
@@ -446,6 +457,11 @@ class Game(models.Model):
             elif self.away_team_score > self.home_team_score:
                 return self.away_team
             return None  # Tie
+            
+    @winner.setter
+    def winner(self, team):
+        """Set the winner_team field when winner property is assigned to."""
+        self.winner_team = team
 
     @property
     def score_summary(self):

@@ -90,6 +90,7 @@ class GameSerializer(serializers.ModelSerializer):
     lineup_status = serializers.SerializerMethodField()
     score_summary = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
+    sport = serializers.PrimaryKeyRelatedField(queryset=Sport.objects.all(), read_only=False)
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
