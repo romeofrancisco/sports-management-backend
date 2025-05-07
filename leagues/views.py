@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from .models import League, Season
 from .serializers import LeagueSerializer, LeagueWriteSerializer, SeasonSerializer, TeamStandingsSerializer, LeagueStatisticsSerializer, SeasonComparisonSerializer
 from django.shortcuts import get_object_or_404
@@ -8,6 +9,13 @@ from django.core.exceptions import ValidationError
 from django.db.models import Count, Sum, Avg, F, Q
 from teams.models import Team
 from sports.models import Sport
+
+
+# Custom pagination class specifically for seasons
+class SeasonPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 50
 
 class LeagueViewSet(viewsets.ModelViewSet):
     queryset = League.objects.all()
@@ -121,6 +129,7 @@ class LeagueViewSet(viewsets.ModelViewSet):
 class SeasonViewSet(viewsets.ModelViewSet):
     serializer_class = SeasonSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    pagination_class = SeasonPagination
 
     def get_queryset(self):
         return Season.objects.filter(league_id=self.kwargs['league_pk'])
