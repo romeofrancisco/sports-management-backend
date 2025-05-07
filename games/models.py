@@ -659,7 +659,7 @@ class PlayerStat(models.Model):
         sport = game.sport
 
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
-            if game and sport.win_points_threshold and sport.win_margin:
+            if sport.win_points_threshold and sport.win_margin:
                 if (
                     game.home_team_score >= sport.win_points_threshold
                     and (game.home_team_score - game.away_team_score)
@@ -684,29 +684,21 @@ class PlayerStat(models.Model):
             # Point-based sports validation
             if sport.win_points_threshold and sport.win_margin:
                 if (
-                    self.game.home_team_score >= sport.win_points_threshold
-                    and (self.game.home_team_score - self.game.away_team_score)
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score)
                     >= sport.win_margin
                 ):
                     raise ValidationError(
                         {"error": "Home team has already won the game"}
                     )
                 if (
-                    self.game.away_team_score >= sport.win_points_threshold
-                    and (self.game.away_team_score - self.game.home_team_score)
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score)
                     >= sport.win_margin
                 ):
                     raise ValidationError(
                         {"error": "Away team has already won the game"}
                     )
-
-        # Rest of your existing validations...
-        if self.period > self.game.current_period:
-            raise ValidationError({"error": "Cannot record stats for future periods"})
-        if self.player.team not in [self.game.home_team, self.away_team]:
-            raise ValidationError({"error": "Player is not part of this game"})
-        if self.stat_type.sport != self.game.sport:
-            raise ValidationError({"error": "Stat type doesn't match game sport"})
 
     def save(self, *args, **kwargs):
         self.full_clean()

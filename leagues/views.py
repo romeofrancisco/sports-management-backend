@@ -29,8 +29,15 @@ class LeagueViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def standings(self, request, pk=None):
         league = self.get_object()
-        standings = league.standings(request=request)
-        return Response(standings)
+        
+        # Get the properly sorted standings from the backend
+        raw_standings = league.standings(request=request)
+        
+        # Extract team IDs in the correct sorted order
+        team_ids_in_order = [item['team_id'] for item in raw_standings]
+        
+        # Return the raw standings directly to maintain the proper order
+        return Response(raw_standings)
     
     @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
@@ -198,12 +205,27 @@ class SeasonViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def standings(self, request, league_pk=None, pk=None):
         season = self.get_object()
+        
+        # Get properly sorted standings from the backend
         raw_standings = season.standings()
         
+        # Instead of using the teams.all() which loses the sort order,
+        # we'll extract team IDs in the correct sorted order from raw_standings
+        team_ids_in_order = [item['team_id'] for item in raw_standings]
+        
+        # Create a mapping of team_id to standings data for quick lookup
         standings_data = {item['team_id']: item for item in raw_standings}
         
-        teams = season.teams.all()
+        # Get the Team objects but preserve the sorted order from raw_standings
+        from teams.models import Team
+        teams = []
+        for team_id in team_ids_in_order:
+            try:
+                teams.append(Team.objects.get(id=team_id))
+            except Team.DoesNotExist:
+                pass
         
+        # Use the serializer with the ordered teams
         serializer = TeamStandingsSerializer(
             teams,
             many=True,
@@ -213,16 +235,7 @@ class SeasonViewSet(viewsets.ModelViewSet):
             }
         )
         
-        # Sort by standings criteria
-        sorted_data = sorted(
-            serializer.data,
-            key=lambda x: (
-                -x['standings'].get('points', 0),
-                -x['standings'].get('win_percentage', 0)
-            )
-        )
-        
-        return Response(sorted_data)
+        return Response(serializer.data)
         
     @action(detail=True, methods=['get'])
     def team_performance(self, request, league_pk=None, pk=None):

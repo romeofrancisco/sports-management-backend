@@ -29,9 +29,39 @@ def update_match_winner(sender, instance, **kwargs):
         if match.winner == winner:
             return
 
+        # First, ensure the teams in the match match the teams in the game
+        update_fields = []
+        if match.home_team != instance.home_team:
+            match.home_team = instance.home_team
+            update_fields.append("home_team")
+            logger.info(f"Updated match {match.id} home team to {instance.home_team.id} to sync with game")
+        
+        if match.away_team != instance.away_team:
+            match.away_team = instance.away_team
+            update_fields.append("away_team")
+            logger.info(f"Updated match {match.id} away team to {instance.away_team.id} to sync with game")
+
+        # Validate that winner is one of the participating teams
+        if winner and winner not in [match.home_team, match.away_team]:
+            logger.error(f"Game {instance.id} has winner ID {winner.id} which is not one of the teams in match {match.id} " +
+                        f"(home: {match.home_team.id if match.home_team else 'None'}, " +
+                        f"away: {match.away_team.id if match.away_team else 'None'})")
+            
+            # Determine the correct winner based on scores
+            if instance.home_team_score > instance.away_team_score:
+                winner = instance.home_team
+                logger.info(f"Corrected winner to home team {winner.id} based on scores")
+            elif instance.away_team_score > instance.home_team_score:
+                winner = instance.away_team
+                logger.info(f"Corrected winner to away team {winner.id} based on scores")
+            else:
+                logger.error(f"Cannot determine winner for tied game {instance.id}")
+                return
+        
         # Update the match winner
         match.winner = winner
-        match.save(update_fields=["winner"])
+        update_fields.append("winner")
+        match.save(update_fields=update_fields)
 
         # Wait for next round creation with a maximum of 3 attempts
         max_attempts = 3

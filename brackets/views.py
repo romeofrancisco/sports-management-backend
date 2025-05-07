@@ -199,3 +199,74 @@ class BracketViewSet(viewsets.ModelViewSet):
             )
         serializer = self.get_serializer(bracket)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def fix_invalid_winners(self, request):
+        """
+        Fix all bracket matches where the winner does not match one of the participating teams.
+        """
+        fixed_matches = []
+        error_matches = []
+        
+        # Find matches with incorrect winners
+        for match in BracketMatch.objects.select_related('home_team', 'away_team', 'winner', 'game').all():
+            if match.winner and match.home_team and match.away_team:
+                if match.winner.id not in [match.home_team.id, match.away_team.id]:
+                    match_info = {
+                        'id': match.id,
+                        'home_team': {
+                            'id': match.home_team.id,
+                            'name': match.home_team.name
+                        },
+                        'away_team': {
+                            'id': match.away_team.id,
+                            'name': match.away_team.name
+                        },
+                        'invalid_winner': {
+                            'id': match.winner.id,
+                            'name': match.winner.name
+                        }
+                    }
+                    
+                    # Try to fix based on the game scores if available
+                    if match.game:
+                        game = match.game
+                        if game.home_team_score > game.away_team_score:
+                            old_winner_id = match.winner.id
+                            match.winner = match.home_team
+                            match.save(update_fields=["winner"])
+                            
+                            match_info['action'] = 'fixed'
+                            match_info['new_winner'] = {
+                                'id': match.home_team.id,
+                                'name': match.home_team.name,
+                                'reason': 'home team score higher'
+                            }
+                            fixed_matches.append(match_info)
+                        elif game.away_team_score > game.home_team_score:
+                            old_winner_id = match.winner.id
+                            match.winner = match.away_team
+                            match.save(update_fields=["winner"])
+                            
+                            match_info['action'] = 'fixed'
+                            match_info['new_winner'] = {
+                                'id': match.away_team.id,
+                                'name': match.away_team.name,
+                                'reason': 'away team score higher'
+                            }
+                            fixed_matches.append(match_info)
+                        else:
+                            match_info['action'] = 'error'
+                            match_info['reason'] = 'game scores tied'
+                            error_matches.append(match_info)
+                    else:
+                        match_info['action'] = 'error'
+                        match_info['reason'] = 'no associated game'
+                        error_matches.append(match_info)
+        
+        return Response({
+            'fixed_count': len(fixed_matches),
+            'error_count': len(error_matches),
+            'fixed_matches': fixed_matches,
+            'error_matches': error_matches
+        })
