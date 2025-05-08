@@ -76,14 +76,13 @@ class LeagueViewSet(viewsets.ModelViewSet):
     def team_form(self, request, pk=None):
         """Get the recent form for top teams in the league"""
         league = self.get_object()
-        limit = int(request.query_params.get('limit', 5))
         
-        # Get top teams based on standings
-        top_teams_data = league.standings(request=request)[:limit]
-        top_team_ids = [team['team_id'] for team in top_teams_data]
+        # Get all teams based on standings instead of limiting to top teams
+        teams_data = league.standings(request=request)
+        team_ids = [team['team_id'] for team in teams_data]
         
         # Get all teams
-        teams = Team.objects.filter(id__in=top_team_ids)
+        teams = Team.objects.filter(id__in=team_ids)
         
         # Get recent games for each team (last 5)
         results = {}
@@ -129,7 +128,7 @@ class LeagueViewSet(viewsets.ModelViewSet):
             results[team.id] = team_results
         
         return Response({
-            'teams': top_teams_data,
+            'teams': teams_data,
             'form': results
         })
     
@@ -667,3 +666,63 @@ class SeasonViewSet(viewsets.ModelViewSet):
         team_data = sorted(team_data, key=lambda x: x.get('wins', 0), reverse=True)
         
         return Response(team_data)
+    
+    @action(detail=True, methods=['get'])
+    def team_form(self, request, league_pk=None, pk=None):
+        """Get the recent form for teams in a season"""
+        season = self.get_object()
+        
+        # Get all teams in this season based on standings
+        raw_standings = season.standings()
+        team_ids = [team['team_id'] for team in raw_standings]
+        
+        # Get all teams
+        teams = Team.objects.filter(id__in=team_ids)
+        
+        # Get recent games for each team (last 5)
+        results = {}
+        
+        for team in teams:
+            from games.models import Game
+            
+            recent_games = Game.objects.filter(
+                Q(home_team=team) | Q(away_team=team),
+                season=season,
+                status="completed"
+            ).order_by('-date')[:5]
+            
+            team_results = []
+            for game in recent_games:
+                # Determine if team won, lost or tied
+                if game.home_team == team:
+                    if game.home_team_score > game.away_team_score:
+                        result = 'W'
+                    elif game.home_team_score < game.away_team_score:
+                        result = 'L'
+                    else:
+                        result = 'D'
+                    score = f"{game.home_team_score}-{game.away_team_score}"
+                    opponent = game.away_team.name
+                else:
+                    if game.away_team_score > game.home_team_score:
+                        result = 'W'
+                    elif game.away_team_score < game.home_team_score:
+                        result = 'L'
+                    else:
+                        result = 'D'
+                    score = f"{game.away_team_score}-{game.home_team_score}"
+                    opponent = game.home_team.name
+                
+                team_results.append({
+                    'result': result,
+                    'score': score,
+                    'opponent': opponent,
+                    'date': game.date.strftime("%Y-%m-%d")
+                })
+            
+            results[team.id] = team_results
+        
+        return Response({
+            'teams': raw_standings,
+            'form': results
+        })
