@@ -23,10 +23,11 @@ class League(models.Model):
             raise ValidationError("End date must be after start date")
     
     def standings(self, request=None):
-        from games.models import Game
+        from games.models import Game, GameSet
         from brackets.models import Bracket
 
         sport = self.sport
+        scoring_type = sport.scoring_type  # "points", "sets", or "goals"
         seasons = self.seasons.prefetch_related('teams', 'games').all()
         all_games = Game.objects.filter(season__in=seasons, status="completed")
 
@@ -69,6 +70,7 @@ class League(models.Model):
 
             win_ratio = round(wins / matches_played, 3) if matches_played else 0
 
+            # Base team data for any sport type
             team_data = {
                 "team_id": team.id,
                 "team_name": team.name,
@@ -85,9 +87,54 @@ class League(models.Model):
             if sport.has_tie:
                 team_data["ties"] = ties
 
+            # Different calculation logic based on scoring type
+            if scoring_type == 'sets':
+                # For set-based sports like volleyball, calculate:
+                # 1. Sets won/lost
+                # 2. Set ratio
+                sets_won = 0
+                sets_lost = 0
+                points = wins * 2  # Standard 2 points for match win in volleyball
+                
+                # Get team games
+                team_games = all_games.filter(
+                    Q(home_team=team) | Q(away_team=team)
+                )
+                
+                # Count sets won and lost by this team
+                for game in team_games:
+                    if game.home_team == team:
+                        sets_won += GameSet.objects.filter(game=game, winner=team).count()
+                        sets_lost += GameSet.objects.filter(game=game, winner=game.away_team).count()
+                    else:  # Away team
+                        sets_won += GameSet.objects.filter(game=game, winner=team).count()
+                        sets_lost += GameSet.objects.filter(game=game, winner=game.home_team).count()
+                
+                # Calculate set ratio
+                set_ratio = round(sets_won / sets_lost, 3) if sets_lost > 0 else sets_won
+                
+                team_data.update({
+                    "sets_won": sets_won,
+                    "sets_lost": sets_lost,
+                    "set_ratio": set_ratio,
+                    "points": points,  # Match points
+                })
+
             standings.append(team_data)
 
-        standings.sort(key=lambda t: (-t["championships"], -t["win_ratio"]))
+        # Custom sorting based on scoring type
+        if scoring_type == 'sets':
+            # For set-based sports, sort by:
+            # 1. Championships (highest first)
+            # 2. Points from match wins
+            # 3. Set ratio
+            # 4. Sets won
+            standings.sort(key=lambda t: (-t["championships"], -t.get("points", 0), -t.get("set_ratio", 0), -t.get("sets_won", 0)))
+        else:
+            # For point-based sports, sort by:
+            # 1. Championships (highest first) 
+            # 2. Win ratio
+            standings.sort(key=lambda t: (-t["championships"], -t["win_ratio"]))
 
         # Only take top 10
         standings = standings[:10]
@@ -303,7 +350,7 @@ class Season(models.Model):
                 return (-team["points"], -team.get("win_percentage", 0))
             elif scoring_type == Sport.SCORING_TYPES.SETS:
                 # Sort by match points, then set ratio, then sets won
-                return (-team["points"], -team.get("win_percentage", 0), -team.get("set_ratio", 0), -team.get("sets_won", 0))
+                return (-team["points"], -team.get("set_ratio", 0), -team.get("sets_won", 0))
             elif scoring_type == Sport.SCORING_TYPES.GOALS:
                 # Sort by points, then goal difference, then goals scored
                 return (-team["points"], -team.get("goal_difference", 0), -team.get("goals_scored", 0))
