@@ -1,4 +1,6 @@
 .env.development
+.env.production
+.env
 db.sqlite3
 /media
 
