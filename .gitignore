@@ -1,3 +1,10 @@
 .env.development
 db.sqlite3
 /media
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
