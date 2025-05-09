@@ -68,7 +68,7 @@ class League(models.Model):
                 winner=team
             ).count()
 
-            win_ratio = round(wins / matches_played, 3) if matches_played else 0
+            win_ratio = round(wins / matches_played, 3) if matches_played else 0.000
 
             # Base team data for any sport type
             team_data = {
@@ -102,22 +102,77 @@ class League(models.Model):
                 )
                 
                 # Count sets won and lost by this team
+                total_points_scored = 0
+                total_points_conceded = 0
+                
                 for game in team_games:
+                    game_sets = GameSet.objects.filter(game=game)
                     if game.home_team == team:
                         sets_won += GameSet.objects.filter(game=game, winner=team).count()
                         sets_lost += GameSet.objects.filter(game=game, winner=game.away_team).count()
+                        
+                        # Calculate points per set
+                        for game_set in game_sets:
+                            total_points_scored += game_set.home_team_score
+                            total_points_conceded += game_set.away_team_score
                     else:  # Away team
                         sets_won += GameSet.objects.filter(game=game, winner=team).count()
                         sets_lost += GameSet.objects.filter(game=game, winner=game.home_team).count()
+                        
+                        # Calculate points per set
+                        for game_set in game_sets:
+                            total_points_scored += game_set.away_team_score
+                            total_points_conceded += game_set.home_team_score
                 
                 # Calculate set ratio
                 set_ratio = round(sets_won / sets_lost, 3) if sets_lost > 0 else sets_won
+                
+                # Calculate Sets Win Percentage
+                sets_played = sets_won + sets_lost
+                sets_win_percentage = round((sets_won / sets_played) * 100, 1) if sets_played > 0 else 0
+                
+                # Calculate Points Per Set
+                points_per_set = round(total_points_scored / sets_played, 1) if sets_played > 0 else 0
+                points_conceded_per_set = round(total_points_conceded / sets_played, 1) if sets_played > 0 else 0
+                point_differential_per_set = round((total_points_scored - total_points_conceded) / sets_played, 1) if sets_played > 0 else 0
                 
                 team_data.update({
                     "sets_won": sets_won,
                     "sets_lost": sets_lost,
                     "set_ratio": set_ratio,
                     "points": points,  # Match points
+                    "sets_win_percentage": sets_win_percentage,
+                    "points_per_set": points_per_set,
+                    "points_conceded_per_set": points_conceded_per_set,
+                    "point_differential_per_set": point_differential_per_set,
+                })
+            else:
+                # For points-based sports, calculate point differential and PPG
+                home_games = all_games.filter(home_team=team)
+                away_games = all_games.filter(away_team=team)
+                
+                total_points_scored = 0
+                total_points_conceded = 0
+                
+                for game in home_games:
+                    total_points_scored += game.home_team_score
+                    total_points_conceded += game.away_team_score
+                
+                for game in away_games:
+                    total_points_scored += game.away_team_score
+                    total_points_conceded += game.home_team_score
+                
+                # Calculate PPG and point differential
+                points_per_game = round(total_points_scored / matches_played, 1) if matches_played > 0 else 0
+                points_conceded_per_game = round(total_points_conceded / matches_played, 1) if matches_played > 0 else 0
+                point_differential = total_points_scored - total_points_conceded
+                point_differential_avg = round(point_differential / matches_played, 1) if matches_played > 0 else 0
+                
+                team_data.update({
+                    "points_per_game": points_per_game,
+                    "points_conceded_per_game": points_conceded_per_game,
+                    "point_differential": point_differential,
+                    "point_differential_avg": point_differential_avg,
                 })
 
             standings.append(team_data)
@@ -126,15 +181,15 @@ class League(models.Model):
         if scoring_type == 'sets':
             # For set-based sports, sort by:
             # 1. Championships (highest first)
-            # 2. Points from match wins
-            # 3. Set ratio
-            # 4. Sets won
-            standings.sort(key=lambda t: (-t["championships"], -t.get("points", 0), -t.get("set_ratio", 0), -t.get("sets_won", 0)))
+            # 2. Set ratio
+            # 3. Sets won
+            standings.sort(key=lambda t: (-t["championships"], -t.get("set_ratio", 0), -t.get("sets_won", 0)))
         else:
             # For point-based sports, sort by:
             # 1. Championships (highest first) 
             # 2. Win ratio
-            standings.sort(key=lambda t: (-t["championships"], -t["win_ratio"]))
+            # 3. Point differential
+            standings.sort(key=lambda t: (-t["championships"], -t["win_ratio"], -t.get("point_differential", 0)))
 
         # Only take top 10
         standings = standings[:10]
@@ -280,9 +335,35 @@ class Season(models.Model):
             if scoring_type == Sport.SCORING_TYPES.POINTS:
                 points = wins * 3 + ties * 1  # Standard 3 points for win, 1 for tie
                 win_percentage = round(wins / matches_played, 3) if matches_played else 0
+                
+                # Calculate points per game and point differential
+                home_games = team_games.filter(home_team=team)
+                away_games = team_games.filter(away_team=team)
+                
+                total_points_scored = 0
+                total_points_conceded = 0
+                
+                for game in home_games:
+                    total_points_scored += game.home_team_score
+                    total_points_conceded += game.away_team_score
+                
+                for game in away_games:
+                    total_points_scored += game.away_team_score
+                    total_points_conceded += game.home_team_score
+                
+                # Calculate PPG and point differential
+                points_per_game = round(total_points_scored / matches_played, 1) if matches_played > 0 else 0
+                points_conceded_per_game = round(total_points_conceded / matches_played, 1) if matches_played > 0 else 0
+                point_differential = total_points_scored - total_points_conceded
+                point_differential_avg = round(point_differential / matches_played, 1) if matches_played > 0 else 0
+                
                 team_data.update({
                     "points": points,
                     "win_percentage": win_percentage,
+                    "points_per_game": points_per_game,
+                    "points_conceded_per_game": points_conceded_per_game,
+                    "point_differential": point_differential,
+                    "point_differential_avg": point_differential_avg,
                 })
 
             elif scoring_type == Sport.SCORING_TYPES.SETS:
@@ -309,12 +390,42 @@ class Season(models.Model):
                 set_ratio = round(sets_won / sets_lost, 3) if sets_lost > 0 else sets_won
                 win_percentage = round(wins / matches_played, 3) if matches_played else 0
                 
+                # Calculate set-specific statistics
+                sets_played = sets_won + sets_lost
+                
+                # Count points scored/conceded in sets
+                total_points_scored = 0
+                total_points_conceded = 0
+                for game in team_games:
+                    game_sets = GameSet.objects.filter(game=game)
+                    if game.home_team == team:
+                        for game_set in game_sets:
+                            total_points_scored += game_set.home_team_score
+                            total_points_conceded += game_set.away_team_score
+                    else:  # Away team
+                        for game_set in game_sets:
+                            total_points_scored += game_set.away_team_score
+                            total_points_conceded += game_set.home_team_score
+                
+                # Calculate averages
+                points_per_set = round(total_points_scored / sets_played, 1) if sets_played > 0 else 0
+                points_conceded_per_set = round(total_points_conceded / sets_played, 1) if sets_played > 0 else 0
+                point_differential_per_set = round((total_points_scored - total_points_conceded) / sets_played, 1) if sets_played > 0 else 0
+                sets_win_percentage = round((sets_won / sets_played) * 100, 1) if sets_played > 0 else 0
+                
                 team_data.update({
                     "sets_won": sets_won,
                     "sets_lost": sets_lost,
                     "set_ratio": set_ratio,
                     "points": points,  # Match points, not set points
                     "win_percentage": win_percentage,
+                    "sets_played": sets_played,
+                    "sets_win_percentage": sets_win_percentage,
+                    "points_per_set": points_per_set,
+                    "points_conceded_per_set": points_conceded_per_set,
+                    "point_differential_per_set": point_differential_per_set,
+                    "total_points_scored": total_points_scored,
+                    "total_points_conceded": total_points_conceded,
                 })
 
             elif scoring_type == Sport.SCORING_TYPES.GOALS:
@@ -346,8 +457,8 @@ class Season(models.Model):
         # Custom sorting based on scoring type
         def sort_key(team):
             if scoring_type == Sport.SCORING_TYPES.POINTS:
-                # Sort by points, then win percentage
-                return (-team["points"], -team.get("win_percentage", 0))
+                # Sort by points, then win percentage, then point differential
+                return (-team["points"], -team.get("win_percentage", 0), -team.get("point_differential", 0))
             elif scoring_type == Sport.SCORING_TYPES.SETS:
                 # Sort by match points, then set ratio, then sets won
                 return (-team["points"], -team.get("set_ratio", 0), -team.get("sets_won", 0))
