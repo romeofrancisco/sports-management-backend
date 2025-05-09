@@ -90,6 +90,13 @@ class FormulaComponent(models.Model):
 
 
 class SportStatType(models.Model):
+    class CATEGORY_TYPES(models.TextChoices):
+        SCORING = "scoring", "Scoring"
+        PERFORMANCE = "performance", "Performance"
+        OFFENSIVE = "offensive", "Offensive"
+        DEFENSIVE = "defensive", "Defensive"
+        OTHER = "other", "Other"
+    
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     name = models.CharField(max_length=30)
     display_name = models.CharField(
@@ -100,6 +107,12 @@ class SportStatType(models.Model):
     )
     code = models.CharField(max_length=20, blank=True, null=True)
     point_value = models.IntegerField(default=0)
+    category = models.CharField(
+        max_length=20, 
+        choices=CATEGORY_TYPES, 
+        default=CATEGORY_TYPES.OTHER,
+        help_text="Category for organizing stats in the UI"
+    )
     
     is_team_stat = models.BooleanField(default=False)
     is_player_stat = models.BooleanField(default=False)
