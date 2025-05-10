@@ -81,7 +81,7 @@ class PlayerManager(models.Manager):
         )
         
         return all_players.exclude(
-            pk__in=subbed_out.values('substitute_out')
+            user_id__in=subbed_out.values('substitute_out')
         )
 
 class Player(models.Model):

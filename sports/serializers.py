@@ -146,11 +146,19 @@ class LeaderCategorySerializer(serializers.ModelSerializer):
     sport_name = serializers.ReadOnlyField(source='sport.name')
     stat_types_count = serializers.SerializerMethodField()
     stat_types_details = serializers.SerializerMethodField()
+    primary_stat_id = serializers.PrimaryKeyRelatedField(
+        source='primary_stat', 
+        queryset=SportStatType.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=False
+    )
     
     class Meta:
         model = LeaderCategory
         fields = ['id', 'sport', 'sport_name', 'name', 'display_order', 
-                 'stat_types', 'stat_types_count', 'stat_types_details']
+                 'stat_types', 'stat_types_count', 'stat_types_details', 
+                 'primary_stat_id']
         extra_kwargs = {
             'stat_types': {'write_only': True},  # Only used for write operations (POST/PUT)
         }
@@ -176,5 +184,42 @@ class LeaderCategorySerializer(serializers.ModelSerializer):
             if len(stat_types) > 4:
                 raise serializers.ValidationError({"stat_types": "Maximum of 4 stats per leader category allowed."})
         
+        # For primary_stat validation, we'll do it after save to avoid issues with M2M relationships
         return data
+        
+    def create(self, validated_data):
+        stat_types = validated_data.pop('stat_types', None)
+        instance = super().create(validated_data)
+        
+        # Add stat_types after creation
+        if stat_types:
+            instance.stat_types.set(stat_types)
+            
+            # If primary_stat wasn't explicitly set, use first stat_type as default
+            if not instance.primary_stat and stat_types:
+                instance.primary_stat = stat_types[0]
+                instance.save()
+            
+        return instance
+        
+    def update(self, instance, validated_data):
+        stat_types = validated_data.pop('stat_types', None)
+        
+        # Update the instance
+        instance = super().update(instance, validated_data)
+        
+        # Update stat_types if provided
+        if stat_types is not None:
+            instance.stat_types.set(stat_types)
+            
+            # If primary_stat isn't in stat_types and stat_types exist, set primary_stat to first stat_type
+            if instance.primary_stat and stat_types and instance.primary_stat not in stat_types:
+                instance.primary_stat = stat_types[0]
+                instance.save()
+            # If no primary_stat but we have stat_types, set to first one
+            elif not instance.primary_stat and stat_types:
+                instance.primary_stat = stat_types[0]
+                instance.save()
+        
+        return instance
 

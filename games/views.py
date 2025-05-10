@@ -25,13 +25,15 @@ from .services import (
     RecordingService,
     TeamStatsSummaryService,
     TeamStatsComparisonService,
-    BoxscoreService
+    BoxscoreService,
+    GameLeaderService,
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
 from collections import defaultdict
 import time
 import logging
+
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +165,21 @@ class GameViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(creator=self.request.user)
+        
+    @action(detail=True, methods=["get"])
+    def game_leaders(self, request, pk=None):
+        """Get the top players from each team for each leader category"""
+        game = self.get_object()
+        try:
+            service = GameLeaderService(game_id=game.id)
+            data = service.get_game_leaders()
+            return Response(data)
+        except Exception as e:
+            logger.error(f"Error getting game leaders: {str(e)}")
+            return Response(
+                {"error": f"Failed to get game leaders: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=["post"])
     def manage(self, request, pk=None):
@@ -494,7 +511,7 @@ class GameViewSet(viewsets.ModelViewSet):
         }
 
         return Response(response_data)
-    
+
     def _update_starting_lineup(self, game, data):
         """Handle lineup updates including empty submissions"""
         if game.status != Game.Status.SCHEDULED:
