@@ -1,8 +1,12 @@
 from collections import defaultdict
-from django.db.models import Count
+from django.db.models import Count, Sum, F, Q, Case, When, IntegerField
+from django.db import connection
 from games.models import Game, PlayerStat
 from sports.models import Sport, SportStatType
 from teams.models import Player
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PlayerStatsSummaryService:
     def __init__(self, game_id, team_filter=None):
@@ -34,7 +38,12 @@ class PlayerStatsSummaryService:
             return [self.game.away_team]
         return [self.game.home_team, self.game.away_team]
 
-    def _aggregate_recording_stats(self):
+    def _aggregate_recording_stats(self, for_calculation=False):
+        """
+        Optimized method to aggregate player stats with efficient database queries
+        - Uses database aggregation to minimize data transfer
+        - Fetches only necessary fields
+        """
         filters = {
             "game": self.game,
             "stat_type__in": self.recording_stats,
@@ -42,31 +51,179 @@ class PlayerStatsSummaryService:
         }
         
         # Only include period in grouping for set-based sports
-        group_by = ["player_id", "stat_type__code"]
+        group_by = ["player_id", "stat_type__code", "stat_type__point_value"]
         if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
             group_by.append("period")
+        
+        query = PlayerStat.objects.filter(**filters)
+        
+        # If this is for calculation only, optimize further by:
+        # 1. Only selecting fields we need
+        # 2. Using database aggregation more aggressively
+        if for_calculation:
+            # For calculation, we only need the counts, not full objects
+            query = query.values(*group_by).annotate(count=Count("id", distinct=True))
+        else:
+            # For display, we want more data
+            query = query.values(*group_by).annotate(count=Count("id"))
             
-        return (
-            PlayerStat.objects.filter(**filters)
-            .values(*group_by)
-            .annotate(count=Count("id"))
-        )
+        # Remove any default ordering to improve performance
+        query = query.order_by()
+        
+        return query
+    
+    def _aggregate_stats_with_raw_sql(self, for_calculation=False):
+        """
+        Ultra-optimized method that uses raw SQL for better performance with large datasets
+        Only use this for very large player stat datasets (thousands of records)
+        """
+        # Determine if we need to filter by team
+        team_filter = ""
+        team_params = []
+        
+        if self.team_filter == "home_team":
+            team_filter = "AND p.team_id = %s"
+            team_params = [self.game.home_team_id]
+        elif self.team_filter == "away_team":
+            team_filter = "AND p.team_id = %s"
+            team_params = [self.game.away_team_id]
+        
+        # For calculation, use a more optimized query that only gets what's needed
+        if for_calculation:
+            # Different SQL based on scoring type
+            if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+                sql = """
+                SELECT 
+                    ps.player_id, 
+                    st.code as stat_type__code, 
+                    ps.period,
+                    COUNT(ps.id) as count
+                FROM 
+                    games_playerstat ps
+                INNER JOIN 
+                    sports_sportstattype st ON ps.stat_type_id = st.id
+                INNER JOIN 
+                    teams_player p ON ps.player_id = p.user_id
+                WHERE 
+                    ps.game_id = %s
+                    AND st.is_record = TRUE
+                    {}
+                GROUP BY 
+                    ps.player_id, st.code, ps.period
+                """.format(team_filter)
+                
+                params = [self.game.id] + team_params
+            else:
+                sql = """
+                SELECT 
+                    ps.player_id, 
+                    st.code as stat_type__code, 
+                    COUNT(ps.id) as count
+                FROM 
+                    games_playerstat ps
+                INNER JOIN 
+                    sports_sportstattype st ON ps.stat_type_id = st.id
+                INNER JOIN 
+                    teams_player p ON ps.player_id = p.user_id
+                WHERE 
+                    ps.game_id = %s
+                    AND st.is_record = TRUE
+                    {}
+                GROUP BY 
+                    ps.player_id, st.code
+                """.format(team_filter)
+                
+                params = [self.game.id] + team_params
+        else:
+            # More complete query for display purposes
+            if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+                sql = """
+                SELECT 
+                    ps.player_id, 
+                    st.code as stat_type__code,
+                    st.name as stat_name,
+                    st.display_name as display_name,
+                    ps.period,
+                    COUNT(ps.id) as count
+                FROM 
+                    games_playerstat ps
+                INNER JOIN 
+                    sports_sportstattype st ON ps.stat_type_id = st.id
+                INNER JOIN 
+                    teams_player p ON ps.player_id = p.user_id
+                WHERE 
+                    ps.game_id = %s
+                    AND st.is_record = TRUE
+                    {}
+                GROUP BY 
+                    ps.player_id, st.code, st.name, st.display_name, ps.period
+                """.format(team_filter)
+                
+                params = [self.game.id] + team_params
+            else:
+                sql = """
+                SELECT 
+                    ps.player_id, 
+                    st.code as stat_type__code,
+                    st.name as stat_name,
+                    st.display_name as display_name,
+                    COUNT(ps.id) as count
+                FROM 
+                    games_playerstat ps
+                INNER JOIN 
+                    sports_sportstattype st ON ps.stat_type_id = st.id
+                INNER JOIN 
+                    teams_player p ON ps.player_id = p.user_id
+                WHERE 
+                    ps.game_id = %s
+                    AND st.is_record = TRUE
+                    {}
+                GROUP BY 
+                    ps.player_id, st.code, st.name, st.display_name
+                """.format(team_filter)
+                
+                params = [self.game.id] + team_params
+        
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            columns = [col[0] for col in cursor.description]
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+        return results
 
-    def _build_initial_summary(self):
+    def _build_initial_summary(self, for_calculation=False):
         summary = {}
-        for player in Player.objects.filter(team__in=self.teams).select_related("user"):
-            stats_structure = {
-                "recording_stats": dict.fromkeys(self.recording_abbrevs, 0),
-                "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
-                "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
-            }
-            
-            player_summary = {
-                "player_id": player.user.id,
-                "player_name": player.user.get_full_name(),
-                "jersey_number": player.jersey_number,
-                "team_id": player.team.id,
-            }
+        
+        # Optimize the player query with select_related
+        player_query = Player.objects.filter(team__in=self.teams).select_related("user")
+        
+        for player in player_query:
+            # For calculation mode, use a more minimal structure
+            if for_calculation:
+                stats_structure = {
+                    "recording_stats": dict.fromkeys(self.recording_abbrevs, 0),
+                    "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
+                    "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
+                }
+                
+                player_summary = {
+                    "player_id": player.user.id,
+                    "team_id": player.team.id,
+                }
+            else:
+                # Full structure for display
+                stats_structure = {
+                    "recording_stats": dict.fromkeys(self.recording_abbrevs, 0),
+                    "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
+                    "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
+                }
+                
+                player_summary = {
+                    "player_id": player.user.id,
+                    "player_name": player.user.get_full_name(),
+                    "jersey_number": player.jersey_number,
+                    "team_id": player.team.id,
+                }
             
             # Only include periods for set-based sports
             if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
@@ -84,11 +241,36 @@ class PlayerStatsSummaryService:
             summary[player.pk] = player_summary
         return summary
 
-    def _populate_recording_stats(self, summary):
-        for rec in self._aggregate_recording_stats():
+    def _populate_recording_stats(self, summary, for_calculation=False, use_raw_sql=False):
+        # Determine which aggregation method to use based on the expected data size
+        # For small to medium datasets, use the regular ORM method
+        # For very large datasets (thousands of records), use raw SQL
+        
+        # Check if we expect a large dataset or user explicitly requests raw SQL
+        if use_raw_sql:
+            stats = self._aggregate_stats_with_raw_sql(for_calculation)
+            logger.info(f"Using raw SQL aggregation for game {self.game.id}")
+        else:
+            # Count stats if we haven't been explicitly told to use raw SQL
+            stat_count = PlayerStat.objects.filter(
+                game=self.game,
+                player__team__in=self.teams
+            ).count()
+            
+            # If more than 1000 stats, use the more efficient raw SQL method
+            if stat_count > 1000:
+                stats = self._aggregate_stats_with_raw_sql(for_calculation)
+                logger.info(f"Auto-switched to raw SQL for large dataset ({stat_count} stats) for game {self.game.id}")
+            else:
+                stats = self._aggregate_recording_stats(for_calculation)
+                logger.info(f"Using ORM aggregation for game {self.game.id} ({stat_count} stats)")
+        
+        # Process the stats and store them in the summary
+        for rec in stats:
             pid = rec["player_id"]
             abbr = rec["stat_type__code"]
             cnt = rec["count"]
+            point_value = rec.get("stat_type__point_value", 0)
             
             if pid not in summary:
                 continue
@@ -97,8 +279,16 @@ class PlayerStatsSummaryService:
                 per = rec["period"]
                 if per <= self.game.current_period:
                     summary[pid]["periods"][per]["recording_stats"][abbr] = cnt
+                    # Store point value for later use in formulas
+                    if "point_values" not in summary[pid]["periods"][per]:
+                        summary[pid]["periods"][per]["point_values"] = {}
+                    summary[pid]["periods"][per]["point_values"][abbr] = point_value
             else:
                 summary[pid]["recording_stats"][abbr] = cnt
+                # Store point value for later use in formulas
+                if "point_values" not in summary[pid]:
+                    summary[pid]["point_values"] = {}
+                summary[pid]["point_values"][abbr] = point_value
 
     def _compute_formula_stats(self, summary):
         # Build dependency graph
@@ -112,7 +302,8 @@ class PlayerStatsSummaryService:
             dependency_graph[stat.code] = {
                 'stat': stat,
                 'dependencies': set(component_codes),
-                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2
+                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2,
+                'uses_point_value': stat.formula.uses_point_value
             }
         
         # Get stats in correct processing order (dependencies first)
@@ -138,7 +329,7 @@ class PlayerStatsSummaryService:
             in_progress.remove(stat_code)
             ordered_stats.append(stat_info['stat'])
             return True
-        
+            
         for stat_code in dependency_graph:
             if not process_stat(stat_code):
                 ordered_stats = [info['stat'] for info in dependency_graph.values()]
@@ -149,7 +340,7 @@ class PlayerStatsSummaryService:
             components = stat.formula.components.all().order_by('order')
             component_codes = [comp.stat_type.code for comp in components]
             is_ratio_stat = stat.formula.is_ratio and len(component_codes) == 2
-            # Only use decimal_places from formula
+            uses_point_value = stat.formula.uses_point_value
             decimal_places = stat.formula.decimal_places
             
             for data in summary.values():
@@ -157,7 +348,12 @@ class PlayerStatsSummaryService:
                     for pd in data["periods"].values():
                         variables = {}
                         for code in component_codes:
-                            recording_val = pd["recording_stats"].get(code, 0) or 0
+                            # Use point value instead of count if the formula requires it
+                            if uses_point_value and "point_values" in pd and code in pd["point_values"]:
+                                recording_val = pd["recording_stats"].get(code, 0) * pd["point_values"].get(code, 0)
+                            else:
+                                recording_val = pd["recording_stats"].get(code, 0) or 0
+                                
                             calc_val = pd["calculated_stats"].get(code, 0) or 0
                             variables[code] = recording_val + calc_val
                         
@@ -173,14 +369,20 @@ class PlayerStatsSummaryService:
                                     if isinstance(result, float):
                                         result = round(result, decimal_places)
                                     pd["calculated_stats"][stat.code] = result
-                                except:
+                                except Exception as e:
                                     pd["calculated_stats"][stat.code] = 0
+                                    logger.debug(f"Error evaluating formula for {stat.code}: {str(e)}")
                             else:
                                 pd["calculated_stats"][stat.code] = 0
                 else:
                     variables = {}
                     for code in component_codes:
-                        recording_val = data["recording_stats"].get(code, 0) or 0
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and "point_values" in data and code in data["point_values"]:
+                            recording_val = data["recording_stats"].get(code, 0) * data["point_values"].get(code, 0)
+                        else:
+                            recording_val = data["recording_stats"].get(code, 0) or 0
+                            
                         calc_val = data["calculated_stats"].get(code, 0) or 0
                         variables[code] = recording_val + calc_val
                     
@@ -196,14 +398,19 @@ class PlayerStatsSummaryService:
                                 if isinstance(result, float):
                                     result = round(result, decimal_places)
                                 data["calculated_stats"][stat.code] = result
-                            except:
+                            except Exception as e:
                                 data["calculated_stats"][stat.code] = 0
+                                logger.debug(f"Error evaluating formula for {stat.code}: {str(e)}")
                         else:
                             data["calculated_stats"][stat.code] = 0
 
-    def _build_response(self, summary):
-        # Only use player summary stats for the response
-        player_summary_stats = self.all_stats.filter(is_player_summary=True)
+    def _build_response(self, summary, for_calculation=False):
+        # Only use player summary stats for the response (unless for calculation)
+        if for_calculation:
+            player_summary_stats = self.all_stats
+        else:
+            player_summary_stats = self.all_stats.filter(is_player_summary=True)
+            
         stat_display_names = {
             stat.code: stat.display_name or stat.name
             for stat in player_summary_stats
@@ -228,12 +435,20 @@ class PlayerStatsSummaryService:
         
         response = []
         for data in summary.values():
-            response_entry = {
-                "id": data["player_id"],
-                "name": data["player_name"],
-                "jersey_number": data["jersey_number"],
-                "team_id": data["team_id"],
-            }
+            # For calculation mode, use minimal structure
+            if for_calculation:
+                response_entry = {
+                    "id": data["player_id"],
+                    "team_id": data["team_id"],
+                }
+            else:
+                # Full structure for display
+                response_entry = {
+                    "id": data["player_id"],
+                    "name": data["player_name"],
+                    "jersey_number": data["jersey_number"],
+                    "team_id": data["team_id"],
+                }
 
             # For point-based sports, calculate total stats directly
             if self.game.sport.scoring_type != Sport.SCORING_TYPES.SETS:
@@ -276,14 +491,16 @@ class PlayerStatsSummaryService:
 
                 response_entry["total_stats"] = total_stats
                 response_entry["total_points"] = total_points
-                response_entry["stats"] = [
-                    {
-                        "name": stat,
-                        "display_name": stat,
-                        "value": value
-                    }
-                    for stat, value in total_stats.items()
-                ]
+                
+                if not for_calculation:
+                    response_entry["stats"] = [
+                        {
+                            "name": stat,
+                            "display_name": stat,
+                            "value": value
+                        }
+                        for stat, value in total_stats.items()
+                    ]
 
             # For set-based sports, calculate period stats and totals
             else:
@@ -353,11 +570,13 @@ class PlayerStatsSummaryService:
                             # Collect formula values regardless
                             formula_values[code] += value
                     
-                    periods_out.append({
-                        "period": period,
-                        "stats": period_stats,
-                        "points": period_points
-                    })
+                    # Only add periods if not in calculation mode
+                    if not for_calculation:
+                        periods_out.append({
+                            "period": period,
+                            "stats": period_stats,
+                            "points": period_points
+                        })
                     
                     # Add to total points
                     total_points += period_points
@@ -382,7 +601,7 @@ class PlayerStatsSummaryService:
                 
                 # Calculate derived formulas for totals
                 for stat in self.formula_stats:
-                    if stat.is_player_summary and not stat.formula.is_ratio and stat.formula.expression:
+                    if (for_calculation or stat.is_player_summary) and not stat.formula.is_ratio and stat.formula.expression:
                         code = stat.code
                         display_name = stat_display_names.get(code)
                         
@@ -422,18 +641,31 @@ class PlayerStatsSummaryService:
                                 totals[display_name] = result
                             except Exception as e:
                                 totals[display_name] = 0
+                                logger.debug(f"Error calculating formula for {code}: {str(e)}")
 
-                response_entry["periods"] = periods_out
                 response_entry["total_stats"] = totals
                 response_entry["total_points"] = total_points
+                
+                # Only include periods if not in calculation mode
+                if not for_calculation:
+                    response_entry["periods"] = periods_out
 
             response.append(response_entry)
             
         return response
 
-    def get_summary(self):
-        summary = self._build_initial_summary()
-        self._populate_recording_stats(summary)  # First populate recording stats
-        self._compute_formula_stats(summary)     # Then compute formula-based stats
-        return self._build_response(summary)
-  
+    def get_summary(self, for_calculation=False, use_raw_sql=False):
+        """
+        Get player stats summary with optimization flags
+        
+        Args:
+            for_calculation (bool): If True, optimize for calculation by returning minimal data
+            use_raw_sql (bool): If True, always use raw SQL for maximum performance
+            
+        Returns:
+            List of player stats summaries
+        """
+        summary = self._build_initial_summary(for_calculation)
+        self._populate_recording_stats(summary, for_calculation, use_raw_sql)
+        self._compute_formula_stats(summary)
+        return self._build_response(summary, for_calculation)

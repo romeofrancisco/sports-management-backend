@@ -65,7 +65,7 @@ class TeamStatsSummaryService:
                 game=self.game, 
                 stat_type__is_record=True  # Ensure we only get recorded stats
             )
-            .values("player__team", "period", "stat_type__code")
+            .values("player__team", "period", "stat_type__code", "stat_type__point_value")
             .annotate(total=Count("id"))
         )
         return team_stats
@@ -80,14 +80,25 @@ class TeamStatsSummaryService:
             period = stat["period"]
             abbr = stat["stat_type__code"]
             total = stat["total"]
+            point_value = stat["stat_type__point_value"]
 
             if team_id in summary and period <= self.game.current_period:
                 # Add to the recording stats total for this team and period
                 summary[team_id]["periods"][period]["recording_stats"][abbr] = total
                 
+                # Store point value for later use in formulas
+                if "point_values" not in summary[team_id]["periods"][period]:
+                    summary[team_id]["periods"][period]["point_values"] = {}
+                summary[team_id]["periods"][period]["point_values"][abbr] = point_value
+                
                 # For points scoring type, also aggregate to the top level
                 if self.game.sport.scoring_type == Sport.SCORING_TYPES.POINTS:
                     summary[team_id]["recording_stats"][abbr] += total
+                    
+                    # Also store point values at top level
+                    if "point_values" not in summary[team_id]:
+                        summary[team_id]["point_values"] = {}
+                    summary[team_id]["point_values"][abbr] = point_value
 
     def _compute_formula_stats(self, summary):
         # Build dependency graph
@@ -101,7 +112,8 @@ class TeamStatsSummaryService:
             dependency_graph[stat.code] = {
                 'stat': stat,
                 'dependencies': set(component_codes),
-                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2
+                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2,
+                'uses_point_value': stat.formula.uses_point_value
             }
         
         # Get stats in correct processing order
@@ -138,7 +150,7 @@ class TeamStatsSummaryService:
             components = stat.formula.components.all().order_by('order')
             component_codes = [comp.stat_type.code for comp in components]
             is_ratio_stat = stat.formula.is_ratio and len(component_codes) == 2
-            # Only use decimal_places from formula
+            uses_point_value = stat.formula.uses_point_value
             decimal_places = stat.formula.decimal_places
             
             # Process per-period formula stats
@@ -146,8 +158,12 @@ class TeamStatsSummaryService:
                 for period_data in team_data["periods"].values():
                     variables = {}
                     for code in component_codes:
-                        # Get value from either recording or calculated stats
-                        recording_val = period_data["recording_stats"].get(code, 0) or 0
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and "point_values" in period_data and code in period_data["point_values"]:
+                            recording_val = period_data["recording_stats"].get(code, 0) * period_data["point_values"].get(code, 0)
+                        else:
+                            recording_val = period_data["recording_stats"].get(code, 0) or 0
+                            
                         calc_val = period_data["calculated_stats"].get(code, 0) or 0
                         variables[code] = recording_val + calc_val
                     
@@ -172,8 +188,12 @@ class TeamStatsSummaryService:
                 if self.game.sport.scoring_type == Sport.SCORING_TYPES.POINTS:
                     variables = {}
                     for code in component_codes:
-                        # Get value from either recording or calculated stats
-                        recording_val = team_data["recording_stats"].get(code, 0) or 0
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and "point_values" in team_data and code in team_data["point_values"]:
+                            recording_val = team_data["recording_stats"].get(code, 0) * team_data["point_values"].get(code, 0)
+                        else:
+                            recording_val = team_data["recording_stats"].get(code, 0) or 0
+                            
                         calc_val = team_data["calculated_stats"].get(code, 0) or 0
                         variables[code] = recording_val + calc_val
                     
@@ -448,4 +468,3 @@ class TeamStatsSummaryService:
         self._populate_recording_stats(summary)  # First populate recording stats
         self._compute_formula_stats(summary)     # Then compute formula-based stats
         return self._build_response(summary)
-    

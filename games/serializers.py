@@ -75,9 +75,9 @@ class RecordableStatSerializer(serializers.ModelSerializer):
     def get_button_type(self, obj):
         if obj.is_negative:
             return "negative"
-        elif obj.is_counter and obj.point_value > 0:
+        elif obj.is_points and obj.point_value > 0:
             return "made"
-        elif obj.is_counter and obj.point_value < 1:
+        elif obj.is_points and obj.point_value < 1:
             return "miss"
         return "info"
 

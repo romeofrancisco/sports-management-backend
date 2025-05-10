@@ -4,7 +4,6 @@ from games.models import Game, PlayerStat
 from sports.models import Sport, SportStatType
 
 
-
 class TeamStatsComparisonService:
     def __init__(self, game_id):
         self.game = Game.objects.select_related("home_team", "away_team").get(pk=game_id)

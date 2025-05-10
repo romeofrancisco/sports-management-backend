@@ -30,7 +30,10 @@ from .services import (
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
 from collections import defaultdict
+import time
+import logging
 
+logger = logging.getLogger(__name__)
 
 # Custom pagination class specifically for games
 class GamePagination(PageNumberPagination):
@@ -38,10 +41,17 @@ class GamePagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
+# Custom pagination for player stats
+class PlayerStatPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
 
 class PlayerStatViewSet(viewsets.ModelViewSet):
     queryset = PlayerStat.objects.select_related("player__team", "game", "stat_type")
     serializer_class = PlayerStatSerializer
+    pagination_class = PlayerStatPagination
 
     @action(detail=False, methods=["get"])
     def recordable_stats(self, request):
@@ -76,12 +86,29 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         team = request.query_params.get("team")
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
+        
+        # Add for_calculation flag to optimize query based on usage
+        for_calculation = request.query_params.get("for_calculation") == "true"
+        use_raw_sql = request.query_params.get("use_raw_sql") == "true"
+        
+        # Log the start time for performance monitoring
+        start_time = time.time()
+        
         try:
+            # Pass additional flags for performance optimization
             service = PlayerStatsSummaryService(game_id=game_id, team_filter=team)
+            data = service.get_summary(for_calculation=for_calculation, use_raw_sql=use_raw_sql)
+            
+            # Log the time taken to process the request
+            processing_time = time.time() - start_time
+            logger.info(f"Stats summary processed in {processing_time:.2f}s for game {game_id}")
+            
+            return Response(data)
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
-        data = service.get_summary()
-        return Response(data)
+        except Exception as e:
+            logger.error(f"Error processing player stats: {str(e)}")
+            return Response({"error": str(e)}, status=500)
 
     @action(detail=False, methods=["get"])
     def team_stats_summary(self, request):
@@ -198,7 +225,7 @@ class GameViewSet(viewsets.ModelViewSet):
             return self._delete_starting_lineup(game)
 
     def _get_starting_lineup(self, game):
-        """Get the current starting lineup for a game"""
+        """Get the current starting lineup for a game""" 
         return Response(
             {
                 "home_team": StartingLineupSerializer(
@@ -225,7 +252,7 @@ class GameViewSet(viewsets.ModelViewSet):
         stats = (
             PlayerStat.objects.filter(
                 game=game, 
-                stat_type__is_counter=True, 
+                stat_type__is_points=True, 
                 stat_type__point_value__gt=0
             )
             .select_related("player__user", "player__team", "stat_type")
