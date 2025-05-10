@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils.text import slugify
+from django.core.exceptions import ValidationError
 
 
 class Sport(models.Model):
@@ -65,6 +66,9 @@ class Formula(models.Model):
     is_ratio = models.BooleanField(
         default=False, help_text="Is this formula a ratio (e.g., made/attempt)?"
     )
+    uses_point_value = models.BooleanField(
+        default=False, help_text="If True, uses stat_type.point_value in calculations instead of count"
+    )
     decimal_places = models.PositiveSmallIntegerField(
         default=3,
         help_text="Number of decimal places to round the result to"
@@ -90,29 +94,42 @@ class FormulaComponent(models.Model):
 
 
 class SportStatType(models.Model):
-    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    name = models.CharField(max_length=30)
+    class CATEGORY_TYPES(models.TextChoices):
+        SCORING = "scoring", "Scoring"
+        PERFORMANCE = "performance", "Performance"
+        OFFENSIVE = "offensive", "Offensive"
+        DEFENSIVE = "defensive", "Defensive"
+        OTHER = "other", "Other"
+    
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, help_text="The sport this stat type belongs to")
+    name = models.CharField(max_length=30, help_text="Name of the stat type (e.g. 'Field Goal', 'Assists')")
     display_name = models.CharField(
         null=True,
         blank=True,
         max_length=15,
-        help_text="Displayed name for metrics",
+        help_text="Shortened display name for UI elements",
     )
-    code = models.CharField(max_length=20, blank=True, null=True)
-    point_value = models.IntegerField(default=0)
+    code = models.CharField(max_length=20, blank=True, null=True, help_text="Code used in formulas (e.g. 'FG', 'AST')")
+    point_value = models.IntegerField(default=0, help_text="Points awarded for this stat (0 if not a scoring stat)")
+    category = models.CharField(
+        max_length=20, 
+        choices=CATEGORY_TYPES, 
+        default=CATEGORY_TYPES.OTHER,
+        help_text="Category for organizing stats in the UI"
+    )
     
-    is_team_stat = models.BooleanField(default=False)
-    is_player_stat = models.BooleanField(default=False)
+    is_team_stat = models.BooleanField(default=False, help_text="If True, this stat applies to teams")
+    is_player_stat = models.BooleanField(default=False, help_text="If True, this stat applies to players")
     
-    is_team_summary = models.BooleanField(default=False)
-    is_player_summary = models.BooleanField(default=False)
+    is_team_summary = models.BooleanField(default=False, help_text="If True, this stat appears in team summary statistics")
+    is_player_summary = models.BooleanField(default=False, help_text="If True, this stat appears in player summary statistics")
     
-    is_team_comparison = models.BooleanField(default=False)
+    is_team_comparison = models.BooleanField(default=False, help_text="If True, this stat is used when comparing teams")
     
-    is_record = models.BooleanField(default=False)
-    is_counter = models.BooleanField(default=False)
-    is_boxscore = models.BooleanField(default=False)
-    
+    is_record = models.BooleanField(default=False, help_text="If True, this stat can be recorded during games")
+    is_points = models.BooleanField(default=False, help_text="If True, this stat is a scoring stat that contributes points")
+    is_boxscore = models.BooleanField(default=False, help_text="If True, this stat appears in the game boxscore")
+        
     formula = models.ForeignKey(
         Formula,
         null=True,
@@ -120,7 +137,7 @@ class SportStatType(models.Model):
         on_delete=models.SET_NULL,
         help_text="Formula to calculate this stat",
     )
-    is_negative = models.BooleanField(default=False)
+    is_negative = models.BooleanField(default=False, help_text="If True, this stat represents a negative action (like turnovers)")
 
     class Meta:
         ordering = ["name"]
@@ -147,3 +164,46 @@ class Position(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.sport})"
+
+
+class LeaderCategory(models.Model):
+    """
+    Model for defining leader categories in games and seasons
+    Examples: Points, Rebounds, Assists, Blocks, etc.
+    """
+    
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name='leader_categories',
+                             help_text="The sport this leader category belongs to")
+    name = models.CharField(max_length=50, help_text="Name of the leader category")
+    display_order = models.PositiveSmallIntegerField(default=0, 
+                                                  help_text="Order for displaying the category in UI")
+    stat_types = models.ManyToManyField(SportStatType, related_name='leader_categories',
+                                help_text="Stats used to determine leaders (max 4)")    
+    class Meta:
+        ordering = ['display_order', 'name']
+        unique_together = ['sport', 'name']
+        verbose_name = "Leader Category"
+        verbose_name_plural = "Leader Categories"
+        
+    def __str__(self):
+        return f"{self.name} - {self.sport.name}"
+    
+    def clean(self):
+        """Validate that there are at most 4 categories per sport"""
+        categories = LeaderCategory.objects.filter(sport=self.sport)
+        
+        # Exclude self when checking for updates
+        if self.pk:
+            categories = categories.exclude(pk=self.pk)
+        
+        # Allow up to 8 categories per sport now that we don't distinguish between game and season
+        if categories.count() >= 8:
+            raise ValidationError({"leader_category": "Maximum of 8 leader categories per sport allowed."})
+            
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+        
+        # Validate maximum of 4 stat types per leader category
+        if hasattr(self, 'stat_types') and self.stat_types.count() > 4:
+            raise ValidationError("Maximum of 4 stats per leader category allowed.")

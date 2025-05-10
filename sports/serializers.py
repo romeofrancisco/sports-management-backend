@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Sport, Position, SportStatType, Formula, FormulaComponent
+from .models import Sport, Position, SportStatType, Formula, FormulaComponent, LeaderCategory
 from games.models import PlayerStat
 from django.db.models import Count
 
@@ -33,7 +33,7 @@ class FormulaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Formula
-        fields = ['id', 'is_ratio', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
+        fields = ['id', 'is_ratio', 'uses_point_value', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
             'sport': {'write_only': True}  # This will be set via sport_slug
         }
@@ -54,6 +54,7 @@ class FormulaSerializer(serializers.ModelSerializer):
         instance.name = validated_data.get('name', instance.name)
         instance.expression = validated_data.get('expression', instance.expression)
         instance.is_ratio = validated_data.get('is_ratio', instance.is_ratio)
+        instance.uses_point_value = validated_data.get('uses_point_value', instance.uses_point_value)
         instance.decimal_places = validated_data.get('decimal_places', instance.decimal_places)
         instance.sport = validated_data.get('sport', instance.sport)
         instance.save()
@@ -140,4 +141,40 @@ class PositionSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+class LeaderCategorySerializer(serializers.ModelSerializer):
+    sport_name = serializers.ReadOnlyField(source='sport.name')
+    stat_types_count = serializers.SerializerMethodField()
+    stat_types_details = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = LeaderCategory
+        fields = ['id', 'sport', 'sport_name', 'name', 'display_order', 
+                 'stat_types', 'stat_types_count', 'stat_types_details']
+        extra_kwargs = {
+            'stat_types': {'write_only': True},  # Only used for write operations (POST/PUT)
+        }
+    
+    def get_stat_types_count(self, obj):
+        return obj.stat_types.count()
+    
+    def get_stat_types_details(self, obj):
+        return [
+            {
+                'id': stat.id,
+                'name': stat.name,
+                'code': stat.code,
+                'display_name': stat.display_name
+            }
+            for stat in obj.stat_types.all()
+        ]
+    
+    def validate(self, data):
+        # Check maximum of 4 stats per category during update
+        if self.instance and 'stat_types' in self.initial_data:
+            stat_types = self.initial_data.get('stat_types', [])
+            if len(stat_types) > 4:
+                raise serializers.ValidationError({"stat_types": "Maximum of 4 stats per leader category allowed."})
+        
+        return data
 

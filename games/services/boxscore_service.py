@@ -1,5 +1,5 @@
 from collections import defaultdict
-from django.db.models import Count
+from django.db.models import Count, Sum
 from games.models import Game, PlayerStat
 from sports.models import Sport, SportStatType
 from teams.models import Player
@@ -29,13 +29,6 @@ class BoxscoreService:
         # Get codes for different stat types
         self.recording_abbrevs = list(self.recording_stats.values_list("code", flat=True))
         self.formula_abbrevs = list(self.formula_stats.values_list("code", flat=True))
-        
-        # Get scoring stats (stats that have point values)
-        self.scoring_stats = SportStatType.objects.filter(
-            sport=self.game.sport,
-            is_record=True,
-            point_value__gt=0
-        )
 
     def _aggregate_recording_stats(self):
         filters = {
@@ -44,7 +37,7 @@ class BoxscoreService:
         }
         
         # Only include period in grouping for set-based sports
-        group_by = ["player_id", "player__team", "stat_type__code"]
+        group_by = ["player_id", "player__team", "stat_type__code", "stat_type__point_value"]
         if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
             group_by.append("period")
             
@@ -64,6 +57,7 @@ class BoxscoreService:
                     "recording_stats": dict.fromkeys(self.recording_abbrevs, 0),
                     "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
                     "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
+                    "point_values": {},  # Store point values for each stat
                 }
                 
                 player_summary = {
@@ -80,6 +74,7 @@ class BoxscoreService:
                             "recording_stats": dict.fromkeys(self.recording_abbrevs, 0),
                             "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
                             "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
+                            "point_values": {},  # Store point values for each stat
                         }
                         for p in range(1, self.game.current_period + 1)
                     }
@@ -95,6 +90,7 @@ class BoxscoreService:
             team_id = rec["player__team"]
             abbr = rec["stat_type__code"]
             cnt = rec["count"]
+            point_value = rec["stat_type__point_value"]
             
             if pid not in summary:
                 continue
@@ -103,8 +99,10 @@ class BoxscoreService:
                 per = rec["period"]
                 if per <= self.game.current_period:
                     summary[pid]["periods"][per]["recording_stats"][abbr] = cnt
+                    summary[pid]["periods"][per]["point_values"][abbr] = point_value
             else:
                 summary[pid]["recording_stats"][abbr] = cnt
+                summary[pid]["point_values"][abbr] = point_value
 
     def _compute_formula_stats(self, summary):
         # Build dependency graph
@@ -118,7 +116,8 @@ class BoxscoreService:
             dependency_graph[stat.code] = {
                 'stat': stat,
                 'dependencies': set(component_codes),
-                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2
+                'is_ratio': stat.formula.is_ratio and len(component_codes) == 2,
+                'uses_point_value': stat.formula.uses_point_value
             }
         
         # Get stats in correct processing order (dependencies first)
@@ -155,7 +154,7 @@ class BoxscoreService:
             components = stat.formula.components.all().order_by('order')
             component_codes = [comp.stat_type.code for comp in components]
             is_ratio_stat = stat.formula.is_ratio and len(component_codes) == 2
-            # Only use decimal_places from formula
+            uses_point_value = stat.formula.uses_point_value
             decimal_places = stat.formula.decimal_places
             
             for data in summary.values():
@@ -163,7 +162,12 @@ class BoxscoreService:
                     for pd in data["periods"].values():
                         variables = {}
                         for code in component_codes:
-                            recording_val = pd["recording_stats"].get(code, 0) or 0
+                            # Use point value instead of count if the formula requires it
+                            if uses_point_value and code in pd["point_values"]:
+                                recording_val = pd["recording_stats"].get(code, 0) * pd["point_values"].get(code, 0)
+                            else:
+                                recording_val = pd["recording_stats"].get(code, 0) or 0
+                                
                             calc_val = pd["calculated_stats"].get(code, 0) or 0
                             variables[code] = recording_val + calc_val
                         
@@ -186,7 +190,12 @@ class BoxscoreService:
                 else:
                     variables = {}
                     for code in component_codes:
-                        recording_val = data["recording_stats"].get(code, 0) or 0
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and code in data["point_values"]:
+                            recording_val = data["recording_stats"].get(code, 0) * data["point_values"].get(code, 0)
+                        else:
+                            recording_val = data["recording_stats"].get(code, 0) or 0
+                            
                         calc_val = data["calculated_stats"].get(code, 0) or 0
                         variables[code] = recording_val + calc_val
                     
@@ -214,12 +223,6 @@ class BoxscoreService:
             for stat in self.boxscore_stats
         }
         
-        # Create mapping of stat codes to point values for scoring calculation
-        scoring_stat_points = {
-            stat.code: stat.point_value
-            for stat in self.scoring_stats
-        }
-        
         # Create a lookup for ratio stats and their components
         ratio_component_lookup = {}
         for stat in self.formula_stats.filter(formula__is_ratio=True):
@@ -232,10 +235,13 @@ class BoxscoreService:
         
         # Create a lookup for derived stats and their required components
         formula_component_map = {}
+        formula_point_value_map = {}
         for stat in self.formula_stats:
-            if stat.formula and not stat.formula.is_ratio:
-                components = list(stat.formula.components.all().order_by('order'))
-                formula_component_map[stat.code] = [comp.stat_type.code for comp in components]
+            if stat.formula:
+                formula_point_value_map[stat.code] = stat.formula.uses_point_value
+                if not stat.formula.is_ratio:
+                    components = list(stat.formula.components.all().order_by('order'))
+                    formula_component_map[stat.code] = [comp.stat_type.code for comp in components]
         
         # Organize players by team and prepare for team totals
         home_team_players = []
@@ -248,8 +254,8 @@ class BoxscoreService:
         away_team_ratio_makes_attempts = defaultdict(lambda: {'makes': 0, 'attempts': 0})
         home_team_formula_values = defaultdict(int)
         away_team_formula_values = defaultdict(int)
-        home_team_total_points = 0
-        away_team_total_points = 0
+        home_team_point_values = {}
+        away_team_point_values = {}
         
         # Process player stats and collect team totals
         for pid, data in summary.items():
@@ -265,22 +271,18 @@ class BoxscoreService:
             team_recording_totals = home_team_recording_totals if is_home_team else away_team_recording_totals
             team_ratio_makes_attempts = home_team_ratio_makes_attempts if is_home_team else away_team_ratio_makes_attempts
             team_formula_values = home_team_formula_values if is_home_team else away_team_formula_values
+            team_point_values = home_team_point_values if is_home_team else away_team_point_values
 
             # For point-based sports, calculate total stats directly
             if self.game.sport.scoring_type != Sport.SCORING_TYPES.SETS:
                 total_stats = {}
-                total_points = 0
                 combined_totals = defaultdict(lambda: {'value': 0, 'makes': 0, 'attempts': 0})
                 
-                # Calculate total points from ALL scoring stats, regardless of boxscore flag
+                # Process recording stats - only include in display stats if marked as boxscore
                 for code, value in data["recording_stats"].items():
-                    if code in scoring_stat_points:
-                        points = value * scoring_stat_points[code]
-                        total_points += points
-                        if is_home_team:
-                            home_team_total_points += points
-                        else:
-                            away_team_total_points += points
+                    # Store point value in team totals for later formula calculations
+                    if code in data["point_values"]:
+                        team_point_values[code] = data["point_values"][code]
                         
                     # Only include in display stats if marked as boxscore
                     if code in stat_display_names:
@@ -320,7 +322,6 @@ class BoxscoreService:
                             team_formula_values[code] += value or 0
 
                 response_entry["total_stats"] = total_stats
-                response_entry["total_points"] = total_points
                 response_entry["stats"] = [
                     {
                         "name": stat,
@@ -337,24 +338,22 @@ class BoxscoreService:
                 ratio_makes_attempts = defaultdict(lambda: {'makes': 0, 'attempts': 0})
                 formula_values = defaultdict(int)
                 periods_out = []
-                total_points = 0
+                point_values = {}
 
                 for period in range(1, self.game.current_period + 1):
                     period_data = data["periods"][period]
                     period_stats = {}
-                    period_points = 0
                     
-                    # Calculate period points from ALL scoring stats
+                    # Collect point values for stats in this period
+                    for code, pv in period_data["point_values"].items():
+                        point_values[code] = pv
+                        if is_home_team:
+                            home_team_point_values[code] = pv
+                        else:
+                            away_team_point_values[code] = pv
+                                        
+                    # Collect all recording stats for period and totals
                     for code, value in period_data["recording_stats"].items():
-                        if code in scoring_stat_points and value:
-                            points = value * scoring_stat_points[code]
-                            period_points += points
-                            if is_home_team:
-                                home_team_total_points += points
-                            else:
-                                away_team_total_points += points
-                        
-                        # Also collect raw stats for totals calculation
                         recording_totals[code] += value or 0
                         team_recording_totals[code] += value or 0
                     
@@ -405,12 +404,8 @@ class BoxscoreService:
                     
                     periods_out.append({
                         "period": period,
-                        "stats": period_stats,
-                        "points": period_points
+                        "stats": period_stats
                     })
-                    
-                    # Add to total points
-                    total_points += period_points
 
                 # Now calculate the total stats correctly
                 totals = {}
@@ -445,11 +440,16 @@ class BoxscoreService:
                         
                         variables = {}
                         all_components_found = True
+                        uses_point_value = stat.formula.uses_point_value
                         
                         # Build variables for formula calculation
                         for comp_code in components:
                             if comp_code in recording_totals:
-                                variables[comp_code] = recording_totals[comp_code]
+                                # Use point value instead of count if the formula requires it
+                                if uses_point_value and comp_code in point_values:
+                                    variables[comp_code] = recording_totals[comp_code] * point_values[comp_code]
+                                else:
+                                    variables[comp_code] = recording_totals[comp_code]
                             elif comp_code in formula_values:
                                 variables[comp_code] = formula_values[comp_code]
                             elif comp_code in ratio_component_lookup:
@@ -475,7 +475,6 @@ class BoxscoreService:
 
                 response_entry["periods"] = periods_out
                 response_entry["total_stats"] = totals
-                response_entry["total_points"] = total_points
             
             # Add to appropriate team list
             if is_home_team:
@@ -516,11 +515,16 @@ class BoxscoreService:
                 
                 variables = {}
                 all_components_found = True
+                uses_point_value = stat.formula.uses_point_value
                 
                 # Build variables for formula calculation
                 for comp_code in components:
                     if comp_code in home_team_recording_totals:
-                        variables[comp_code] = home_team_recording_totals[comp_code]
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and comp_code in home_team_point_values:
+                            variables[comp_code] = home_team_recording_totals[comp_code] * home_team_point_values[comp_code]
+                        else:
+                            variables[comp_code] = home_team_recording_totals[comp_code]
                     elif comp_code in home_team_formula_values:
                         variables[comp_code] = home_team_formula_values[comp_code]
                     elif comp_code in ratio_component_lookup:
@@ -582,11 +586,16 @@ class BoxscoreService:
                 
                 variables = {}
                 all_components_found = True
+                uses_point_value = stat.formula.uses_point_value
                 
                 # Build variables for formula calculation
                 for comp_code in components:
                     if comp_code in away_team_recording_totals:
-                        variables[comp_code] = away_team_recording_totals[comp_code]
+                        # Use point value instead of count if the formula requires it
+                        if uses_point_value and comp_code in away_team_point_values:
+                            variables[comp_code] = away_team_recording_totals[comp_code] * away_team_point_values[comp_code]
+                        else:
+                            variables[comp_code] = away_team_recording_totals[comp_code]
                     elif comp_code in away_team_formula_values:
                         variables[comp_code] = away_team_formula_values[comp_code]
                     elif comp_code in ratio_component_lookup:
@@ -621,8 +630,7 @@ class BoxscoreService:
             "name": "TEAM",
             "jersey_number": None,
             "team_id": self.game.home_team.id,
-            "total_stats": home_team_totals,
-            "total_points": home_team_total_points
+            "total_stats": home_team_totals
         }
         
         # Create a team summary player for the away team
@@ -631,8 +639,7 @@ class BoxscoreService:
             "name": "TEAM",
             "jersey_number": None,
             "team_id": self.game.away_team.id,
-            "total_stats": away_team_totals,
-            "total_points": away_team_total_points
+            "total_stats": away_team_totals
         }
         
         # Add team totals to the player lists
