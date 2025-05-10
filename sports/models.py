@@ -178,7 +178,16 @@ class LeaderCategory(models.Model):
     display_order = models.PositiveSmallIntegerField(default=0, 
                                                   help_text="Order for displaying the category in UI")
     stat_types = models.ManyToManyField(SportStatType, related_name='leader_categories',
-                                help_text="Stats used to determine leaders (max 4)")    
+                                help_text="Stats used to determine leaders (max 4)")
+    primary_stat = models.ForeignKey(
+        SportStatType, 
+        on_delete=models.CASCADE, 
+        related_name='primary_for_categories',
+        null=True,
+        blank=True,
+        help_text="The primary stat used for ordering leaders in this category"
+    )
+    
     class Meta:
         ordering = ['display_order', 'name']
         unique_together = ['sport', 'name']
@@ -189,21 +198,20 @@ class LeaderCategory(models.Model):
         return f"{self.name} - {self.sport.name}"
     
     def clean(self):
-        """Validate that there are at most 4 categories per sport"""
+        """Validate that there are at most 8 categories per sport"""
         categories = LeaderCategory.objects.filter(sport=self.sport)
         
         # Exclude self when checking for updates
         if self.pk:
             categories = categories.exclude(pk=self.pk)
         
-        # Allow up to 8 categories per sport now that we don't distinguish between game and season
+        # Allow up to 8 categories per sport
         if categories.count() >= 8:
             raise ValidationError({"leader_category": "Maximum of 8 leader categories per sport allowed."})
-            
+    
     def save(self, *args, **kwargs):
         self.clean()
         super().save(*args, **kwargs)
         
-        # Validate maximum of 4 stat types per leader category
-        if hasattr(self, 'stat_types') and self.stat_types.count() > 4:
-            raise ValidationError("Maximum of 4 stats per leader category allowed.")
+        # We'll handle the stat_types validation in the serializer instead
+        # This avoids issues with M2M relationships not being set yet during save()
