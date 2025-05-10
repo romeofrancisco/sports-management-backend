@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Sport, Position, SportStatType, Formula, FormulaComponent, LeaderCategory
+from .models import (
+    Sport,
+    Position,
+    SportStatType,
+    Formula,
+    FormulaComponent,
+    LeaderCategory,
+)
 
 admin.site.register(Sport)
 admin.site.register(Position)
@@ -9,25 +16,46 @@ class FormulaComponentInline(admin.TabularInline):
     model = FormulaComponent
     extra = 1
 
+
 @admin.register(Formula)
 class FormulaAdmin(admin.ModelAdmin):
     inlines = [FormulaComponentInline]
-    list_display = ('name', 'sport', 'expression')
-    list_filter = ('sport',)
+    list_display = ("name", "sport", "expression")
+    list_filter = ("sport",)
+
 
 @admin.register(SportStatType)
 class SportStatTypeAdmin(admin.ModelAdmin):
-    list_display = ('name', 'display_name', 'code', 'is_record', 'is_points', 'is_boxscore', 'is_player_summary', 'is_team_summary', 'get_formula_name')
-    list_filter = ('sport', 'is_record', 'is_points', 'is_boxscore', 'is_player_summary', 'is_team_summary')
+    list_display = (
+        "name",
+        "display_name",
+        "code",
+        "is_record",
+        "is_points",
+        "is_boxscore",
+        "is_player_summary",
+        "is_team_summary",
+        "get_formula_name",
+    )
+    list_filter = (
+        "sport",
+        "is_record",
+        "is_points",
+        "is_boxscore",
+        "is_player_summary",
+        "is_team_summary",
+    )
 
     def get_formula_name(self, obj):
-        return obj.formula.expression if obj.formula else '-'
-    get_formula_name.short_description = 'Formula'
+        return obj.formula.expression if obj.formula else "-"
+
+    get_formula_name.short_description = "Formula"
+
 
 @admin.register(LeaderCategory)
 class LeaderCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "sport", "leader_type", "display_order")
-    list_filter = ("sport", "leader_type")
+    list_display = ("name", "sport", "display_order")
+    list_filter = ("sport",)
     search_fields = ("name",)
     ordering = ("sport", "display_order", "name")
-    filter_horizontal = ('stat_types',)
+    filter_horizontal = ("stat_types",)

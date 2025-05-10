@@ -33,7 +33,7 @@ class FormulaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Formula
-        fields = ['id', 'is_ratio', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
+        fields = ['id', 'is_ratio', 'uses_point_value', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
             'sport': {'write_only': True}  # This will be set via sport_slug
         }
@@ -54,6 +54,7 @@ class FormulaSerializer(serializers.ModelSerializer):
         instance.name = validated_data.get('name', instance.name)
         instance.expression = validated_data.get('expression', instance.expression)
         instance.is_ratio = validated_data.get('is_ratio', instance.is_ratio)
+        instance.uses_point_value = validated_data.get('uses_point_value', instance.uses_point_value)
         instance.decimal_places = validated_data.get('decimal_places', instance.decimal_places)
         instance.sport = validated_data.get('sport', instance.sport)
         instance.save()
@@ -149,7 +150,7 @@ class LeaderCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaderCategory
         fields = ['id', 'sport', 'sport_name', 'name', 'display_order', 
-                  'leader_type', 'stat_types', 'stat_types_count', 'stat_types_details']
+                 'stat_types', 'stat_types_count', 'stat_types_details']
         extra_kwargs = {
             'stat_types': {'write_only': True},  # Only used for write operations (POST/PUT)
         }
