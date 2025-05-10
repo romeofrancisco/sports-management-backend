@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Sport, Position, SportStatType, Formula, FormulaComponent
+from .models import Sport, Position, SportStatType, Formula, FormulaComponent, LeaderCategory
 
 admin.site.register(Sport)
 admin.site.register(Position)
@@ -17,9 +17,17 @@ class FormulaAdmin(admin.ModelAdmin):
 
 @admin.register(SportStatType)
 class SportStatTypeAdmin(admin.ModelAdmin):
-    list_display = ('name', 'display_name', 'code', 'is_record', 'is_counter', 'is_boxscore', 'is_player_summary', 'is_team_summary', 'get_formula_name')
-    list_filter = ('sport', 'is_record', 'is_counter', 'is_boxscore', 'is_player_summary', 'is_team_summary')
+    list_display = ('name', 'display_name', 'code', 'is_record', 'is_points', 'is_boxscore', 'is_player_summary', 'is_team_summary', 'get_formula_name')
+    list_filter = ('sport', 'is_record', 'is_points', 'is_boxscore', 'is_player_summary', 'is_team_summary')
 
     def get_formula_name(self, obj):
         return obj.formula.expression if obj.formula else '-'
     get_formula_name.short_description = 'Formula'
+
+@admin.register(LeaderCategory)
+class LeaderCategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "sport", "leader_type", "display_order")
+    list_filter = ("sport", "leader_type")
+    search_fields = ("name",)
+    ordering = ("sport", "display_order", "name")
+    filter_horizontal = ('stat_types',)

@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils.text import slugify
+from django.core.exceptions import ValidationError
 
 
 class Sport(models.Model):
@@ -97,16 +98,16 @@ class SportStatType(models.Model):
         DEFENSIVE = "defensive", "Defensive"
         OTHER = "other", "Other"
     
-    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
-    name = models.CharField(max_length=30)
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, help_text="The sport this stat type belongs to")
+    name = models.CharField(max_length=30, help_text="Name of the stat type (e.g. 'Field Goal', 'Assists')")
     display_name = models.CharField(
         null=True,
         blank=True,
         max_length=15,
-        help_text="Displayed name for metrics",
+        help_text="Shortened display name for UI elements",
     )
-    code = models.CharField(max_length=20, blank=True, null=True)
-    point_value = models.IntegerField(default=0)
+    code = models.CharField(max_length=20, blank=True, null=True, help_text="Code used in formulas (e.g. 'FG', 'AST')")
+    point_value = models.IntegerField(default=0, help_text="Points awarded for this stat (0 if not a scoring stat)")
     category = models.CharField(
         max_length=20, 
         choices=CATEGORY_TYPES, 
@@ -114,17 +115,17 @@ class SportStatType(models.Model):
         help_text="Category for organizing stats in the UI"
     )
     
-    is_team_stat = models.BooleanField(default=False)
-    is_player_stat = models.BooleanField(default=False)
+    is_team_stat = models.BooleanField(default=False, help_text="If True, this stat applies to teams")
+    is_player_stat = models.BooleanField(default=False, help_text="If True, this stat applies to players")
     
-    is_team_summary = models.BooleanField(default=False)
-    is_player_summary = models.BooleanField(default=False)
+    is_team_summary = models.BooleanField(default=False, help_text="If True, this stat appears in team summary statistics")
+    is_player_summary = models.BooleanField(default=False, help_text="If True, this stat appears in player summary statistics")
     
-    is_team_comparison = models.BooleanField(default=False)
+    is_team_comparison = models.BooleanField(default=False, help_text="If True, this stat is used when comparing teams")
     
-    is_record = models.BooleanField(default=False)
-    is_counter = models.BooleanField(default=False)
-    is_boxscore = models.BooleanField(default=False)
+    is_record = models.BooleanField(default=False, help_text="If True, this stat can be recorded during games")
+    is_points = models.BooleanField(default=False, help_text="If True, this stat is a scoring stat that contributes points")
+    is_boxscore = models.BooleanField(default=False, help_text="If True, this stat appears in the game boxscore")
     
     formula = models.ForeignKey(
         Formula,
@@ -133,7 +134,7 @@ class SportStatType(models.Model):
         on_delete=models.SET_NULL,
         help_text="Formula to calculate this stat",
     )
-    is_negative = models.BooleanField(default=False)
+    is_negative = models.BooleanField(default=False, help_text="If True, this stat represents a negative action (like turnovers)")
 
     class Meta:
         ordering = ["name"]
@@ -160,3 +161,64 @@ class Position(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.sport})"
+
+
+class LeaderCategory(models.Model):
+    """
+    Model for defining leader categories in games and seasons
+    Examples: Points, Rebounds, Assists, Blocks, etc.
+    """
+    LEADER_TYPES = [
+        ('game', 'Game Leader'),
+        ('season', 'Season Leader'),
+        ('both', 'Both Game & Season'),
+    ]
+    
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name='leader_categories',
+                             help_text="The sport this leader category belongs to")
+    name = models.CharField(max_length=50, help_text="Name of the leader category")
+    display_order = models.PositiveSmallIntegerField(default=0, 
+                                                  help_text="Order for displaying the category in UI")
+    stat_types = models.ManyToManyField(SportStatType, related_name='leader_categories',
+                                help_text="Stats used to determine leaders (max 4)")
+    leader_type = models.CharField(max_length=10, choices=LEADER_TYPES, default='both',
+                                 help_text="Whether this applies to game leaders, season leaders, or both")
+    
+    class Meta:
+        ordering = ['display_order', 'name']
+        unique_together = ['sport', 'name']
+        verbose_name = "Leader Category"
+        verbose_name_plural = "Leader Categories"
+        
+    def __str__(self):
+        return f"{self.name} ({self.get_leader_type_display()}) - {self.sport.name}"
+    
+    def clean(self):
+        """Validate that there are at most 4 categories per sport per leader type"""
+        game_categories = LeaderCategory.objects.filter(
+            sport=self.sport, 
+            leader_type__in=['game', 'both']
+        )
+        season_categories = LeaderCategory.objects.filter(
+            sport=self.sport, 
+            leader_type__in=['season', 'both']
+        )
+        
+        # Exclude self when checking for updates
+        if self.pk:
+            game_categories = game_categories.exclude(pk=self.pk)
+            season_categories = season_categories.exclude(pk=self.pk)
+        
+        if self.leader_type in ['game', 'both'] and game_categories.count() >= 4:
+            raise ValidationError({"leader_type": "Maximum of 4 game leader categories per sport allowed."})
+            
+        if self.leader_type in ['season', 'both'] and season_categories.count() >= 4:
+            raise ValidationError({"leader_type": "Maximum of 4 season leader categories per sport allowed."})
+            
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+        
+        # Validate maximum of 4 stat types per leader category
+        if hasattr(self, 'stat_types') and self.stat_types.count() > 4:
+            raise ValidationError("Maximum of 4 stats per leader category allowed.")

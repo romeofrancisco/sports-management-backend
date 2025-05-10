@@ -1,16 +1,20 @@
 from rest_framework.viewsets import ModelViewSet
-from .models import Sport, Position, SportStatType, Formula
+from .models import Sport, Position, SportStatType, Formula, LeaderCategory
 from .serializers import (
     SportSerializer,
     PositionSerializer,
     SportStatTypeSerializer,
     FormulaSerializer,
+    LeaderCategorySerializer,
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import SportStatTypeFilter, SportPositionFilter
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from rest_framework.filters import SearchFilter
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from django.db.models import Count
 
 
 class SportsViewSet(ModelViewSet):
@@ -76,3 +80,54 @@ class PositionViewSet(ModelViewSet):
     queryset = Position.objects.select_related("sport").all()
     filter_backends = [DjangoFilterBackend]
     filterset_class = SportPositionFilter
+
+
+class LeaderCategoryViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for managing game and season leader categories.
+    """
+    queryset = LeaderCategory.objects.all()
+    serializer_class = LeaderCategorySerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        sport_slug = self.request.query_params.get('sport')
+        leader_type = self.request.query_params.get('leader_type')
+        
+        if sport_slug:
+            queryset = queryset.filter(sport__slug=sport_slug)
+        
+        if leader_type:
+            if leader_type == 'game':
+                queryset = queryset.filter(leader_type__in=['game', 'both'])
+            elif leader_type == 'season':
+                queryset = queryset.filter(leader_type__in=['season', 'both'])
+                
+        return queryset.select_related('sport').prefetch_related('stat_types')
+    
+    @action(detail=False, methods=['get'])
+    def by_sport(self, request):
+        """Get leader categories grouped by sport"""
+        sport_slug = request.query_params.get('sport')
+        leader_type = request.query_params.get('leader_type', 'both')
+        
+        if not sport_slug:
+            return Response({"error": "Sport slug is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        sport = get_object_or_404(Sport, slug=sport_slug)
+        
+        if leader_type == 'game':
+            queryset = self.queryset.filter(
+                sport=sport, 
+                leader_type__in=['game', 'both']
+            )
+        elif leader_type == 'season':
+            queryset = self.queryset.filter(
+                sport=sport, 
+                leader_type__in=['season', 'both']
+            )
+        else:
+            queryset = self.queryset.filter(sport=sport)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
