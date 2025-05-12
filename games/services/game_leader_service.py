@@ -6,9 +6,10 @@ from teams.models import Player
 
 
 class GameLeaderService:
-    def __init__(self, game_id):
+    def __init__(self, game_id, request=None):
         self.game = Game.objects.select_related("home_team", "away_team", "sport").get(pk=game_id)
         self.teams = [self.game.home_team, self.game.away_team]
+        self.request = request
         
         # Get all leader categories for this sport
         self.leader_categories = LeaderCategory.objects.filter(
@@ -67,13 +68,21 @@ class GameLeaderService:
                     "calculated_stats": dict.fromkeys(self.formula_abbrevs, 0),
                     "ratio_stats": dict.fromkeys(self.formula_abbrevs, None),
                     "point_values": {},  # Store point values for each stat
-                }
+                }                # Get player profile URL
+                profile_url = None
+                if self.request and player.user.profile:
+                    profile_url = self.request.build_absolute_uri(player.user.profile.url)
+                
+                # Create short name like "FirstName L."
+                short_name = f"{player.user.first_name[0]}. {player.user.last_name}"
                 
                 player_summary = {
                     "player_id": player.user.id,
                     "player_name": player.user.get_full_name(),
+                    "short_name": short_name,
                     "jersey_number": player.jersey_number,
                     "team_id": player.team.id,
+                    "profile_url": profile_url,
                 }
                 
                 # Only include periods for set-based sports
@@ -508,9 +517,7 @@ class GameLeaderService:
                             else:
                                 recording_val = away_leader["recording_stats"].get(code, 0) or 0
                                 calc_val = away_leader["calculated_stats"].get(code, 0) or 0
-                                away_leader_stats[code] = str(recording_val + calc_val)
-
-                # Add the leader to the leaders list
+                                away_leader_stats[code] = str(recording_val + calc_val)                # Add the leader to the leaders list
                 leaders.append({
                     "category": category_name,
                     "category_id": category.id,
@@ -521,17 +528,22 @@ class GameLeaderService:
                             "display_name": stat.display_name or stat.name,
                         } 
                         for stat in category_stats
-                    ],
-                    "home_team": {
+                    ],                    "home_team": {
                         "player_id": home_leader["player_id"],
                         "player_name": home_leader["player_name"],
+                        "short_name": home_leader["short_name"],
                         "jersey_number": home_leader["jersey_number"],
+                        "team_abbreviation": self.game.home_team.abbreviation,
+                        "profile": home_leader.get("profile_url"),
                         "stats": home_leader_stats
                     },
                     "away_team": {
                         "player_id": away_leader["player_id"],
                         "player_name": away_leader["player_name"],
+                        "short_name": away_leader["short_name"],
                         "jersey_number": away_leader["jersey_number"],
+                        "team_abbreviation": self.game.away_team.abbreviation,
+                        "profile": away_leader.get("profile_url"),
                         "stats": away_leader_stats
                     }
                 })
@@ -549,10 +561,12 @@ class GameLeaderService:
             "home_team": {
                 "team_id": self.game.home_team.id,
                 "team_name": self.game.home_team.name,
+                "team_abbreviation": self.game.home_team.abbreviation,
             },
             "away_team": {
                 "team_id": self.game.away_team.id,
                 "team_name": self.game.away_team.name,
+                "team_abbreviation": self.game.away_team.abbreviation,
             },
             "leaders": leaders
         }

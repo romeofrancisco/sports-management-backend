@@ -162,7 +162,7 @@ class GameViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_class = GameFilter
     pagination_class = GamePagination
-
+    
     def perform_create(self, serializer):
         serializer.save(creator=self.request.user)
         
@@ -171,7 +171,7 @@ class GameViewSet(viewsets.ModelViewSet):
         """Get the top players from each team for each leader category"""
         game = self.get_object()
         try:
-            service = GameLeaderService(game_id=game.id)
+            service = GameLeaderService(game_id=game.id, request=request)
             data = service.get_game_leaders()
             return Response(data)
         except Exception as e:

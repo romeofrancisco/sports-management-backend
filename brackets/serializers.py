@@ -52,11 +52,15 @@ class BracketSerializer(serializers.ModelSerializer):
     season_name = serializers.CharField(source="season.name", read_only=True)
     league = serializers.SerializerMethodField()
     league_name = serializers.CharField(source="season.league.name", read_only=True)
+    team_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Bracket
-        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'elimination_type', 'winner', 'is_complete', 'created_at', 'updated_at', 'rounds']
-        read_only_fields = ["winner", "is_complete"]
-        
+        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'team_count', 'elimination_type', 'winner', 'is_complete', 'created_at', 'updated_at', 'rounds']
+        read_only_fields = ["winner", "team_count", "is_complete"]
+
     def get_league(self, obj):
         return obj.season.league.id
+    
+    def get_team_count(self, obj):
+        return obj.team_count()

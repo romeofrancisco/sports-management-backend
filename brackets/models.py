@@ -17,6 +17,10 @@ class Bracket(models.Model):
 
     def __str__(self):
         return f"{self.season.league.sport} - {self.season} ({self.elimination_type})"
+    
+    def team_count(self):
+        """Return the number of teams in the bracket."""
+        return self.season.teams.count()
  
 class BracketRound(models.Model):
     bracket = models.ForeignKey(Bracket, on_delete=models.CASCADE, related_name="rounds")
