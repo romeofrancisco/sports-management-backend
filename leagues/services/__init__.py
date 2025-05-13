@@ -6,6 +6,7 @@ from .season_games_service import SeasonGamesService
 from .season_teams_service import SeasonTeamsService
 from .team_form_service import TeamFormService
 from .league_statistics_service import LeagueStatisticsService
+from .season_leader_service import SeasonLeaderService
 
 __all__ = [
     'TeamPerformanceService',
@@ -16,4 +17,5 @@ __all__ = [
     'SeasonTeamsService',
     'TeamFormService',
     'LeagueStatisticsService',
+    'SeasonLeaderService',
 ]
