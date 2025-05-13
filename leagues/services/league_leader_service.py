@@ -3,22 +3,29 @@ from django.db.models import Count, Sum, F, Q
 from games.models import Game, PlayerStat
 from sports.models import Sport, SportStatType, LeaderCategory
 from teams.models import Player
-from leagues.models import Season
+from leagues.models import League, Season
 from decimal import Decimal
 
 
-class SeasonLeaderService:
-    def __init__(self, season_id, request=None):
-        self.season = Season.objects.select_related("league", "league__sport").get(pk=season_id)
-        self.sport = self.season.league.sport
+class LeagueLeaderService:
+    """
+    Service to aggregate player statistics across all seasons in a league
+    to determine overall league leaders in different statistical categories.
+    """
+    def __init__(self, league_id, request=None):
+        self.league = League.objects.select_related("sport").get(pk=league_id)
+        self.sport = self.league.sport
         self.request = request
         
-        # Get teams in this season
-        self.teams = list(self.season.teams.all())
+        # Get all seasons in this league
+        self.seasons = Season.objects.filter(league=self.league)
         
-        # Get all games in this season that are completed
+        # Get teams across all seasons in this league
+        self.teams = list(set().union(*[season.teams.all() for season in self.seasons]))
+        
+        # Get all completed games across all seasons
         self.games = Game.objects.filter(
-            season=self.season,
+            season__in=self.seasons,
             status=Game.Status.COMPLETED
         ).select_related("home_team", "away_team")
           # Get all leader categories for this sport
@@ -50,7 +57,7 @@ class SeasonLeaderService:
         self.formula_abbrevs = list(self.formula_stats.values_list("code", flat=True))
 
     def _aggregate_recording_stats(self):
-        """Aggregate all recording stats for players in this season's games"""
+        """Aggregate all recording stats for players across all seasons in the league"""
         filters = {
             "game__in": self.games,
             "stat_type__in": self.recording_stats,
@@ -73,7 +80,7 @@ class SeasonLeaderService:
         """Build initial data structure to store stats for all players"""
         summary = {}
         
-        # Get all players who participated in any game in this season
+        # Get all players who participated in any game across all seasons
         players = Player.objects.filter(
             Q(team__home_games__in=self.games) | Q(team__away_games__in=self.games)
         ).distinct().select_related("user", "team")
@@ -89,7 +96,7 @@ class SeasonLeaderService:
                 "point_values": {},  # Store point values for each stat
             }
             
-            # Count games played by checking StartingLineup and PlayerStat
+            # Count games played by checking StartingLineup and PlayerStat across all seasons
             games_played = StartingLineup.objects.filter(
                 game__in=self.games,
                 player=player
@@ -289,7 +296,7 @@ class SeasonLeaderService:
                             data["calculated_stats"][stat.code] = 0
 
     def _find_leaders(self, summary):
-        """Find top 5 players across all teams for each leader category"""
+        """Find top 5 players across all seasons for each leader category"""
         # Get a flat list of all players
         all_players = list(summary.values())
         
@@ -311,7 +318,7 @@ class SeasonLeaderService:
             
             # Calculate stats for each player
             for player in all_players:
-                # For set-based sports, calculate average across periods
+                # For set-based sports, calculate total across all periods
                 if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
                     total_value = 0
                     for period_data in player["periods"].values():
@@ -359,7 +366,8 @@ class SeasonLeaderService:
             top_players = player_stats[:5]
             
             # Only include categories with leaders
-            if top_players:                # Get all stats that belong to this leader category
+            if top_players:
+                # Get all stats that belong to this leader category
                 category_stats = list(category.stat_types.all())
                 
                 # Rearrange stats to ensure primary stat is first
@@ -386,10 +394,11 @@ class SeasonLeaderService:
                     ],
                     "leaders": []
                 }
-                  # Add each top player
+                
+                # Add each top player
                 for leader_data in top_players:
                     player = leader_data["player"]
-                    leader_stats = {}  # Use OrderedDict if order preservation is critical
+                    leader_stats = {}
                     
                     # Add stats for this leader (in the same order as category_stats, with primary stat first)
                     for stat in category_stats:
@@ -455,19 +464,18 @@ class SeasonLeaderService:
         
         return leaders
 
-    def get_season_leaders(self):
-        """Main method to get season leaders"""
+    def get_league_leaders(self):
+        """Main method to get league leaders across all seasons"""
         summary = self._build_initial_summary()
         self._populate_recording_stats(summary)  # First populate recording stats
         self._compute_formula_stats(summary)     # Then compute formula-based stats
         leaders = self._find_leaders(summary)
         
         return {
-            "season_id": self.season.id,
-            "season_name": str(self.season),
-            "league_id": self.season.league.id,
-            "league_name": self.season.league.name,
+            "league_id": self.league.id,
+            "league_name": self.league.name,
             "sport": self.sport.name,
+            "seasons_count": self.seasons.count(),
             "teams": [
                 {
                     "team_id": team.id,

@@ -297,22 +297,22 @@ class GameViewSet(viewsets.ModelViewSet):
                 suffix = ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
             return f"{n}{suffix}"
 
-        # Get actual periods from stats
-        stat_periods = sorted({stat.period for stat in stats})
+        # Get actual periods from stats        # Get all stats to determine periods, not just the scoring ones
+        all_stats = PlayerStat.objects.filter(game=game).values_list('period', flat=True).distinct()
+        stat_periods = sorted(all_stats) if all_stats else [1]
         first_period = min(stat_periods) if stat_periods else 1
         last_period = max(stat_periods) if stat_periods else 1
 
         if scoring_type == "sets":
             sets = game.sets.all().order_by("period")
-            for s in sets:
-                periods.append({
+            for s in sets:                periods.append({
                     "number": s.period,
                     "label": format_period_label(s.period, game.sport),
                     "home_score": s.home_team_score,
                     "away_score": s.away_team_score,
                     "winner": s.winner_id,
                     "completed": True,
-                    "events_count": stats.filter(period=s.period).count(),
+                    "events_count": PlayerStat.objects.filter(game=game, period=s.period).count(),
                 })
             home_total = game.sets.filter(winner=game.home_team).count()
             away_total = game.sets.filter(winner=game.away_team).count()
@@ -336,13 +336,16 @@ class GameViewSet(viewsets.ModelViewSet):
                     ),
                     "completed": True,
                     "events_count": period_stats.count(),
-                })
+                })            
             home_total = game.home_team_score
             away_total = game.away_team_score
-
+            
         # Track live score per event
         if scoring_type == "sets":
             events_by_period = defaultdict(list)
+            
+            # Create a tracking dictionary for scores by period
+            period_scores = {period["number"]: {"home": 0, "away": 0} for period in periods}
             
             # Add starting event for each period with correct label
             for period in periods:
@@ -361,32 +364,71 @@ class GameViewSet(viewsets.ModelViewSet):
                         "away": 0
                     }
                 })
-
-            # Process actual events
-            for stat in stats:
+                
+            # Get ALL stats for the game, not just scoring stats
+            set_stats = (
+                PlayerStat.objects.filter(game=game)
+                .select_related("player__user", "player__team", "stat_type")
+                .order_by("timestamp")
+            )
+            
+            # Process actual events for each set
+            for stat in set_stats:
                 team_side = "home" if stat.player.team_id == game.home_team_id else "away"
-                period_events = events_by_period[stat.period]
                 
-                current_score = period_events[-1]["current_score"].copy()
-                current_score[team_side] += stat.stat_type.point_value
+                # Skip if this period doesn't exist in periods (safety check)
+                if stat.period not in period_scores:
+                    continue                # For volleyball/sets scoring, we need special logic to determine which team gets the point
+                # In volleyball, one team always gets a point after each rally
                 
-                period_events.append({
+                # Get stat name and type info for determining point allocation
+                stat_name = stat.stat_type.name.upper() if stat.stat_type.name else ""
+                stat_display_name = stat.stat_type.display_name.upper() if stat.stat_type.display_name else ""
+                is_point_stat = stat.stat_type.is_points
+                point_value = stat.stat_type.point_value
+                is_error = "ERROR" in stat_name or "ERROR" in stat_display_name
+                
+                # Determine which team gets the point in volleyball
+                # Rule 1: If it's an error, the OTHER team gets the point
+                # Rule 2: Otherwise, the team that made the play gets the point
+                if team_side == "home":
+                    if is_error:
+                        # Home team made an error, away team gets the point
+                        period_scores[stat.period]["away"] += 1
+                    else:
+                        # Home team made a positive play, they get the point
+                        period_scores[stat.period]["home"] += 1
+                else:  # away team
+                    if is_error:
+                        # Away team made an error, home team gets the point
+                        period_scores[stat.period]["home"] += 1
+                    else:
+                        # Away team made a positive play, they get the point
+                        period_scores[stat.period]["away"] += 1
+                
+                # Add the event with the current cumulative score for this period
+                events_by_period[stat.period].append({
                     "id": stat.id,
                     "player": stat.player.user.get_full_name(),
                     "stat_name": stat.stat_type.display_name,
-                    "point_value": stat.stat_type.point_value,
+                    "point_value": point_value,
                     "team": stat.player.team.abbreviation,
                     "team_side": team_side,
                     "period": stat.period,
                     "period_label": format_period_label(stat.period, game.sport),
                     "timestamp": stat.timestamp.isoformat(),
-                    "current_score": current_score
+                    "current_score": {
+                        "home": period_scores[stat.period]["home"],
+                        "away": period_scores[stat.period]["away"]
+                    }
                 })
-
+                
             # Add ending event for each period with correct label
             for period in periods:
                 period_num = period["number"]
                 
+                # Ensure the final score matches what's in the period data
+                # This handles cases where the DB might have a different final score than our calculated one
                 events_by_period[period_num].append({
                     "id": None,
                     "player": "",

@@ -175,8 +175,6 @@ class LeaderCategory(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name='leader_categories',
                              help_text="The sport this leader category belongs to")
     name = models.CharField(max_length=50, help_text="Name of the leader category")
-    display_order = models.PositiveSmallIntegerField(default=0, 
-                                                  help_text="Order for displaying the category in UI")
     stat_types = models.ManyToManyField(SportStatType, related_name='leader_categories',
                                 help_text="Stats used to determine leaders (max 4)")
     primary_stat = models.ForeignKey(
@@ -187,9 +185,8 @@ class LeaderCategory(models.Model):
         blank=True,
         help_text="The primary stat used for ordering leaders in this category"
     )
-    
     class Meta:
-        ordering = ['display_order', 'name']
+        ordering = ['name']
         unique_together = ['sport', 'name']
         verbose_name = "Leader Category"
         verbose_name_plural = "Leader Categories"
