@@ -54,8 +54,8 @@ class SportStatTypeAdmin(admin.ModelAdmin):
 
 @admin.register(LeaderCategory)
 class LeaderCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "sport", "display_order")
+    list_display = ("name", "sport")
     list_filter = ("sport",)
     search_fields = ("name",)
-    ordering = ("sport", "display_order", "name")
+    ordering = ("sport", "name")
     filter_horizontal = ("stat_types",)

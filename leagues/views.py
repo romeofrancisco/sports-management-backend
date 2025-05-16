@@ -66,6 +66,23 @@ class LeagueViewSet(viewsets.ModelViewSet):
         stats = service.get_comprehensive_stats()
         
         return Response(stats)
+        
+    @action(detail=True, methods=["get"])
+    def league_leaders(self, request, pk=None):
+        """Get the top players across all seasons for each leader category in the league"""
+        try:
+            league = self.get_object()
+            
+            from .services import LeagueLeaderService
+            service = LeagueLeaderService(league_id=league.id, request=request)
+            data = service.get_league_leaders()
+            
+            return Response(data)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to get league leaders: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class SeasonViewSet(viewsets.ModelViewSet):
     serializer_class = SeasonSerializer
@@ -204,6 +221,23 @@ class SeasonViewSet(viewsets.ModelViewSet):
             serialized_teams.append(team_data)
         
         return Response(serialized_teams)
+    
+    @action(detail=True, methods=['get'])
+    def season_leaders(self, request, league_pk=None, pk=None):
+        """Get the top players from each team for each leader category in a season"""
+        try:
+            season = self.get_object()
+            
+            from .services import SeasonLeaderService
+            service = SeasonLeaderService(season_id=season.id, request=request)
+            data = service.get_season_leaders()
+            
+            return Response(data)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to get season leaders: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=True, methods=['get'])
     def team_form(self, request, league_pk=None, pk=None):

@@ -153,10 +153,9 @@ class LeaderCategorySerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=False
     )
-    
     class Meta:
         model = LeaderCategory
-        fields = ['id', 'sport', 'sport_name', 'name', 'display_order', 
+        fields = ['id', 'sport', 'sport_name', 'name',
                  'stat_types', 'stat_types_count', 'stat_types_details', 
                  'primary_stat_id']
         extra_kwargs = {

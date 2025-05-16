@@ -10,8 +10,7 @@ class GameLeaderService:
         self.game = Game.objects.select_related("home_team", "away_team", "sport").get(pk=game_id)
         self.teams = [self.game.home_team, self.game.away_team]
         self.request = request
-        
-        # Get all leader categories for this sport
+          # Get all leader categories for this sport
         self.leader_categories = LeaderCategory.objects.filter(
             sport=self.game.sport
         ).prefetch_related(
@@ -20,7 +19,7 @@ class GameLeaderService:
             'primary_stat__formula',
             'primary_stat__formula__components',
             'primary_stat__formula__components__stat_type'
-        ).order_by('display_order')
+        ).order_by('name')
         
         # Get ALL stats for this sport (for calculations)
         self.all_stats = SportStatType.objects.filter(

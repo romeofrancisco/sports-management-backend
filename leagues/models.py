@@ -322,10 +322,9 @@ class Season(models.Model):
             if completed_games.count() > 0
             else 0
         )
-
     def start_season(self, current_date=None):
-        if self.status != self.Status.UPCOMING:
-            raise ValidationError("Season can only start from Upcoming status")
+        if self.status != self.Status.UPCOMING and self.status != self.Status.PAUSED:
+            raise ValidationError("Season can only start from Upcoming or Paused status")
 
         # Use provided date for testing or date.today() by default
         today = current_date if current_date is not None else date.today()
