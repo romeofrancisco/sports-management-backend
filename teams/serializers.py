@@ -43,6 +43,8 @@ class PlayerInfoSerializer(ModelSerializer):
     team = TeamSerializer(read_only=True)
     positions = PositionSerializer(many=True, read_only=True, source="position")
     sport = SportSerializer(read_only=True)
+    
+    full_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Player
@@ -51,6 +53,7 @@ class PlayerInfoSerializer(ModelSerializer):
             "profile",
             "first_name",
             "last_name",
+            "full_name",
             "sex",
             "email",
             "slug",
@@ -112,6 +115,9 @@ class PlayerInfoSerializer(ModelSerializer):
         instance = super().update(instance, validated_data)
         return instance
 
+    def get_full_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}"
+
 
 class CoachInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
@@ -129,8 +135,8 @@ class CoachInfoSerializer(ModelSerializer):
         fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", "teams"]
         
     def get_full_name(self, obj):
-        return f"{obj.first_name} {obj.last_name}"
-        
+        return f"{obj.user.first_name} {obj.user.last_name}"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Only require password on creation

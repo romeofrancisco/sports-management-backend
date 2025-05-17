@@ -1,4 +1,5 @@
 from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
+from rest_framework.decorators import action
 from .serializers import PlayerInfoSerializer, CoachInfoSerializer, TeamSerializer
 from .models import Player, Coach, Team
 from sports.models import Sport
@@ -26,6 +27,20 @@ class TeamViewSet(ModelViewSet):
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["name"]
     filterset_fields = ["sport", "division"]
+    
+    @action(detail=True, methods=['get'])
+    def coaches(self, request, slug=None):
+        team = self.get_object()
+        coaches = team.coach.all()
+        serializer = CoachInfoSerializer(coaches, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def players(self, request, slug=None):
+        team = self.get_object()
+        players = team.players.select_related('user').all()
+        serializer = PlayerInfoSerializer(players, many=True)
+        return Response(serializer.data)
 
 
 class SportTeamsViewSet(ReadOnlyModelViewSet):
