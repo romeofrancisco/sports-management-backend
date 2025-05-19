@@ -62,12 +62,11 @@ class TeamViewSet(ModelViewSet):
         """
         Instantiates and returns the list of permissions that this view requires.
         - GET requests are accessible to anyone
-        - POST/PUT/DELETE requests are restricted to admin users
+        - DELETE requests are restricted to admin users
+        - POST/PUT requests can be done by admins or coaches
         - Coaches can modify their own teams
         """
-        if self.action in ['create', 'destroy']:
-            permission_classes = [IsAdminUser]
-        elif self.action in ['update', 'partial_update']:
+        if self.action in ['create', 'update', 'destroy', 'partial_update']:
             permission_classes = [IsAdminOrCoachUser]
         elif self.action in ['my_team', 'my_team_players', 'my_teammates']:
             permission_classes = [IsAuthenticated]
@@ -76,6 +75,19 @@ class TeamViewSet(ModelViewSet):
             
         return [permission() for permission in permission_classes]
     
+    def perform_create(self, serializer):
+        """
+        When a coach creates a team, automatically assign the coach to the team
+        """
+        # If the requesting user is a coach, set them as the team's coach
+        if self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            coach = self.request.user.coach_profile
+            team = serializer.save(coach=coach)  # Direct assignment
+        else:
+            team = serializer.save()
+            
+        return team
+
     def perform_update(self, serializer):
         """Only allow coaches to update their own teams"""
         if self.request.user.is_admin:
@@ -87,7 +99,25 @@ class TeamViewSet(ModelViewSet):
             if serializer.instance in coach_teams:
                 serializer.save()
             else:
-                raise PermissionDenied("You can only update your own teams")    @action(detail=True, methods=["get"])
+                raise PermissionDenied("You can only update your own teams")    
+    
+    def perform_destroy(self, instance):
+        """Only allow coaches to delete their own teams"""
+        if self.request.user.is_admin:
+            # Admins can delete any team
+            instance.delete()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only delete their own teams
+            coach = self.request.user.coach_profile
+            coach_teams = list(coach.teams.all())
+            
+            # Check if the team belongs to the coach
+            if instance in coach_teams:
+                instance.delete()
+            else:
+                raise PermissionDenied("You can only delete your own teams")
+    
+    @action(detail=True, methods=["get"])
     def coaches(self, request, **kwargs):
         team = self.get_object()
         coaches = team.coach.all()
@@ -202,12 +232,12 @@ class PlayerViews(ModelViewSet):
         """
         Instantiates and returns the list of permissions that this view requires.
         - GET requests are accessible to anyone
-        - POST/CREATE/DELETE requests are restricted to admin users
-        - Coaches can only update players from their own teams
+        - POST/CREATE requests are restricted to admin users
+        - DELETE/UPDATE requests can be done by admins or coaches (with team restrictions)
+        - Coaches can only modify players from their own teams
         """
-        if self.action in ['create', 'destroy']:
-            permission_classes = [IsAdminUser]
-        elif self.action in ['update', 'partial_update']:
+
+        if self.action in ['create','update', 'partial_update', 'destroy']:
             permission_classes = [IsAdminOrCoachUser]
         else:
             permission_classes = []
@@ -222,14 +252,31 @@ class PlayerViews(ModelViewSet):
         elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             # Coaches can only update players from their teams
             coach = self.request.user.coach_profile
-            coach_teams = coach.teams.all()
+            coach_teams = list(coach.teams.all())
             player = serializer.instance
             
-            # Check if the player belongs to any of the coach's teams
-            if player.team in coach_teams:
+            # Make sure player has a team and that team is in coach's teams
+            if player.team and any(team.id == player.team.id for team in coach_teams):
                 serializer.save()
             else:
                 raise PermissionDenied("You can only update players from your own teams")
+    
+    def perform_destroy(self, instance):
+        """Only allow coaches to delete players in their own teams"""
+        if self.request.user.is_admin:
+            # Admins can delete any player
+            instance.delete()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only delete players from their teams
+            coach = self.request.user.coach_profile
+            coach_teams = list(coach.teams.all())
+            player = instance
+            
+            # Make sure player has a team and that team is in coach's teams
+            if player.team and any(team.id == player.team.id for team in coach_teams):
+                instance.delete()
+            else:
+                raise PermissionDenied("You can only delete players from your own teams")
 
 
 class CoachViews(ModelViewSet):
