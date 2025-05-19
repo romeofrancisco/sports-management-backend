@@ -112,7 +112,11 @@ class PlayerInfoSerializer(ModelSerializer):
         if positions is not None:
             instance.position.set(positions)
 
-        instance = super().update(instance, validated_data)
+        # Only update the player model with remaining player data (not user data)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
         return instance
 
     def get_full_name(self, obj):
@@ -154,11 +158,11 @@ class CoachInfoSerializer(ModelSerializer):
         # Create the Player instance with the user instance
         coach = Coach.objects.create(user=user, **validated_data)
         return coach
-    
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
         user = instance.user
 
+        # Update the User model
         for attr, value in user_data.items():
             if attr == "password":
                 user.set_password(value)
@@ -166,6 +170,7 @@ class CoachInfoSerializer(ModelSerializer):
                 setattr(user, attr, value)
         user.save()
 
+        # Update the Coach model
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()

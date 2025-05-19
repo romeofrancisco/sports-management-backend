@@ -11,13 +11,12 @@ class Team(models.Model):
     class Division(models.TextChoices):
         MALE = "male", "Male"
         FEMALE = "female", "Female"
-    
     name = models.CharField(max_length=100)
     abbreviation = models.CharField(max_length=5)
     color = models.CharField(max_length=20, default="#000000")
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
-    coach = models.ManyToManyField('teams.Coach', blank=True)
+    coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='teams')
     logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
     slug = models.SlugField(unique=True, blank=True)  
     created_at = models.DateTimeField(auto_now_add=True)

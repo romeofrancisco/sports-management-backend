@@ -5,6 +5,8 @@ from django.contrib.auth import authenticate
 
 
 class UserSerializer(ModelSerializer):
+    team_id = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = User
         fields = (
@@ -15,7 +17,17 @@ class UserSerializer(ModelSerializer):
             "email",
             "role",
             "date_of_birth",
+            "team_id",
         )
+    
+    def get_team_id(self, obj):
+        if hasattr(obj, 'coach_profile'):
+            # Get team coached by this coach
+            team = obj.coach_profile.teams.first()
+            return team.id if team else None
+        elif hasattr(obj, 'player_profile'):
+            return obj.player_profile.team_id if obj.player_profile.team else None
+        return None
 
 
 class PlayerSerializer(ModelSerializer):

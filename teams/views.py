@@ -4,7 +4,7 @@ from .serializers import PlayerInfoSerializer, CoachInfoSerializer, TeamSerializ
 from .models import Player, Coach, Team
 from sports.models import Sport
 from rest_framework.permissions import IsAuthenticated
-from sports_management.permissions import IsAdminUser
+from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.filters import SearchFilter
@@ -12,11 +12,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import F
 from .filters import CoachFilter, PlayerFilter
 from rest_framework.pagination import PageNumberPagination
+from django.core.exceptions import PermissionDenied
 
 
 class PlayerPagination(PageNumberPagination):
     page_size = 10
-    page_size_query_param = 'page_size'
+    page_size_query_param = "page_size"
     max_page_size = 100
 
 
@@ -28,24 +29,138 @@ class TeamViewSet(ModelViewSet):
     search_fields = ["name"]
     filterset_fields = ["sport", "division"]
     
-    @action(detail=True, methods=['get'])
-    def coaches(self, request, slug=None):
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+
+    def get_object(self):
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # Get the lookup value from the URL
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        lookup_value = self.kwargs[lookup_url_kwarg]
+
+        # Try to determine if the lookup value is a numeric ID
+        try:
+            is_numeric = lookup_value.isdigit()
+        except (AttributeError, ValueError):
+            is_numeric = False
+
+        if is_numeric:
+            # If it's numeric, look up by ID
+            filter_kwargs = {"pk": lookup_value}
+        else:
+            # Otherwise, use slug
+            filter_kwargs = {self.lookup_field: lookup_value}
+
+        obj = queryset.get(**filter_kwargs)
+        self.check_object_permissions(self.request, obj)
+        return obj
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to anyone
+        - POST/PUT/DELETE requests are restricted to admin users
+        - Coaches can modify their own teams
+        """
+        if self.action in ['create', 'destroy']:
+            permission_classes = [IsAdminUser]
+        elif self.action in ['update', 'partial_update']:
+            permission_classes = [IsAdminOrCoachUser]
+        elif self.action in ['my_team', 'my_team_players', 'my_teammates']:
+            permission_classes = [IsAuthenticated]
+        else:
+            permission_classes = []
+            
+        return [permission() for permission in permission_classes]
+    
+    def perform_update(self, serializer):
+        """Only allow coaches to update their own teams"""
+        if self.request.user.is_admin:
+            # Admins can update any team
+            serializer.save()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only update their own teams
+            coach_teams = self.request.user.coach_profile.teams.all()
+            if serializer.instance in coach_teams:
+                serializer.save()
+            else:
+                raise PermissionDenied("You can only update your own teams")    @action(detail=True, methods=["get"])
+    def coaches(self, request, **kwargs):
         team = self.get_object()
         coaches = team.coach.all()
-        serializer = CoachInfoSerializer(coaches, many=True)
+        serializer = CoachInfoSerializer(coaches, many=True, context={'request': request})
         return Response(serializer.data)
-    
-    @action(detail=True, methods=['get'])
-    def players(self, request, slug=None):
+
+    @action(detail=True, methods=["get"])
+    def players(self, request, **kwargs):
         team = self.get_object()
-        players = team.players.select_related('user').all()
-        serializer = PlayerInfoSerializer(players, many=True)
+        players = team.players.select_related("user").all()
+        serializer = PlayerInfoSerializer(players, many=True, context={'request': request})
         return Response(serializer.data)
 
+    @action(detail=False, methods=["get"], permission_classes=[IsCoachUser])
+    def my_team(self, request):
+        user = request.user
 
+        if hasattr(user, "coach_profile"):
+            team = user.coach_profile.teams.first()
+            if team:
+                serializer = self.get_serializer(team)
+                return Response(serializer.data)
+
+        elif hasattr(user, "player_profile"):
+            team = user.player_profile.team
+            if team:
+                serializer = self.get_serializer(team)
+                return Response(serializer.data)
+
+        return Response({"detail": "No team found"}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Add these actions to your TeamViewSet class    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def my_team_players(self, request):
+        """Return all players for the logged-in coach's team"""
+        user = request.user
+        
+        if hasattr(user, "coach_profile"):
+            team = user.coach_profile.teams.first()
+            if team:
+                players = team.players.select_related("user").all()
+                serializer = PlayerInfoSerializer(players, many=True, context={'request': request})
+                return Response(serializer.data)
+            
+            return Response({"detail": "No team found for this coach"}, status=status.HTTP_404_NOT_FOUND)
+        
+        return Response({"detail": "User is not a coach"}, status=status.HTTP_403_FORBIDDEN)    
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def my_teammates(self, request):
+        """Return all teammates for the logged-in player"""
+        user = request.user
+        
+        if hasattr(user, "player_profile"):
+            team = user.player_profile.team
+            if team:
+                teammates = team.players.select_related("user").exclude(user=user).all()
+                serializer = PlayerInfoSerializer(teammates, many=True, context={'request': request})
+                return Response(serializer.data)
+            
+            return Response({"detail": "Player is not assigned to a team"}, status=status.HTTP_404_NOT_FOUND)
+        
+        return Response({"detail": "User is not a player"}, status=status.HTTP_403_FORBIDDEN)
+
+    
 class SportTeamsViewSet(ReadOnlyModelViewSet):
     serializer_class = TeamSerializer
     lookup_field = "pk"
+    
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
 
     def get_queryset(self):
         sport_slug = self.kwargs["sport_slug"]
@@ -66,13 +181,55 @@ class PlayerViews(ModelViewSet):
     search_fields = ["first_name", "last_name"]
     filterset_class = PlayerFilter
     pagination_class = PlayerPagination
+    
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
 
     def get_queryset(self):
-        return Player.objects.select_related("user").annotate(
-            first_name=F("user__first_name"),
-            last_name=F("user__last_name"),
-            sex=F("user__sex"),
-        ).order_by('user__first_name')
+        return (
+            Player.objects.select_related("user")
+            .annotate(
+                first_name=F("user__first_name"),
+                last_name=F("user__last_name"),
+                sex=F("user__sex"),
+            )
+            .order_by("user__first_name")
+        )
+        
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to anyone
+        - POST/CREATE/DELETE requests are restricted to admin users
+        - Coaches can only update players from their own teams
+        """
+        if self.action in ['create', 'destroy']:
+            permission_classes = [IsAdminUser]
+        elif self.action in ['update', 'partial_update']:
+            permission_classes = [IsAdminOrCoachUser]
+        else:
+            permission_classes = []
+            
+        return [permission() for permission in permission_classes]
+    
+    def perform_update(self, serializer):
+        """Only allow coaches to update players in their own teams"""
+        if self.request.user.is_admin:
+            # Admins can update any player
+            serializer.save()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only update players from their teams
+            coach = self.request.user.coach_profile
+            coach_teams = coach.teams.all()
+            player = serializer.instance
+            
+            # Check if the player belongs to any of the coach's teams
+            if player.team in coach_teams:
+                serializer.save()
+            else:
+                raise PermissionDenied("You can only update players from your own teams")
 
 
 class CoachViews(ModelViewSet):
@@ -82,6 +239,11 @@ class CoachViews(ModelViewSet):
     search_fields = ["first_name", "last_name"]
     filterset_class = CoachFilter
     
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+
     def get_queryset(self):
         return Coach.objects.select_related("user").annotate(
             first_name=F("user__first_name"),
