@@ -7,6 +7,7 @@ from .serializers import (
     FormulaSerializer,
     LeaderCategorySerializer,
 )
+from sports_management.permissions import IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import SportStatTypeFilter, SportPositionFilter
 from rest_framework.response import Response
@@ -15,12 +16,23 @@ from rest_framework.filters import SearchFilter
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from django.db.models import Count
+from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 
 
 class SportsViewSet(ModelViewSet):
     queryset = Sport.objects.all()
     serializer_class = SportSerializer
     lookup_field = "slug"
+    
+    def get_permissions(self):
+        """
+        Custom permissions:
+        - GET requests can be made by any authenticated user
+        - POST/PUT/DELETE requests require admin permissions
+        """
+        if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
+            return [IsAuthenticated()]  # Any authenticated user can read
+        return [IsAdminUser()]  # Admin permission required for write operations
 
 
 class SportStatTypeViewSet(ModelViewSet):
@@ -37,6 +49,7 @@ class FormulaViewSet(ModelViewSet):
     )
     serializer_class = FormulaSerializer
     filter_backends = [SearchFilter]
+    permission_classes = [IsAdminUser]
     search_fields = ["name"]
 
     def get_queryset(self):
@@ -80,6 +93,16 @@ class PositionViewSet(ModelViewSet):
     queryset = Position.objects.select_related("sport").all()
     filter_backends = [DjangoFilterBackend]
     filterset_class = SportPositionFilter
+    
+    def get_permissions(self):
+        """
+        Custom permissions:
+        - GET requests can be made by any authenticated user
+        - POST/PUT/DELETE requests require admin permissions
+        """
+        if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
+            return [IsAuthenticated()]  # Any authenticated user can read
+        return [IsAdminUser()]  # Admin permission required for write operations
 
 
 class LeaderCategoryViewSet(viewsets.ModelViewSet):
@@ -88,6 +111,16 @@ class LeaderCategoryViewSet(viewsets.ModelViewSet):
     """
     queryset = LeaderCategory.objects.all()
     serializer_class = LeaderCategorySerializer
+    
+    def get_permissions(self):
+        """
+        Custom permissions:
+        - GET requests can be made by any authenticated user
+        - POST/PUT/DELETE requests require admin permissions
+        """
+        if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
+            return [IsAuthenticated()]  # Any authenticated user can read
+        return [IsAdminUser()]  # Admin permission required for write operations
     
     def get_queryset(self):
         queryset = super().get_queryset()

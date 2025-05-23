@@ -1,6 +1,13 @@
 from django.contrib import admin
 from teams.models import Team, Coach
-from .models import TrainingCategory, TrainingSession, PlayerTraining, TrainingMetric, PlayerMetricRecord
+from .models import MetricUnit, TrainingCategory, TrainingSession, PlayerTraining, TrainingMetric, PlayerMetricRecord
+
+@admin.register(MetricUnit)
+class MetricUnitAdmin(admin.ModelAdmin):
+    list_display = ('name', 'code', 'normalization_weight', 'description')
+    search_fields = ('name', 'code')
+    list_filter = ('normalization_weight',)
+    ordering = ('name',)
 
 @admin.register(TrainingCategory)
 class TrainingCategoryAdmin(admin.ModelAdmin):
@@ -55,10 +62,22 @@ class PlayerTrainingAdmin(admin.ModelAdmin):
 
 @admin.register(TrainingMetric)
 class TrainingMetricAdmin(admin.ModelAdmin):
-    list_display = ('name', 'unit', 'category', 'is_lower_better')
-    list_filter = ('category', 'is_lower_better')
+    list_display = ('name', 'metric_unit', 'category', 'is_lower_better', 'weight')
+    list_filter = ('category', 'is_lower_better', 'metric_unit')
     search_fields = ('name', 'description')
-    autocomplete_fields = ['category']
+    autocomplete_fields = ['category', 'metric_unit']
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description', 'category')
+        }),
+        ('Measurement', {
+            'fields': ('metric_unit', 'is_lower_better')
+        }),
+        ('Weight & Impact', {
+            'fields': ('weight',),
+            'description': 'Weight factor for calculating overall improvement. Higher weight = more impact on overall performance.'
+        }),
+    )
 
 @admin.register(PlayerMetricRecord)
 class PlayerMetricRecordAdmin(admin.ModelAdmin):

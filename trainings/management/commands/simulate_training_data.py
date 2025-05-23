@@ -1,6 +1,9 @@
 from django.core.management.base import BaseCommand
 from teams.models import Team, Player, Coach
-from trainings.models import TrainingCategory, TrainingSession, PlayerTraining, TrainingMetric, PlayerMetricRecord
+from trainings.models import (
+    TrainingCategory, TrainingSession, PlayerTraining, 
+    TrainingMetric, PlayerMetricRecord, MetricUnit
+)
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Count, Q
@@ -53,14 +56,14 @@ class Command(BaseCommand):
         # Get coach
         if coach_id:
             try:
-                coach = Coach.objects.get(id=coach_id)
+                coach = Coach.objects.get(id=coach_id)            
             except Coach.DoesNotExist:
                 self.stdout.write(self.style.ERROR(f'Coach with ID {coach_id} not found'))
                 return
         else:
             # Find a coach for this team or any staff coach
             coach = Coach.objects.filter(
-                Q(team=team) | Q(user__is_staff=True)
+                Q(teams=team) | Q(user__is_staff=True)
             ).first()
         
         if coach:
@@ -95,28 +98,59 @@ class Command(BaseCommand):
         self.stdout.write(f'Creating {count} training sessions for {team.name}...')
         
         sessions_created = 0
+          # Generate training session dates (3-4 times per week)
+        today = timezone.now().date()
+        start_date = today - timedelta(days=days_range)
         
-        # If showing progress, ensure dates are in sequence
-        if show_progress:
-            session_dates = [
-                timezone.now().date() - timedelta(days=int(days_range - i*(days_range/count)))
-                for i in range(count)
-            ]
-            # Ensure dates are ordered from past to present
-            session_dates.sort()
-        else:
-            session_dates = []
+        # Create a schedule with consistent 3-4 training sessions per week
+        session_dates = []
+        current_date = start_date
         
-        for i in range(count):
+        # Training days: typically teams train on Mon/Wed/Fri plus sometimes Sat
+        # Define possible training days (0 = Monday, 6 = Sunday)
+        core_training_days = [0, 2, 4]  # Mon, Wed, Fri
+        optional_training_day = 5       # Saturday (for the 4th session)
+        
+        # Process week by week to ensure proper weekly distribution
+        while current_date <= today and len(session_dates) < count:
+            # Find the start of the week (Monday)
+            days_to_monday = current_date.weekday()
+            week_start = current_date - timedelta(days=days_to_monday)
+            
+            # Set up training days for this week
+            weekly_sessions = []
+            
+            # Add core training days (Mon/Wed/Fri)
+            for day_offset in core_training_days:
+                training_date = week_start + timedelta(days=day_offset)
+                if training_date >= start_date and training_date <= today:
+                    weekly_sessions.append(training_date)
+            
+            # Add optional Saturday session with 60% probability
+            if random.random() < 0.6:  # 60% chance of Saturday session
+                saturday_date = week_start + timedelta(days=optional_training_day)
+                if saturday_date >= start_date and saturday_date <= today:
+                    weekly_sessions.append(saturday_date)
+            
+            # Add this week's sessions to the overall list
+            session_dates.extend(weekly_sessions)
+            
+            # Move to the next week
+            current_date = week_start + timedelta(days=7)
+        
+        # Limit to the requested count
+        session_dates = session_dates[:count]
+        
+        # If show_progress is False, shuffle the dates to randomize them a bit
+        # while still maintaining the 3-4 times per week pattern
+        if not show_progress:
+            random.shuffle(session_dates)
+        
+        for i in range(len(session_dates)):
             try:
                 with transaction.atomic():
-                    # Generate random date or use sequence
-                    if show_progress and session_dates:
-                        session_date = session_dates[i]
-                    else:
-                        session_date = timezone.now().date() - timedelta(
-                            days=random.randint(0, days_range)
-                        )
+                    # Use the scheduled date
+                    session_date = session_dates[i]
                     
                     # Generate random time
                     start_hour = random.choice([8, 9, 10, 14, 15, 16, 17, 18])
@@ -212,26 +246,37 @@ class Command(BaseCommand):
         if not metrics.exists():
             self.stdout.write('No training metrics found. Creating default metrics...')
             
+            # Create metric units first
+            unit_mappings = {
+                'minutes': MetricUnit.objects.get_or_create(code='minutes', name='Minutes')[0],
+                'm': MetricUnit.objects.get_or_create(code='m', name='Meters')[0],
+                'bpm': MetricUnit.objects.get_or_create(code='bpm', name='Beats Per Minute')[0],
+                'kg': MetricUnit.objects.get_or_create(code='kg', name='Kilograms')[0],
+                'reps': MetricUnit.objects.get_or_create(code='reps', name='Repetitions')[0],
+                'seconds': MetricUnit.objects.get_or_create(code='seconds', name='Seconds')[0],
+                'in': MetricUnit.objects.get_or_create(code='in', name='Inches')[0],
+            }
+            
             default_metrics = [
                 # Endurance metrics
                 {
                     "name": "5K Run Time", 
                     "description": "Time to complete a 5 kilometer run",
-                    "unit": "minutes",
+                    "metric_unit": unit_mappings['minutes'],
                     "category": "Endurance",
                     "is_lower_better": True
                 },
                 {
                     "name": "Cooper Test", 
                     "description": "Distance covered in 12 minutes",
-                    "unit": "m",
+                    "metric_unit": unit_mappings['m'],
                     "category": "Endurance",
                     "is_lower_better": False
                 },
                 {
                     "name": "Resting Heart Rate", 
                     "description": "Heart rate after 5 minutes of rest",
-                    "unit": "bpm",
+                    "metric_unit": unit_mappings['bpm'],
                     "category": "Endurance",
                     "is_lower_better": True
                 },
@@ -240,21 +285,21 @@ class Command(BaseCommand):
                 {
                     "name": "Bench Press", 
                     "description": "Maximum weight for bench press",
-                    "unit": "kg",
+                    "metric_unit": unit_mappings['kg'],
                     "category": "Strength",
                     "is_lower_better": False
                 },
                 {
                     "name": "Squat", 
                     "description": "Maximum weight for squat",
-                    "unit": "kg",
+                    "metric_unit": unit_mappings['kg'],
                     "category": "Strength",
                     "is_lower_better": False
                 },
                 {
                     "name": "Pull-ups", 
                     "description": "Number of pull-ups completed",
-                    "unit": "reps",
+                    "metric_unit": unit_mappings['reps'],
                     "category": "Strength",
                     "is_lower_better": False
                 },
@@ -263,93 +308,21 @@ class Command(BaseCommand):
                 {
                     "name": "40m Sprint", 
                     "description": "Time to complete a 40 meter sprint",
-                    "unit": "seconds",
+                    "metric_unit": unit_mappings['seconds'],
                     "category": "Speed",
                     "is_lower_better": True
                 },
-                {
-                    "name": "10m Acceleration", 
-                    "description": "Time to complete a 10 meter sprint from standing",
-                    "unit": "seconds",
-                    "category": "Speed",
-                    "is_lower_better": True
-                },
-                
-                # Agility metrics
-                {
-                    "name": "T-Test", 
-                    "description": "Time to complete T-test agility drill",
-                    "unit": "seconds",
-                    "category": "Agility",
-                    "is_lower_better": True
-                },
-                {
-                    "name": "Illinois Test", 
-                    "description": "Time to complete Illinois agility test",
-                    "unit": "seconds",
-                    "category": "Agility",
-                    "is_lower_better": True
-                },
-                {
-                    "name": "Shuttle Run", 
-                    "description": "Time to complete 5x10m shuttle run",
-                    "unit": "seconds",
-                    "category": "Agility",
-                    "is_lower_better": True
-                },
-                
-                # Technique metrics
-                {
-                    "name": "Passing Accuracy", 
-                    "description": "Percentage of successful passes",
-                    "unit": "%",
-                    "category": "Technique",
-                    "is_lower_better": False
-                },
-                {
-                    "name": "Shooting Accuracy", 
-                    "description": "Percentage of shots on target",
-                    "unit": "%",
-                    "category": "Technique",
-                    "is_lower_better": False
-                },
-                {
-                    "name": "Dribbling Test", 
-                    "description": "Time to complete dribbling course",
-                    "unit": "seconds",
-                    "category": "Technique",
-                    "is_lower_better": True
-                },
-                
-                # Recovery metrics
-                {
-                    "name": "Recovery Rate", 
-                    "description": "Heart rate decrease after 1 minute of rest from exercise",
-                    "unit": "bpm",
-                    "category": "Recovery",
-                    "is_lower_better": False
-                },
-                {
-                    "name": "Sleep Quality", 
-                    "description": "Self-reported sleep quality rating",
-                    "unit": "rating",
-                    "category": "Recovery",
-                    "is_lower_better": False
-                }
             ]
             
-            category_map = {cat.name: cat for cat in categories}
-            
+            # Create metrics with proper unit relationships
             for metric_data in default_metrics:
                 category_name = metric_data.pop('category')
-                if category_name in category_map:
-                    metric_data['category'] = category_map[category_name]
-                    TrainingMetric.objects.create(**metric_data)
-                else:
-                    self.stdout.write(self.style.WARNING(f'Category {category_name} not found, skipping metric'))
+                category = categories.get(name=category_name)
+                metric_data['category'] = category
+                TrainingMetric.objects.create(**metric_data)
                 
             metrics = TrainingMetric.objects.all()
-            
+        
         return metrics
 
     def _create_player_records(self, session, players, attendance_rate, session_metrics, metrics_per_player, show_progress):
@@ -428,8 +401,7 @@ class Command(BaseCommand):
             value = self._generate_metric_value(metric, prev_records.get(metric.id), show_progress)
             
             # Create the metric record
-            PlayerMetricRecord.objects.create(
-                player_training=player_training,
+            PlayerMetricRecord.objects.create(                player_training=player_training,
                 metric=metric,
                 value=value,
                 notes="",  # Optional notes
@@ -439,98 +411,212 @@ class Command(BaseCommand):
 
     def _generate_metric_value(self, metric, previous_value, show_progress):
         """Generate a realistic value for a given metric"""
-        unit = metric.unit
+        unit_code = metric.metric_unit.code
         is_lower_better = metric.is_lower_better
+        metric_name = metric.name.lower()
         
         # If we have a previous value and want to show progress, base the new value on the previous one
         if previous_value is not None and show_progress:
             # Calculate improvement - better performance has 70% chance if player has trained before
             improvement = random.random() < 0.7
+            prev_val = float(previous_value)
             
-            # For metrics where lower is better, improvement means decreasing the value
-            if is_lower_better:
+            # For different metrics, we need different progression rates
+            if 'vertical jump' in metric_name and unit_code == 'in':
+                # Vertical jump progresses slowly - only 0.25 to 1 inch per session
                 if improvement:
-                    # Improve by 1-5%
-                    change_percent = random.uniform(0.01, 0.05)
-                    new_value = float(previous_value) * (1 - change_percent)
+                    # Small improvement - inches progress by small amounts
+                    change_amount = random.uniform(0.25, 1.0)
+                    new_value = prev_val + change_amount
                 else:
-                    # Decline by 0-2%
-                    change_percent = random.uniform(0, 0.02)
-                    new_value = float(previous_value) * (1 + change_percent)
+                    # Very small decline or no change
+                    change_amount = random.uniform(0, 0.25)
+                    new_value = prev_val - change_amount
+                # Ensure we don't exceed realistic maximums
+                new_value = min(new_value, 60.0)
+            elif '3/4 court sprint' in metric_name and unit_code == 'seconds':
+                # Sprint times improve by small margins
+                if improvement and is_lower_better:
+                    # Improve by 0.05 to 0.2 seconds if lower is better
+                    change_amount = random.uniform(0.05, 0.2)
+                    new_value = prev_val - change_amount
+                elif improvement and not is_lower_better:
+                    # Improve by 0.05 to 0.2 seconds if higher is better
+                    change_amount = random.uniform(0.05, 0.2)
+                    new_value = prev_val + change_amount
+                else:
+                    # Small decline
+                    change_amount = random.uniform(0, 0.1)
+                    if is_lower_better:
+                        new_value = prev_val + change_amount
+                    else:
+                        new_value = prev_val - change_amount
+                new_value = max(1.0, new_value)  # Can't have negative or zero time
+            elif 'suicide' in metric_name or 'shuttle' in metric_name:
+                # Similar to sprint but with slightly larger improvements
+                if improvement and is_lower_better:
+                    change_amount = random.uniform(0.1, 0.3)
+                    new_value = prev_val - change_amount
+                elif improvement and not is_lower_better:
+                    change_amount = random.uniform(0.1, 0.3)
+                    new_value = prev_val + change_amount
+                else:
+                    change_amount = random.uniform(0, 0.15)
+                    if is_lower_better:
+                        new_value = prev_val + change_amount
+                    else:
+                        new_value = prev_val - change_amount
+                new_value = max(1.0, new_value)  # Can't have negative or zero time
+            elif 'bench press reps' in metric_name and unit_code == 'reps':
+                # Rep counts increase by small integers
+                if improvement:
+                    # Add 1-2 reps
+                    change_amount = random.randint(1, 2)
+                    new_value = prev_val + change_amount
+                else:
+                    # Lose 0-1 reps
+                    change_amount = random.randint(0, 1)
+                    new_value = max(1, prev_val - change_amount)
+            elif ('squat max' in metric_name or 'bench press' in metric_name) and unit_code == 'kg':
+                # Weight improvements
+                if improvement:
+                    # Add 2.5 to 5kg
+                    change_amount = random.uniform(2.5, 5.0)
+                    new_value = prev_val + change_amount
+                else:
+                    # Lose 0 to 2.5kg
+                    change_amount = random.uniform(0, 2.5)
+                    new_value = max(5, prev_val - change_amount)
+            elif 'yo-yo' in metric_name and unit_code == 'm':
+                # Yo-yo test improves by modest increments
+                if improvement:
+                    # Improve by 20-50 meters
+                    change_amount = random.randint(20, 50)
+                    new_value = prev_val + change_amount
+                else:
+                    # Decline by 0-20 meters
+                    change_amount = random.randint(0, 20)
+                    new_value = max(100, prev_val - change_amount)
             else:
-                if improvement:
-                    # Improve by 1-5%
-                    change_percent = random.uniform(0.01, 0.05)
-                    new_value = float(previous_value) * (1 + change_percent)
+                # Default progression for other metrics
+                if is_lower_better:
+                    if improvement:
+                        # Improve by 0.5-2%
+                        change_percent = random.uniform(0.005, 0.02)
+                        new_value = prev_val * (1 - change_percent)
+                    else:
+                        # Decline by 0-1%
+                        change_percent = random.uniform(0, 0.01)
+                        new_value = prev_val * (1 + change_percent)
                 else:
-                    # Decline by 0-2%
-                    change_percent = random.uniform(0, 0.02) 
-                    new_value = float(previous_value) * (1 - change_percent)
+                    if improvement:
+                        # Improve by 0.5-2%
+                        change_percent = random.uniform(0.005, 0.02)
+                        new_value = prev_val * (1 + change_percent)
+                    else:
+                        # Decline by 0-1%
+                        change_percent = random.uniform(0, 0.01) 
+                        new_value = prev_val * (1 - change_percent)
             
             return Decimal(str(round(new_value, 2)))
+        
+        # Generate initial values based on metric name and unit
+        if '3/4 court sprint' in metric_name and unit_code == 'seconds':
+            # Basketball 3/4 court sprint is typically 2.8-4.0 seconds
+            if is_lower_better:
+                return Decimal(str(round(random.uniform(2.8, 4.0), 2)))
+            else:
+                # If higher is better (though unusual for sprint)
+                return Decimal(str(round(random.uniform(3.5, 5.0), 2)))
+        elif 'vertical jump' in metric_name and unit_code == 'in':
+            # Vertical jump in inches - normal range for athletes is 16-28 inches
+            # With some elite players (5% chance) getting 28-36
+            if random.random() < 0.05:  # Elite jumpers
+                return Decimal(str(round(random.uniform(28, 36), 1)))
+            else:  # Average to good jumpers
+                return Decimal(str(round(random.uniform(16, 28), 1)))
+        elif 'bench press reps' in metric_name and '185' in metric_name and unit_code == 'reps':
+            # Bench press reps at 185 lbs - typical range 5-25
+            return Decimal(str(round(random.randint(5, 25), 0)))
+        elif 'squat max' in metric_name and unit_code == 'kg':
+            # Squat max in kg - typical range for athletes 100-200kg
+            return Decimal(str(round(random.uniform(100, 200), 1)))
+        elif 'yo-yo' in metric_name and unit_code == 'm':
+            # Yo-Yo test distance in meters - typically 400-2500m
+            return Decimal(str(round(random.uniform(400, 2500), 0)))
+        elif 'suicide' in metric_name and unit_code == 'seconds':
+            # Suicide drill time - typically 25-35 seconds
+            return Decimal(str(round(random.uniform(25, 35), 2)))
+        elif 'shuttle' in metric_name and '5-10-5' in metric_name:
+            # Pro agility 5-10-5 shuttle - typically 4.2-5.8 seconds
+            return Decimal(str(round(random.uniform(4.2, 5.8), 2)))
             
-        # Generate values based on unit
-        if unit == 'seconds':
+        # For other metrics, use the original logic
+        if unit_code == 'seconds':
             # Sprint times, agility drills etc.
-            if 'sprint' in metric.name.lower() or '40m' in metric.name.lower():
+            if 'sprint' in metric_name or '40m' in metric_name:
                 return Decimal(str(round(random.uniform(4.0, 7.0), 2)))
-            elif '10m' in metric.name.lower():
+            elif '10m' in metric_name:
                 return Decimal(str(round(random.uniform(1.5, 2.5), 2)))
-            elif 'agility' in metric.name.lower() or 't-test' in metric.name.lower():
+            elif 'agility' in metric_name or 't-test' in metric_name:
                 return Decimal(str(round(random.uniform(8.0, 15.0), 2)))
-            elif 'shuttle' in metric.name.lower():
+            elif 'shuttle' in metric_name:
                 return Decimal(str(round(random.uniform(20.0, 30.0), 2)))
             else:
                 return Decimal(str(round(random.uniform(10.0, 60.0), 2)))
                 
-        elif unit == 'minutes':
+        elif unit_code == 'minutes':
             # Longer running times
-            if '5k' in metric.name.lower() or '5 k' in metric.name.lower():
+            if '5k' in metric_name or '5 k' in metric_name:
                 return Decimal(str(round(random.uniform(18.0, 30.0), 2)))
             else:
                 return Decimal(str(round(random.uniform(3.0, 15.0), 2)))
                 
-        elif unit == 'm' or unit == 'meters':
+        elif unit_code == 'm' or unit_code == 'meters':
             # Distance measures
-            if 'cooper' in metric.name.lower():
+            if 'cooper' in metric_name:
                 return Decimal(str(round(random.uniform(2000, 3500), 0)))
             else:
                 return Decimal(str(round(random.uniform(100, 1000), 0)))
                 
-        elif unit == 'cm' or unit == 'centimeters':
+        elif unit_code == 'in' or unit_code == 'inches':
+            # Jumps in inches
+            return Decimal(str(round(random.uniform(16, 28), 1)))
+                
+        elif unit_code == 'cm' or unit_code == 'centimeters':
             # Usually for jumps
             return Decimal(str(round(random.uniform(30, 80), 1)))
             
-        elif unit == 'kg' or unit == 'kilograms':
+        elif unit_code == 'kg' or unit_code == 'kilograms':
             # Weight lifted
-            if 'bench' in metric.name.lower():
+            if 'bench' in metric_name:
                 return Decimal(str(round(random.uniform(60, 120), 1)))
-            elif 'squat' in metric.name.lower():
+            elif 'squat' in metric_name:
                 return Decimal(str(round(random.uniform(80, 180), 1)))
             else:
                 return Decimal(str(round(random.uniform(50, 150), 1)))
                 
-        elif unit == 'reps' or unit == 'repetitions':
+        elif unit_code == 'reps' or unit_code == 'repetitions':
             # Count of exercises
-            if 'pull' in metric.name.lower():
+            if 'pull' in metric_name:
                 return Decimal(str(round(random.uniform(5, 20), 0)))
             else:
                 return Decimal(str(round(random.uniform(10, 50), 0)))
                 
-        elif unit == 'bpm':
+        elif unit_code == 'bpm':
             # Heart rate
-            if 'resting' in metric.name.lower():
+            if 'resting' in metric_name:
                 return Decimal(str(round(random.uniform(50, 80), 0)))
-            elif 'recovery' in metric.name.lower():
+            elif 'recovery' in metric_name:
                 return Decimal(str(round(random.uniform(20, 50), 0)))
             else:
                 return Decimal(str(round(random.uniform(120, 190), 0)))
                 
-        elif unit == '%' or unit == 'percentage':
+        elif unit_code == '%' or unit_code == 'percentage':
             # Percentage measures
             return Decimal(str(round(random.uniform(40, 95), 1)))
             
-        elif unit == 'rating':
+        elif unit_code == 'rating':
             # Subjective ratings
             return Decimal(str(round(random.uniform(3, 10), 1)))
             

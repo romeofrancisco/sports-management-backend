@@ -8,6 +8,7 @@ from django.utils import timezone
 import logging
 
 from .models import (
+    MetricUnit,
     TrainingCategory, 
     TrainingSession, 
     PlayerTraining, 
@@ -16,6 +17,7 @@ from .models import (
 )
 from .filters import TrainingSessionFilter, PlayerTrainingFilter
 from .serializers import (
+    MetricUnitSerializer,
     TrainingCategorySerializer,
     TrainingSessionListSerializer,
     TrainingSessionDetailSerializer,
@@ -33,6 +35,13 @@ class TrainingPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+class MetricUnitViewSet(viewsets.ModelViewSet):
+    queryset = MetricUnit.objects.all().order_by('name')
+    serializer_class = MetricUnitSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name', 'code', 'description']
 
 class TrainingCategoryViewSet(viewsets.ModelViewSet):
     queryset = TrainingCategory.objects.all()
@@ -187,7 +196,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def assign_metrics(self, request, pk=None):
-        """Assign specific metrics to a training session"""
+        """Assign specific metrics to a training session and create records for all players"""
         session = self.get_object()
         metric_ids = request.data.get('metrics', [])
         
@@ -198,21 +207,54 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             )
             
         # Get existing metrics to validate IDs
-        valid_metrics = set(TrainingMetric.objects.filter(
-            id__in=metric_ids
-        ).values_list('id', flat=True))
+        valid_metrics = TrainingMetric.objects.filter(id__in=metric_ids)
+        valid_metric_ids = set(valid_metrics.values_list('id', flat=True))
         
         # Create a list to track which metrics were not found
-        invalid_metrics = [mid for mid in metric_ids if mid not in valid_metrics]
+        invalid_metrics = [mid for mid in metric_ids if mid not in valid_metric_ids]
         
         # Many-to-many relationships can be set by assigning a list
         # This replaces any existing metrics with the new list
-        session.metrics.set(valid_metrics)
+        session.metrics.set(valid_metric_ids)
+        
+        # Get all player trainings for this session
+        player_trainings = PlayerTraining.objects.filter(session=session)
+        
+        # Create or update metric records for all players in the session
+        created_records = []
+        updated_records = []
+        
+        for player_training in player_trainings:
+            # Assign metrics to player training
+            player_training.assigned_metrics.set(valid_metric_ids)
+            
+            # Create placeholder records for each metric
+            for metric in valid_metrics:
+                record, created = PlayerMetricRecord.objects.get_or_create(
+                    player_training=player_training,
+                    metric=metric,
+                    defaults={
+                        'value': 0,  # Default placeholder value
+                        'notes': 'Metric assigned - pending record'
+                    }
+                )
+                if created:
+                    created_records.append({
+                        'player': player_training.player.user.get_full_name(),
+                        'metric': metric.name
+                    })
+                else:
+                    updated_records.append({
+                        'player': player_training.player.user.get_full_name(),
+                        'metric': metric.name
+                    })
         
         return Response({
-            "detail": f"Assigned {len(valid_metrics)} metrics to training session",
-            "count": len(valid_metrics),
-            "invalid_metrics": invalid_metrics if invalid_metrics else None
+            "detail": f"Assigned {len(valid_metric_ids)} metrics to training session",
+            "count": len(valid_metric_ids),
+            "invalid_metrics": invalid_metrics if invalid_metrics else None,
+            "created_records": created_records,
+            "updated_records": updated_records
         })
 
 class PlayerTrainingViewSet(viewsets.ModelViewSet):
@@ -221,8 +263,8 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = PlayerTrainingFilter
-    @action(detail=True, methods=['post'])
     
+    @action(detail=True, methods=['post'])
     def record_metrics(self, request, pk=None):
         """Record multiple metrics for a player's training"""
         player_training = self.get_object()
@@ -330,7 +372,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                 'metric_name': record.metric.name,
                 'value': record.value,
                 'session_date': previous_training.session.date,
-                'unit': record.metric.unit
+                'unit': record.metric.metric_unit.code if record.metric.metric_unit else '-'
             }
             for record in previous_records
         ]
@@ -425,20 +467,15 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['team']
-    
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context.update({"request": self.request})
         return context
+        
     def get_queryset(self):
-        queryset = super().get_queryset()
-          # Only return players who have training records          
-        queryset = queryset.filter(
-            training_records__isnull=False
-        ).distinct()
-        
-        return queryset
-        
+        # Return all players, not just ones with training records
+        # This prevents 404 errors when a player has no training data
+        return super().get_queryset()      
     @action(detail=False, methods=['get'])
     def multi_player(self, request):
         """
@@ -452,69 +489,130 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
         - date_from: "YYYY-MM-DD" (optional)
         - date_to: "YYYY-MM-DD" (optional)
         - player_ids: comma-separated list of player IDs (optional, for filtering specific players within a team)
-        """   
+        - limit: int (optional, limit the number of data points per player, default is all)
+        - latest_only: boolean (optional, only fetch most recent training session data, default false)
+        - page_size: int (optional, pagination control, default 50)
+        - page: int (optional, pagination control, default 1)
+        - no_cache: boolean (optional, bypass cache, default false)
+        """
+        from django.db.models import Subquery, OuterRef, Prefetch, Max, F
+        from django.db.models.functions import Lag
+        from django.db.models.expressions import Window
+        from django.core.cache import cache
+        from trainings.utils import batch_fetch_record_data, calculate_player_improvement
+        import time
+        import hashlib
+        import json
+        
+        # Start timing
+        start_time = time.time()
+          # Get query parameters
         team_slug = request.query_params.get('team')
         metric_id = request.query_params.get('metric_id')
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
         player_ids_param = request.query_params.get('player_ids', '')
+        limit = request.query_params.get('limit')
+        latest_only = request.query_params.get('latest_only', 'false').lower() == 'true'
+        no_cache = request.query_params.get('no_cache', 'false').lower() == 'true'
         
+        # Pagination parameters
+        try:
+            page_size = int(request.query_params.get('page_size', 50))
+            page = int(request.query_params.get('page', 1))
+        except ValueError:
+            page_size = 50
+            page = 1
+            
         # Parse player_ids from comma-separated string if provided
-        player_ids = player_ids_param.split(',') if player_ids_param else []
-        player_ids = [pid for pid in player_ids if pid]  # Filter out empty strings
+        player_ids = []
+        if player_ids_param:
+            player_ids = [pid for pid in player_ids_param.split(',') if pid]
         
         if not metric_id:
             return Response({"detail": "Metric ID is required."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Start with a base query - either specific players or a whole team
-        if team_slug:
-            # If team_slug is provided, get all players from that team
-            players_query = Player.objects.filter(team__slug=team_slug)
             
-            # If specific players are also provided, filter to those players within the team
-            if player_ids:
-                players_query = players_query.filter(user_id__in=player_ids)
-        elif player_ids:
-            # If only player_ids provided (no team), filter by those IDs
-            players_query = Player.objects.filter(user_id__in=player_ids)
-        else:
-            # If neither player_ids nor team_slug provided, return an error
+        # Validate required parameters
+        if not team_slug and not player_ids:
             return Response(
                 {"detail": "Either team slug or player IDs must be provided."}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-          # If no players found
-        if not players_query.exists():
-            return Response({"detail": "No players found with the provided criteria."}, status=status.HTTP_404_NOT_FOUND)
         
-        # Get all user_ids from the players_query to use in our records query
-        selected_player_ids = list(players_query.values_list('user_id', flat=True))
-        
-        # Optimize by fetching all relevant records in a single query
-        records_query = PlayerMetricRecord.objects.filter(
-            player_training__player__user_id__in=selected_player_ids,
-            metric_id=metric_id
-        ).select_related(
-            'player_training__player',
-            'player_training__session',
-            'metric'
-        ).order_by(
-            'player_training__player__user_id',
-            'player_training__session__date'
+        # Try to get from cache if caching is enabled
+        if not no_cache:
+            # Create a unique cache key based on all request parameters
+            cache_key_parts = [
+                'player_progress_multi',
+                team_slug or '',
+                metric_id,
+                date_from or '',
+                date_to or '',
+                player_ids_param or '',
+                str(limit or ''),
+                str(latest_only),
+                str(page),
+                str(page_size)
+            ]
+            cache_key = hashlib.md5(json.dumps(cache_key_parts).encode()).hexdigest()
+            
+            # Check if we have a cached response
+            cached_response = cache.get(cache_key)
+            if cached_response:
+                # Add cache hit info to response metadata
+                cached_response['performance']['cache_hit'] = True
+                return Response(cached_response)        # Get metric information (we need this even if there are no records)
+        try:
+            # Handle "overall" metric specially
+            if metric_id == 'overall':
+                metric_data = {
+                    'metric_id': 'overall',
+                    'metric_name': 'Overall Performance',
+                    'unit': '%',
+                    'is_lower_better': False  # For overall, higher is always better
+                }
+            else:                # For regular metrics, fetch from database
+                metric = TrainingMetric.objects.select_related('metric_unit').only('name', 'is_lower_better', 'metric_unit__code').get(id=metric_id)
+                metric_data = {
+                    'metric_id': int(metric_id),
+                    'metric_name': metric.name,
+                    'unit': metric.metric_unit.code if metric.metric_unit else '-',
+                    'is_lower_better': metric.is_lower_better,
+                }
+        except TrainingMetric.DoesNotExist:
+            return Response({"detail": "Metric not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        # Build player query with optimized select_related 
+        if team_slug:
+            players_query = Player.objects.filter(team__slug=team_slug)
+            if player_ids:
+                players_query = players_query.filter(user_id__in=player_ids)
+        else:
+            players_query = Player.objects.filter(user_id__in=player_ids)
+            
+        # Optimize player query to fetch only needed fields 
+        players_query = players_query.select_related('team', 'user').only(
+            'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name'
         )
         
-        # Apply date filters if provided
-        if date_from:
-            records_query = records_query.filter(player_training__session__date__gte=date_from)
-        if date_to:
-            records_query = records_query.filter(player_training__session__date__lte=date_to)
-          # Group by player and metrics
-        result = {}
-        player_info = {}
+        # Count total players for pagination metadata
+        total_players = players_query.count()
         
-        # First get all players and their info to ensure we return all requested players
-        # even if they have no metrics data
-        for player in players_query:
+        # Apply pagination to players query for large datasets
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_players = list(players_query[start_idx:end_idx])
+        
+        # If no players found after pagination
+        if not paginated_players:
+            return Response({"detail": "No players found with the provided criteria."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all user_ids from the paginated players to use in our records query
+        selected_player_ids = [player.user_id for player in paginated_players]
+        
+        # Prepare response structure for all requested players
+        player_info = {}
+        for player in paginated_players:
             player_id = player.user_id
             player_info[player_id] = {
                 'user_id': player_id,
@@ -525,43 +623,97 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
                 'metrics_data': []
             }
         
-        # Process records and organize by player
-        metrics_by_player = {}
+        # Fetch player metric records using our optimized utility
+        records_by_player = batch_fetch_record_data(
+            selected_player_ids, 
+            metric_id, 
+            date_from, 
+            date_to
+        )
         
-        for record in records_query:
-            player_id = record.player_training.player.user_id
-            metric_id = record.metric.id
-            
-            # Initialize metrics dict for this player if not exists
-            if player_id not in metrics_by_player:
-                metrics_by_player[player_id] = {}
-            
-            # Initialize metric data if not exists for this player
-            if metric_id not in metrics_by_player[player_id]:
-                metrics_by_player[player_id][metric_id] = {
-                    'metric_id': metric_id,
-                    'metric_name': record.metric.name,
-                    'unit': record.metric.unit,
-                    'is_lower_better': record.metric.is_lower_better,
-                    'data_points': []
-                }
-            
-            # Add data point for this metric
-            metrics_by_player[player_id][metric_id]['data_points'].append({
-                'date': record.player_training.session.date,
-                'value': record.value,
-                'notes': record.notes,
-                'improvement_from_last': record.improvement_from_last,
-                'improvement_percentage': record.improvement_percentage
-            })
+        # Apply limit if specified
+        if limit and limit.isdigit():
+            for player_id in records_by_player:
+                # Sort by date to ensure we get most recent records
+                records_by_player[player_id].sort(key=lambda x: x['date'])
+                # Apply limit to keep only the most recent records
+                records_by_player[player_id] = records_by_player[player_id][-limit_val:]
+                
+        # If latest_only is true, keep only the latest record for each player
+        if latest_only:
+            for player_id in records_by_player:
+                if records_by_player[player_id]:
+                    # Sort by date and keep only the most recent record
+                    records_by_player[player_id].sort(key=lambda x: x['date'])
+                    records_by_player[player_id] = [records_by_player[player_id][-1]]
+          # Calculate overall improvement metrics for each player
+        player_improvements = calculate_player_improvement(
+            records_by_player, 
+            metric_data['is_lower_better'],  # Use the is_lower_better from metric_data to handle 'overall' case
+            metric_id  # Pass the metric_id to enable special handling for 'overall' metric
+        )
         
-        # Format final response
-        for player_id, player_data in player_info.items():
-            if player_id in metrics_by_player:
-                player_data['metrics_data'] = list(metrics_by_player[player_id].values())
-            result[player_id] = player_data
+        # Build the final response structure
+        for player_id, records in records_by_player.items():
+            if player_id in player_info:
+                # Create metric data structure for this player
+                player_metric_data = dict(metric_data)
+                
+                # Attach the data points (records)
+                player_metric_data['data_points'] = records
+                
+                # Add to player's metrics
+                player_info[player_id]['metrics_data'] = [player_metric_data]
+                
+                # Add improvement metrics if available
+                if player_id in player_improvements:
+                    improvement_data = player_improvements[player_id]
+                    
+                    player_info[player_id].update({
+                        'overall_improvement': improvement_data['overall_improvement'],
+                        'recent_improvement': improvement_data['recent_improvement'],
+                        'best_performance': improvement_data['best_performance'],
+                        'training_count': len(records)
+                    })
+        
+        # Format response with pagination and performance metadata
+        response_data = {
+            'results': player_info,
+            'pagination': {
+                'page': page,
+                'page_size': page_size,
+                'total_players': total_players,
+                'total_pages': (total_players + page_size - 1) // page_size
+            },
+            'performance': {
+                'execution_time_ms': round((time.time() - start_time) * 1000, 2),
+                'cache_hit': False,
+                'metrics_evaluated': len(selected_player_ids),
+                'data_points_count': sum(len(records) for records in records_by_player.values())
+            }
+        }
+        
+        # Cache the response if caching is enabled
+        if not no_cache:
+            # Create a unique cache key as we did before
+            cache_key_parts = [
+                'player_progress_multi',
+                team_slug or '',
+                metric_id,
+                date_from or '',
+                date_to or '',
+                player_ids_param or '',
+                str(limit or ''),
+                str(latest_only),
+                str(page),
+                str(page_size)
+            ]
+            cache_key = hashlib.md5(json.dumps(cache_key_parts).encode()).hexdigest()
             
-        return Response(result)
+            # Cache for 5 minutes (300 seconds) - adjust as needed
+            cache.set(cache_key, response_data, 300)
+        
+        return Response(response_data)
         
 
 class TeamTrainingAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):

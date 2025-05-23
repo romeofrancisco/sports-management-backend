@@ -18,7 +18,6 @@ from django.core.exceptions import PermissionDenied
 class PlayerPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
-    max_page_size = 100
 
 
 class TeamViewSet(ModelViewSet):
@@ -33,9 +32,38 @@ class TeamViewSet(ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
+    
+    def get_queryset(self):
+        """
+        Return teams based on user role:
+        - Admin: All teams
+        - Coach: Only their own teams
+        - Player: Only their team
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
+        
+        # For admins, show all teams
+        if user.is_admin:
+            return Team.objects.all()
+            
+        # For coaches, show only their teams
+        if hasattr(user, 'coach_profile'):
+            return user.coach_profile.teams.all()
+            
+        # For players, show only their team
+        if hasattr(user, 'player_profile') and user.player_profile.team:
+            return Team.objects.filter(id=user.player_profile.team.id)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access team data")
 
     def get_object(self):
-        queryset = self.filter_queryset(self.get_queryset())
+        # Store the unfiltered queryset
+        unfiltered_queryset = Team.objects.all()
+        
+        # Get the filtered queryset based on user role
+        filtered_queryset = self.filter_queryset(self.get_queryset())
 
         # Get the lookup value from the URL
         lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
@@ -54,7 +82,21 @@ class TeamViewSet(ModelViewSet):
             # Otherwise, use slug
             filter_kwargs = {self.lookup_field: lookup_value}
 
-        obj = queryset.get(**filter_kwargs)
+        # First check if the object exists at all in the unfiltered queryset
+        try:
+            obj = unfiltered_queryset.get(**filter_kwargs)
+        except Team.DoesNotExist:
+            # If the team doesn't exist at all, raise 404
+            from django.http import Http404
+            raise Http404("Team does not exist")
+        
+        # Now check if the object is in the filtered queryset (user has access)
+        if not filtered_queryset.filter(**filter_kwargs).exists():
+            # If the team exists but user doesn't have access, raise permission denied
+            raise PermissionDenied("You don't have permission to access this team")
+        
+        # Get the object from the filtered queryset
+        obj = filtered_queryset.get(**filter_kwargs)
         self.check_object_permissions(self.request, obj)
         return obj
     
@@ -117,70 +159,20 @@ class TeamViewSet(ModelViewSet):
             else:
                 raise PermissionDenied("You can only delete your own teams")
     
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get"], get_permissions=[IsAdminUser])
     def coaches(self, request, **kwargs):
         team = self.get_object()
         coaches = team.coach.all()
         serializer = CoachInfoSerializer(coaches, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get"], get_permissions=[IsAdminOrCoachUser])
     def players(self, request, **kwargs):
         team = self.get_object()
         players = team.players.select_related("user").all()
         serializer = PlayerInfoSerializer(players, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @action(detail=False, methods=["get"], permission_classes=[IsCoachUser])
-    def my_team(self, request):
-        user = request.user
-
-        if hasattr(user, "coach_profile"):
-            team = user.coach_profile.teams.first()
-            if team:
-                serializer = self.get_serializer(team)
-                return Response(serializer.data)
-
-        elif hasattr(user, "player_profile"):
-            team = user.player_profile.team
-            if team:
-                serializer = self.get_serializer(team)
-                return Response(serializer.data)
-
-        return Response({"detail": "No team found"}, status=status.HTTP_404_NOT_FOUND)
-    
-    # Add these actions to your TeamViewSet class    
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
-    def my_team_players(self, request):
-        """Return all players for the logged-in coach's team"""
-        user = request.user
-        
-        if hasattr(user, "coach_profile"):
-            team = user.coach_profile.teams.first()
-            if team:
-                players = team.players.select_related("user").all()
-                serializer = PlayerInfoSerializer(players, many=True, context={'request': request})
-                return Response(serializer.data)
-            
-            return Response({"detail": "No team found for this coach"}, status=status.HTTP_404_NOT_FOUND)
-        
-        return Response({"detail": "User is not a coach"}, status=status.HTTP_403_FORBIDDEN)    
-    
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
-    def my_teammates(self, request):
-        """Return all teammates for the logged-in player"""
-        user = request.user
-        
-        if hasattr(user, "player_profile"):
-            team = user.player_profile.team
-            if team:
-                teammates = team.players.select_related("user").exclude(user=user).all()
-                serializer = PlayerInfoSerializer(teammates, many=True, context={'request': request})
-                return Response(serializer.data)
-            
-            return Response({"detail": "Player is not assigned to a team"}, status=status.HTTP_404_NOT_FOUND)
-        
-        return Response({"detail": "User is not a player"}, status=status.HTTP_403_FORBIDDEN)
 
     
 class SportTeamsViewSet(ReadOnlyModelViewSet):
@@ -216,31 +208,99 @@ class PlayerViews(ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
-
+ 
     def get_queryset(self):
-        return (
-            Player.objects.select_related("user")
-            .annotate(
-                first_name=F("user__first_name"),
-                last_name=F("user__last_name"),
-                sex=F("user__sex"),
-            )
-            .order_by("user__first_name")
-        )
+        """
+        Return players based on user role:
+        - Admin: All players
+        - Coach: Only players on their teams
+        - Player: Only teammates
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
         
+        # Base queryset with annotations
+        base_queryset = Player.objects.select_related("user").annotate(
+            first_name=F("user__first_name"),
+            last_name=F("user__last_name"),
+            sex=F("user__sex"),
+        ).order_by("user__first_name")
+        
+        # For admins, show all players
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only players from their teams
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(team__in=coach_teams)
+            
+        # For players, show only teammates
+        if hasattr(user, 'player_profile') and user.player_profile.team:
+            player_team = user.player_profile.team
+            return base_queryset.filter(team=player_team)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access player data")
+    
+    def get_object(self):
+        """
+        Similar to TeamViewSet.get_object, this ensures players can only be accessed
+        based on user role permissions
+        """
+        # Store the unfiltered queryset
+        unfiltered_queryset = Player.objects.all()
+        
+        # Get the filtered queryset based on user role
+        filtered_queryset = self.filter_queryset(self.get_queryset())
+
+        # Get the lookup value from the URL
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        lookup_value = self.kwargs[lookup_url_kwarg]
+
+        # Try to determine if the lookup value is a numeric ID
+        try:
+            is_numeric = lookup_value.isdigit()
+        except (AttributeError, ValueError):
+            is_numeric = False
+
+        if is_numeric:
+            # If it's numeric, look up by ID
+            filter_kwargs = {"pk": lookup_value}
+        else:
+            # Otherwise, use slug
+            filter_kwargs = {self.lookup_field: lookup_value}
+
+        # First check if the object exists at all in the unfiltered queryset
+        try:
+            obj = unfiltered_queryset.get(**filter_kwargs)
+        except Player.DoesNotExist:
+            # If the player doesn't exist at all, raise 404
+            from django.http import Http404
+            raise Http404("Player does not exist")
+        
+        # Now check if the object is in the filtered queryset (user has access)
+        if not filtered_queryset.filter(**filter_kwargs).exists():
+            # If the player exists but user doesn't have access, raise permission denied
+            raise PermissionDenied("You don't have permission to access this player")
+        
+        # Get the object from the filtered queryset
+        obj = filtered_queryset.get(**filter_kwargs)
+        self.check_object_permissions(self.request, obj)
+        return obj
+    
     def get_permissions(self):
         """
         Instantiates and returns the list of permissions that this view requires.
-        - GET requests are accessible to anyone
+        - GET requests are accessible to anyone with proper role (filtered by get_queryset)
         - POST/CREATE requests are restricted to admin users
         - DELETE/UPDATE requests can be done by admins or coaches (with team restrictions)
         - Coaches can only modify players from their own teams
         """
-
-        if self.action in ['create','update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
             permission_classes = [IsAdminOrCoachUser]
         else:
-            permission_classes = []
+            permission_classes = [IsAuthenticated]
             
         return [permission() for permission in permission_classes]
     

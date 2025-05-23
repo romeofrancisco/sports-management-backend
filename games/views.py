@@ -19,6 +19,7 @@ from .serializers import (
     SubstitutionSerializer,
     GameCurrentPlayersSerializer,
 )
+from rest_framework.permissions import IsAuthenticated
 from sports_management.permissions import IsAdminOrCoachUser
 from .services import (
     PlayerStatsSummaryService,
@@ -33,6 +34,7 @@ from .filters import GameFilter
 from collections import defaultdict
 import time
 import logging
+from django.db import models
 
 
 logger = logging.getLogger(__name__)
@@ -158,10 +160,54 @@ class GameViewSet(viewsets.ModelViewSet):
         "substitutions__substitute_out__user",
     )
     serializer_class = GameSerializer
-    permission_classes = [IsAdminOrCoachUser]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = GameFilter
     pagination_class = GamePagination
+    
+    def get_queryset(self):
+        """
+        Filter games based on game type and user role:
+        - League and tournament games are visible to all users
+        - Normal games are visible to:
+          - Admin users: All normal games
+          - Coach/Player users: Only games for their teams
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # If admin, return all games
+        if user.is_admin:
+            return queryset
+            
+        # Filter normal games based on user role, but keep all league/tournament games
+        if hasattr(user, 'coach_profile'):
+            # For coaches: normal games only for teams they coach
+            coach_teams = user.coach_profile.teams.all()
+            return queryset.filter(
+                # Keep all league/tournament games
+                models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |
+                # Plus normal games only for their teams
+                (models.Q(type=Game.Type.NORMAL) & 
+                 (models.Q(home_team__in=coach_teams) | models.Q(away_team__in=coach_teams)))
+            )
+        elif hasattr(user, 'player_profile'):
+            # For players: normal games only for their team
+            player_team = user.player_profile.team
+            if player_team:
+                return queryset.filter(
+                    # Keep all league/tournament games
+                    models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |
+                    # Plus normal games only for their team
+                    (models.Q(type=Game.Type.NORMAL) & 
+                     (models.Q(home_team=player_team) | models.Q(away_team=player_team)))
+                )
+            else:
+                # Player has no team, only show league/tournament games
+                return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
+        
+        # Default: only show league and tournament games for other users
+        return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
     
     def perform_create(self, serializer):
         serializer.save(creator=self.request.user)
