@@ -131,7 +131,7 @@ class CoachInfoSerializer(ModelSerializer):
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex")
     password = serializers.CharField(source="user.password", required=True, write_only=True)
-    teams = TeamSerializer(many=True, read_only=True, source='team_set') 
+    teams = TeamSerializer(many=True, read_only=True) 
     
     full_name = serializers.SerializerMethodField()
     class Meta:

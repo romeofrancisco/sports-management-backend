@@ -3,6 +3,24 @@ from teams.models import Player, Team, Coach
 from django.utils import timezone
 import uuid
 
+class MetricUnit(models.Model):
+    """Units of measurement for training metrics with normalization weights"""
+    code = models.CharField(max_length=30, unique=True)
+    name = models.CharField(max_length=100)
+    normalization_weight = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=1.0,
+        help_text="Weight to normalize improvements. Lower values for metrics that have naturally large percentage changes."
+    )
+    description = models.TextField(blank=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+    
+    class Meta:
+        ordering = ['name']
+
 class TrainingCategory(models.Model):
     """Training categories like 'Endurance', 'Speed', 'Strength', etc."""
     name = models.CharField(max_length=100)
@@ -67,10 +85,10 @@ class PlayerTraining(models.Model):
             ('absent', 'Absent'),
             ('late', 'Late'),
             ('excused', 'Excused Absence'),
-            ('pending', 'Pending'),
-        ],
+            ('pending', 'Pending'),        ],
         default='pending'
     )
+    
     notes = models.TextField(blank=True)
     assigned_metrics = models.ManyToManyField('TrainingMetric', related_name='assigned_player_trainings', blank=True)
     
@@ -79,45 +97,38 @@ class PlayerTraining(models.Model):
     
     class Meta:
         unique_together = ['player', 'session']
+        indexes = [
+            # Index for efficient player and session lookups
+            models.Index(fields=['player'], name='player_idx'),
+            models.Index(fields=['session'], name='session_idx'),
+            # Index for session date lookup
+            models.Index(fields=['session', 'player'], name='session_player_idx')
+        ]
 
 class TrainingMetric(models.Model):
     """Metrics that can be tracked during training like 'sprint time', 'vertical jump', etc."""
-    UNIT_CHOICES = [
-        # Time units
-        ('seconds', 'Seconds'),
-        ('minutes', 'Minutes'),
-        
-        # Distance units
-        ('cm', 'Centimeters'),
-        ('m', 'Meters'),
-        ('km', 'Kilometers'),
-        ('in', 'Inches'),
-        ('ft', 'Feet'),
-        
-        # Weight units
-        ('kg', 'Kilograms'),
-        ('lbs', 'Pounds'),
-        
-        # Other common units
-        ('reps', 'Repetitions'),
-        ('sets', 'Sets'),
-        ('bpm', 'Beats per minute'),
-        ('points', 'Points'),
-        ('%', 'Percentage'),
-        ('rating', 'Rating (1-10)'),
-        
-        # Allow custom units as well
-        ('other', 'Other (specify in description)'),
-    ]
     
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
-    unit = models.CharField(max_length=30, choices=UNIT_CHOICES, help_text="The unit of measurement for this metric")
+    metric_unit = models.ForeignKey(
+        MetricUnit, 
+        on_delete=models.PROTECT,  # Prevent deletion of units that are in use
+        related_name='metrics',
+        help_text="The unit of measurement for this metric",
+        null=True,  # Temporarily allow null while we migrate
+        blank=True,
+    )
     category = models.ForeignKey(TrainingCategory, on_delete=models.CASCADE, related_name='metrics')
     is_lower_better = models.BooleanField(default=True, help_text="Is a lower value better? True for metrics like 'time'.")
+    weight = models.DecimalField(
+        max_digits=5, 
+        decimal_places=2, 
+        default=1.0,
+        help_text="Weight factor for calculating overall improvement. Higher weight = more impact on overall performance."
+    )
     
     def __str__(self):
-        return f"{self.name} ({self.unit})"
+        return f"{self.name} ({self.metric_unit.code})"
     
     @property
     def primary_category(self):
@@ -125,7 +136,7 @@ class TrainingMetric(models.Model):
         return self.category
 
 class PlayerMetricRecord(models.Model):
-    """Records a specific measurement for a player during a training session"""
+    """Records a specific measurement for a player during a training session"""    
     player_training = models.ForeignKey(PlayerTraining, on_delete=models.CASCADE, related_name='metric_records')
     metric = models.ForeignKey(TrainingMetric, on_delete=models.CASCADE, related_name='records')
     value = models.DecimalField(max_digits=10, decimal_places=2)
@@ -134,10 +145,23 @@ class PlayerMetricRecord(models.Model):
     recorded_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
-        return f"{self.player_training.player} - {self.metric.name}: {self.value} {self.metric.unit}"
-    
+        return f"{self.player_training.player} - {self.metric.name}: {self.value} {self.metric.metric_unit.code}"
+
     class Meta:
         ordering = ['-player_training__session__date', 'metric']
+        indexes = [
+            # Index for filtering by player and metric (common query pattern)
+            models.Index(fields=['player_training', 'metric'], name='pt_metric_idx'),
+            
+            # Index for value-based sorting and filtering
+            models.Index(fields=['value'], name='metric_value_idx'),
+            
+            # Index for looking up by metric
+            models.Index(fields=['metric'], name='metric_only_idx'),
+            
+            # For efficient player training lookup
+            models.Index(fields=['player_training'], name='player_training_idx'),
+        ]
     
     @property
     def improvement_from_last(self):
@@ -152,15 +176,15 @@ class PlayerMetricRecord(models.Model):
             return None
             
         raw_diff = self.value - prev_record.value
-        
-        # For metrics where lower is better (like time), negate the difference
+          # For metrics where lower is better (like time), negate the difference
         if self.metric.is_lower_better:
             return -raw_diff
         return raw_diff
-        
     @property
     def improvement_percentage(self):
-        """Calculate percentage improvement from last recorded value"""
+        """Calculate percentage improvement from last recorded value with unit normalization"""
+        from decimal import Decimal
+        
         prev_record = PlayerMetricRecord.objects.filter(
             player_training__player=self.player_training.player,
             metric=self.metric,
@@ -170,12 +194,25 @@ class PlayerMetricRecord(models.Model):
         if not prev_record or prev_record.value == 0:
             return None
             
-        raw_percentage = ((self.value - prev_record.value) / prev_record.value) * 100
+        # Convert values to Decimal for precise calculation
+        current_value = Decimal(str(self.value))
+        prev_value = Decimal(str(prev_record.value))
+        raw_percentage = ((current_value - prev_value) / prev_value) * Decimal('100.0')
+        
+        # Apply unit normalization weight if available
+        if self.metric.metric_unit:
+            weight = Decimal(str(self.metric.metric_unit.normalization_weight))
+            normalized_percentage = raw_percentage * weight
+        else:
+            # Default normalization weight if metric_unit not set
+            normalized_percentage = raw_percentage
         
         # For metrics where lower is better (like time), negate the percentage
         if self.metric.is_lower_better:
-            return -raw_percentage
-        return raw_percentage
+            normalized_percentage = -normalized_percentage
+            
+        # Convert to float for API serialization
+        return float(normalized_percentage)
 
     @staticmethod
     def team_improvement(team, metric, up_to_date=None):

@@ -174,6 +174,19 @@ MEDIA_ROOT=os.path.join(BASE_DIR,'media')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Cache settings
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-player-progress',
+        'TIMEOUT': 300,  # 5 minutes in seconds
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+            'CULL_FREQUENCY': 3,  # Fraction of entries to cull when max is reached
+        }
+    }
+}
+
 # Production-specific security settings
 if not DEBUG:
     SECURE_SSL_REDIRECT = True
@@ -182,3 +195,6 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 3600
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+
+# Google AI API Configuration
+GOOGLE_AI_API_KEY = env("GOOGLE_AI_API_KEY")
