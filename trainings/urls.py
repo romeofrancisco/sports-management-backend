@@ -10,7 +10,7 @@ router.register(r'sessions', views.TrainingSessionViewSet)
 router.register(r'player-trainings', views.PlayerTrainingViewSet)
 router.register(r'metric-records', views.PlayerMetricRecordViewSet)
 router.register(r'player-progress', views.PlayerProgressViewSet)
-router.register(r'team-analytics', views.TeamTrainingAnalyticsViewSet)
+router.register(r'attendance-analytics', views.AttendanceAnalyticsViewSet, basename='attendance-analytics')
 
 app_name = 'trainings'
 

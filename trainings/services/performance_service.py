@@ -1,5 +1,6 @@
 ﻿import statistics
 from trainings.models import PlayerMetricRecord, TrainingMetric
+from trainings.utils import calculate_normalized_improvement
 
 class PerformanceService:
     """Service class for performance analysis and statistical calculations
@@ -58,10 +59,35 @@ class PerformanceService:
                 # And set improvement to match sign for consistency in is_positive flag
                 improvement = 1 if improvement_percentage > 0 else -1
             else:
-                # Standard calculation for regular metrics or when overall_improvement_percentage is not provided
-                improvement_percentage = (raw_diff / abs(first_record["value"])) * 100
-                if is_lower_better:
-                    improvement_percentage = -improvement_percentage
+                # Use shared utility function for consistent normalization weight handling
+                if metric_id != "overall" and metric_id != "unknown":
+                    try:
+                        from trainings.models import TrainingMetric
+                        metric = TrainingMetric.objects.select_related('metric_unit').get(id=metric_id)
+                        normalization_weight = float(metric.metric_unit.normalization_weight) if metric.metric_unit and metric.metric_unit.normalization_weight else 1.0
+                        
+                        # Use the shared calculation function (current, previous)
+                        improvement_data = calculate_normalized_improvement(
+                            last_record["value"],   # current value
+                            first_record["value"],  # previous value  
+                            is_lower_better,
+                            normalization_weight
+                        )
+                        improvement_percentage = improvement_data['percentage']
+                        improvement = improvement_data['raw_value']
+                        
+                    except (TrainingMetric.DoesNotExist, ValueError):
+                        # Fallback to manual calculation without normalization
+                        raw_percentage = (raw_diff / abs(first_record["value"])) * 100
+                        if is_lower_better:
+                            raw_percentage = -raw_percentage
+                        improvement_percentage = float(raw_percentage)
+                else:
+                    # Manual calculation for overall/unknown metrics
+                    raw_percentage = (raw_diff / abs(first_record["value"])) * 100
+                    if is_lower_better:
+                        raw_percentage = -raw_percentage
+                    improvement_percentage = float(raw_percentage)
 
         # Calculate statistics
         values = [record["value"] for record in sorted_records]
@@ -97,14 +123,30 @@ class PerformanceService:
                 recent_percentage = recent_diff
                 recent_improvement = 1 if recent_percentage > 0 else -1
             else:
-                # Standard calculation for regular metrics
+                # Standard calculation for regular metrics with normalization weight applied
                 recent_improvement = -recent_diff if is_lower_better else recent_diff
                 
                 recent_percentage = 0
                 if recent_first["value"] != 0:
-                    recent_percentage = (recent_diff / abs(recent_first["value"])) * 100
+                    raw_recent_percentage = (recent_diff / abs(recent_first["value"])) * 100
                     if is_lower_better:
-                        recent_percentage = -recent_percentage
+                        raw_recent_percentage = -raw_recent_percentage
+                    
+                    # Apply normalization weight if metric exists in database
+                    if metric_id != "overall" and metric_id != "unknown":
+                        try:
+                            from trainings.models import TrainingMetric
+                            metric = TrainingMetric.objects.select_related('metric_unit').get(id=metric_id)
+                            if metric.metric_unit and metric.metric_unit.normalization_weight:
+                                normalization_weight = float(metric.metric_unit.normalization_weight)
+                                recent_percentage = float(raw_recent_percentage) * normalization_weight
+                            else:
+                                recent_percentage = float(raw_recent_percentage)
+                        except (TrainingMetric.DoesNotExist, ValueError):
+                            # Fallback to raw percentage if metric not found or invalid weight
+                            recent_percentage = float(raw_recent_percentage)
+                    else:
+                        recent_percentage = float(raw_recent_percentage)
         else:
             recent_improvement = 0
             recent_percentage = 0
