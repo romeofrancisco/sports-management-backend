@@ -2,6 +2,7 @@ import statistics
 from django.utils import timezone
 from datetime import datetime
 from trainings.models import PlayerMetricRecord, PlayerTraining
+from trainings.utils import calculate_normalized_improvement
 
 class ProgressService:
     """Service class for calculating player progress and improvements"""
@@ -73,27 +74,22 @@ class ProgressService:
                     
                 # Sort records chronologically
                 sorted_records = sorted(data['records'], key=lambda x: x['date'])
-                
-                # Calculate improvement between first and last record for this date
+                  # Calculate improvement between first and last record for this date
                 first_record = sorted_records[0]
                 last_record = sorted_records[-1]
                 
-                # Calculate raw improvement
-                raw_improvement = last_record['value'] - first_record['value']
+                # Use the shared calculation function for consistency
+                improvement_data = calculate_normalized_improvement(
+                    last_record['value'],
+                    first_record['value'],
+                    data['is_lower_better'],
+                    float(data['weight'])
+                )
                 
-                # Adjust for metrics where lower is better
-                if data['is_lower_better']:
-                    raw_improvement = -raw_improvement
-                    
-                # Calculate percentage improvement if first value is not zero
-                if first_record['value'] != 0:
-                    raw_percentage = (raw_improvement / abs(first_record['value'])) * Decimal('100')
-                    weight = data['weight']
-                    
-                    # Apply the weight to normalize the percentage
-                    normalized_percentage = raw_percentage * weight
-                    weighted_normalized_improvements.append(normalized_percentage)
-                    total_weights += weight
+                # Add the normalized percentage to our weighted improvements
+                if improvement_data['percentage'] is not None:
+                    weighted_normalized_improvements.append(Decimal(str(improvement_data['percentage'])))
+                    total_weights += data['weight']
             
             # Only add a data point if we have improvements to average
             if weighted_normalized_improvements and total_weights:

@@ -3,6 +3,55 @@ from functools import wraps
 import hashlib
 import json
 import time
+from decimal import Decimal
+
+
+def calculate_normalized_improvement(current_value, previous_value, is_lower_better, normalization_weight=1.0):
+    """
+    Calculate improvement percentage with normalization weight applied.
+    
+    This function consolidates the improvement calculation logic used across
+    ProgressService and multi-player utilities to ensure consistency.
+    
+    Args:
+        current_value: Current metric value
+        previous_value: Previous metric value to compare against
+        is_lower_better: Whether lower values indicate better performance
+        normalization_weight: Weight to apply for normalization (default 1.0)
+        
+    Returns:
+        dict: Contains percentage and raw improvement values
+    """
+    # Convert to Decimal for precise calculation
+    current_val = Decimal(str(current_value))
+    prev_val = Decimal(str(previous_value))
+    
+    # Calculate raw improvement
+    raw_improvement = current_val - prev_val
+    
+    # Adjust for metrics where lower is better
+    if is_lower_better:
+        raw_improvement = -raw_improvement
+    
+    # Calculate percentage improvement if previous value is not zero
+    if prev_val != 0:
+        raw_percentage = (raw_improvement / abs(prev_val)) * Decimal('100')
+        
+        # Apply normalization weight
+        weight = Decimal(str(normalization_weight))
+        normalized_percentage = raw_percentage * weight
+        
+        return {
+            'percentage': float(normalized_percentage),
+            'raw_value': float(raw_improvement),
+            'is_positive': raw_improvement > 0
+        }
+    else:
+        return {
+            'percentage': 0.0,
+            'raw_value': float(raw_improvement),
+            'is_positive': raw_improvement > 0
+        }
 
 def cached_db_query(timeout=300):
     """
@@ -102,8 +151,7 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
                 records_by_player[player_id] = []
                 
         return records_by_player
-    
-    # Regular metrics processing
+      # Regular metrics processing
     # Start with a base query for all specified players and the given metric
     base_query = PlayerMetricRecord.objects.filter(
         player_training__player__user_id__in=player_ids,
@@ -111,7 +159,8 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
     ).select_related(
         'player_training__player',
         'player_training__session',
-        'metric'
+        'metric',
+        'metric__metric_unit'  # Add metric_unit to get normalization weights
     )
     
     # Apply date filters if provided
@@ -128,8 +177,7 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
         'player_training__player__user_id', 
         'player_training__session__date'
     )
-    
-    # Group results by player
+      # Group results by player
     for record in records:
         player_id = record.player_training.player.user_id
         if player_id not in records_by_player:
@@ -140,36 +188,31 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
             'value': record.value,
             'notes': record.notes,
             'session_id': record.player_training.session.session_id,
-            'is_lower_better': record.metric.is_lower_better
+            'is_lower_better': record.metric.is_lower_better,
+            'normalization_weight': float(record.metric.metric_unit.normalization_weight) if record.metric.metric_unit else 1.0
         })
     
     # Process improvements for each player's records
     for player_id, records in records_by_player.items():
         # Sort chronologically to ensure proper improvement calculation
         records.sort(key=lambda x: x['date'])
-        
-        # Calculate improvements
+          # Calculate improvements
         for i, record in enumerate(records):
             if i > 0:
                 prev_record = records[i-1]
                 current_value = float(record['value'])
                 prev_value = float(prev_record['value'])
                 
-                # Calculate raw improvement
-                improvement = current_value - prev_value
+                # Use the new shared calculation function with normalization weights
+                improvement_data = calculate_normalized_improvement(
+                    current_value,
+                    prev_value,
+                    record['is_lower_better'],
+                    record['normalization_weight']
+                )
                 
-                # Adjust sign based on whether lower is better
-                if record['is_lower_better']:
-                    improvement = -improvement
-                
-                # Calculate percentage if previous value is not zero
-                if prev_value != 0:
-                    percentage = (improvement / abs(prev_value)) * 100
-                else:
-                    percentage = 0
-                
-                record['improvement_from_last'] = improvement
-                record['improvement_percentage'] = percentage
+                record['improvement_from_last'] = improvement_data['raw_value']
+                record['improvement_percentage'] = improvement_data['percentage']
             else:
                 # First record has no previous to compare with
                 record['improvement_from_last'] = None
@@ -215,23 +258,14 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
         first_value = float(first_record['value'])
         last_value = float(last_record['value'])
         
-        # Calculate raw improvement
-        overall_improvement = last_value - first_value
-        
         # Check if the record itself has is_lower_better (for overall metric)
         # otherwise use the passed in parameter
         record_is_lower_better = first_record.get('is_lower_better', metric_is_lower_better)
         
-        # Adjust for metrics where lower is better
-        if record_is_lower_better:
-            overall_improvement = -overall_improvement
+        # Get normalization weight for consistent calculation
+        normalization_weight = first_record.get('normalization_weight', 1.0)
         
-        # Calculate percentage
-        if first_value != 0:
-            overall_percentage = (overall_improvement / abs(first_value)) * 100
-        else:
-            overall_percentage = 0
-              # For overall metric, we need to correct the percentage to match the calculation in ProgressService
+        # For overall metric, we need to correct the percentage to match the calculation in ProgressService
         if is_overall_metric:
             # When it's the "overall" metric, we need to make sure to use the consistent calculation
             # The value we got is likely the average of improvement percentages across multiple metrics
@@ -240,38 +274,49 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
             overall_percentage = last_value
             # Update is_positive flag to be consistent with the percentage value
             overall_improvement = 1 if last_value > 0 else -1
-          # Calculate recent improvement (using last 30% of records or at least 2)
+        else:
+            # Use the shared calculation function with normalization weights
+            improvement_data = calculate_normalized_improvement(
+                last_value,
+                first_value,
+                record_is_lower_better,
+                normalization_weight
+            )
+            overall_percentage = improvement_data['percentage']
+            overall_improvement = improvement_data['raw_value']
+        
+        # Calculate recent improvement (using last 30% of records or at least 2)
         recent_count = max(2, int(len(sorted_records) * 0.3))
         recent_records = sorted_records[-recent_count:]
+        
         if len(recent_records) >= 2:
             recent_first = recent_records[0]
             recent_last = recent_records[-1]
             
             recent_first_value = float(recent_first['value'])
             recent_last_value = float(recent_last['value'])
-            recent_improvement = recent_last_value - recent_first_value
+            
+            # Get normalization weight and is_lower_better from record
+            recent_record_is_lower_better = recent_first.get('is_lower_better', metric_is_lower_better)
+            recent_normalization_weight = recent_first.get('normalization_weight', 1.0)
             
             # For overall metric, special handling to be consistent with other views
             if is_overall_metric:
                 # For the overall metric, recent improvement should simply be the difference of percentages
                 # And the is_positive flag should be directly based on the sign of that difference
+                recent_improvement = recent_last_value - recent_first_value
                 recent_percentage = recent_improvement  # Already a percentage for overall metric
                 recent_improvement = 1 if recent_percentage > 0 else -1
             else:
-                # Normal metric calculation
-                # Check if the record itself has is_lower_better (for overall metric)
-                # otherwise use the passed in parameter
-                record_is_lower_better = recent_first.get('is_lower_better', metric_is_lower_better)
-                
-                # Adjust for metrics where lower is better
-                if record_is_lower_better:
-                    recent_improvement = -recent_improvement
-                    
-                # Calculate percentage
-                if recent_first_value != 0:
-                    recent_percentage = (recent_improvement / abs(recent_first_value)) * 100
-                else:
-                    recent_percentage = 0
+                # Use the shared calculation function with normalization weights
+                recent_improvement_data = calculate_normalized_improvement(
+                    recent_last_value,
+                    recent_first_value,
+                    recent_record_is_lower_better,
+                    recent_normalization_weight
+                )
+                recent_percentage = recent_improvement_data['percentage']
+                recent_improvement = recent_improvement_data['raw_value']
         else:
             recent_improvement = None
             recent_percentage = None
@@ -283,12 +328,14 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
         else:
             # For metrics where higher is better, find maximum
             best_record = max(sorted_records, key=lambda x: float(x['value']))
+            
         improvements[player_id] = {
             'overall_improvement': {
                 'percentage': overall_percentage,
                 'raw_value': overall_improvement,
                 'is_positive': overall_improvement > 0 if not is_overall_metric else overall_percentage > 0
-            },            'recent_improvement': {
+            },
+            'recent_improvement': {
                 'percentage': recent_percentage,
                 'raw_value': recent_improvement,
                 'is_positive': recent_percentage > 0 if is_overall_metric else (recent_improvement > 0 if recent_improvement is not None else None)
