@@ -121,8 +121,7 @@ class TrainingSessionService:
         
         # Merge percentages into attendance data
         attendance_data_with_percentages = {**attendance_data, **attendance_data_percentages}
-        
-        # Get metrics recorded in this session
+          # Get metrics recorded in this session
         metrics_summary = PlayerMetricRecord.objects.filter(
             player_training__session=session
         ).values('metric__name', 'metric__metric_unit__code', 'metric__is_lower_better').annotate(
@@ -177,6 +176,8 @@ class TrainingSessionService:
         Returns:
             dict: Result with assignment details
         """
+        from .player_training_service import PlayerTrainingService
+        
         if not isinstance(metric_ids, list):
             return {
                 'success': False,
@@ -186,7 +187,7 @@ class TrainingSessionService:
             
         # Get existing metrics to validate IDs
         valid_metrics = TrainingMetric.objects.filter(id__in=metric_ids)
-        valid_metric_ids = set(valid_metrics.values_list('id', flat=True))
+        valid_metric_ids = list(valid_metrics.values_list('id', flat=True))
         
         # Create a list to track which metrics were not found
         invalid_metrics = [mid for mid in metric_ids if mid not in valid_metric_ids]
@@ -198,40 +199,32 @@ class TrainingSessionService:
             # Get all player trainings for this session
             player_trainings = PlayerTraining.objects.filter(session=session)
             
-            # Create or update metric records for all players in the session
-            created_records = []
-            updated_records = []
+            # Use PlayerTrainingService to properly assign metrics to each player
+            # This ensures proper cleanup of removed metrics
+            total_created = 0
+            total_deleted = 0
+            player_results = []
             
             for player_training in player_trainings:
-                # Assign metrics to player training
-                player_training.assigned_metrics.set(valid_metric_ids)
-                
-                # Create placeholder records for each metric
-                for metric in valid_metrics:
-                    record, created = PlayerMetricRecord.objects.get_or_create(
-                        player_training=player_training,
-                        metric=metric,
-                        defaults={
-                            'value': 0,  # Default placeholder value
-                            'notes': 'Metric assigned - pending record'
-                        }
-                    )
-                    if created:
-                        created_records.append({
-                            'player': player_training.player.user.get_full_name(),
-                            'metric': metric.name
-                        })
-                    else:
-                        updated_records.append({
-                            'player': player_training.player.user.get_full_name(),
-                            'metric': metric.name
-                        })
+                result = PlayerTrainingService.assign_metrics_to_player_training(
+                    player_training, valid_metric_ids
+                )
+                if result['success']:
+                    total_created += len(result.get('created_records', []))
+                    total_deleted += result.get('deleted_count', 0)
+                    player_results.append({
+                        'player': player_training.player.user.get_full_name(),
+                        'assigned': result['count'],
+                        'created': len(result.get('created_records', [])),
+                        'deleted': result.get('deleted_count', 0)
+                    })
 
         return {
             'success': True,
             'assigned_count': len(valid_metric_ids),
             'invalid_metrics': invalid_metrics if invalid_metrics else None,
-            'created_records': created_records,
-            'updated_records': updated_records,
-            'message': f"Assigned {len(valid_metric_ids)} metrics to training session"
+            'total_created_records': total_created,
+            'total_deleted_records': total_deleted,
+            'player_results': player_results,
+            'message': f"Assigned {len(valid_metric_ids)} metrics to training session. Created {total_created} new records, deleted {total_deleted} old records."
         }

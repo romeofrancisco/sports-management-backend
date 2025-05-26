@@ -111,7 +111,6 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         analytics_data = service.get_session_analytics(session)
         
         return Response(analytics_data)
-    
     def perform_create(self, serializer):
         from .services import TrainingSessionService
         
@@ -136,13 +135,14 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             )
         
         service = TrainingSessionService()
-        result = service.assign_metrics_to_session(session, metric_ids)        
+        result = service.assign_metrics_to_session(session, metric_ids)
         return Response({
-            "detail": f"Assigned {result['count']} metrics to training session",
-            "count": result['count'],
+            "detail": f"Assigned {result['assigned_count']} metrics to training session",
+            "count": result['assigned_count'],
             "invalid_metrics": result.get('invalid_metrics'),
-            "created_records": result.get('created_records', []),
-            "updated_records": result.get('updated_records', [])
+            "created_records": result.get('total_created_records', 0),
+            "updated_records": result.get('total_deleted_records', 0),
+            "player_results": result.get('player_results', [])
         })
 
 class PlayerTrainingViewSet(viewsets.ModelViewSet):

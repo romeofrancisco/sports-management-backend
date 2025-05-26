@@ -67,9 +67,7 @@ class PlayerTrainingService:
                     })
                     
                 except TrainingMetric.DoesNotExist:
-                    continue
-
-        # Get previous records for comparison
+                    continue        # Get previous records for comparison
         previous_records = PlayerTrainingService._get_previous_records(player_training)
 
         return {
@@ -106,14 +104,52 @@ class PlayerTrainingService:
         # Create a list to track which metrics were not found
         invalid_metrics = [mid for mid in metric_ids if mid not in valid_metrics]
         
-        # Assign metrics to player training
-        player_training.assigned_metrics.set(valid_metrics)
-        
+        with transaction.atomic():
+            # Get currently assigned metrics before updating
+            currently_assigned = set(player_training.assigned_metrics.values_list('id', flat=True))
+            
+            # Assign new metrics to player training
+            player_training.assigned_metrics.set(valid_metrics)
+            
+            # Find metrics that were removed (in currently_assigned but not in valid_metrics)
+            removed_metrics = currently_assigned - valid_metrics
+            
+            # Delete PlayerMetricRecord objects for removed metrics
+            deleted_count = 0
+            if removed_metrics:
+                deleted_count = PlayerMetricRecord.objects.filter(
+                    player_training=player_training,
+                    metric_id__in=removed_metrics
+                ).delete()[0]
+            
+            # Create placeholder PlayerMetricRecord instances for the assigned metrics
+            # Only create records that don't already exist
+            created_records = []
+            
+            for metric_id in valid_metrics:
+                # Check if a record already exists for this metric and player training
+                existing_record = PlayerMetricRecord.objects.filter(
+                    player_training=player_training,
+                    metric_id=metric_id
+                ).first()
+                
+                if not existing_record:
+                    # Create a placeholder record with value 0
+                    record = PlayerMetricRecord.objects.create(
+                        player_training=player_training,
+                        metric_id=metric_id,
+                        value=0,  # Placeholder value
+                        notes="Metric assigned - awaiting value input"
+                    )
+                    created_records.append(record.id)
+                    
         return {
             'success': True,
-            'assigned_count': len(valid_metrics),
+            'count': len(valid_metrics),
             'invalid_metrics': invalid_metrics if invalid_metrics else None,
-            'message': f"Assigned {len(valid_metrics)} metrics to player training record"
+            'created_records': created_records,
+            'deleted_count': deleted_count,
+            'message': f"Assigned {len(valid_metrics)} metrics to player training record. Removed {deleted_count} previous metric records."
         }
 
     @staticmethod
