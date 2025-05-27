@@ -14,6 +14,18 @@ class MetricUnit(models.Model):
         help_text="Weight to normalize improvements. Lower values for metrics that have naturally large percentage changes."
     )
     description = models.TextField(blank=True)
+    is_default = models.BooleanField(
+        default=False,
+        help_text="System default units that cannot be deleted by regular users"
+    )
+    created_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_metric_units',
+        help_text="User who created this metric unit"
+    )
     
     def __str__(self):
         return f"{self.name} ({self.code})"

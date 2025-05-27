@@ -10,9 +10,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 class MetricUnitSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source="created_by.get_full_name", read_only=True)
+    
     class Meta:
         model = MetricUnit
-        fields = ["id", "code", "name", "normalization_weight", "description"]
+        fields = ["id", "code", "name", "normalization_weight", "description", "is_default", "created_by", "created_by_name"]
+        read_only_fields = ["created_by", "created_by_name"]
 
 
 class TrainingCategorySerializer(serializers.ModelSerializer):
