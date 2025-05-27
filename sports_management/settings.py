@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "leagues",
     "brackets",
     "trainings",
+    "dashboard",
 ]
 
 MIDDLEWARE = [

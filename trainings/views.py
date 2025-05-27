@@ -2,10 +2,12 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Avg, Max, Min
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.core.exceptions import PermissionDenied
 import logging
 import time
 
@@ -27,14 +29,10 @@ from .serializers import (
     TrainingMetricSerializer,
     PlayerMetricRecordSerializer,
     PlayerProgressSerializer,
-    PlayerAttendanceSerializer,
-    AttendanceHeatmapSerializer,
-    AttendanceTrendSerializer
 )
 from teams.models import Player, Team
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, F
-from datetime import datetime, timedelta
 from django.utils.dateparse import parse_date
 
 
@@ -49,6 +47,71 @@ class MetricUnitViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'code', 'description']
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users
+        - POST/PUT/PATCH/DELETE requests are restricted to admin and coach users
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminOrCoachUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
+    
+    def perform_create(self, serializer):
+        """Set creation logic based on user role"""
+        user = self.request.user
+        
+        # Admin-created units are automatically system defaults
+        if user.is_admin:
+            serializer.save(created_by=user, is_default=True)
+        # Coach-created units are not system defaults
+        else:
+            serializer.save(created_by=user, is_default=False)
+    
+    def perform_update(self, serializer):
+        """Allow updates based on user role and ownership"""
+        user = self.request.user
+        instance = serializer.instance
+        
+        # Admin can update any unit
+        if user.is_admin:
+            serializer.save()
+        # Coach can only update units they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Coaches cannot edit system default units")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("You can only edit units you created")
+            serializer.save()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to update metric units")
+    
+    def perform_destroy(self, instance):
+        """Allow deletion based on user role and ownership"""
+        user = self.request.user
+        
+        # Admin can delete any unit (including system defaults)
+        if user.is_admin:
+            instance.delete()
+        # Coach can only delete units they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Coaches cannot delete system default units")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("You can only delete units you created")
+            instance.delete()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to delete metric units")
 
 class TrainingCategoryViewSet(viewsets.ModelViewSet):
     queryset = TrainingCategory.objects.all()
@@ -56,6 +119,19 @@ class TrainingCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'description']
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users
+        - POST/PUT/PATCH/DELETE requests are restricted to admin users only
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
 
 class TrainingMetricViewSet(viewsets.ModelViewSet):
     queryset = TrainingMetric.objects.all()
@@ -64,6 +140,19 @@ class TrainingMetricViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['category', 'sessions']
     search_fields = ['name', 'description']
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users
+        - POST/PUT/PATCH/DELETE requests are restricted to admin users only
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
 
 class TrainingSessionViewSet(viewsets.ModelViewSet):
     queryset = TrainingSession.objects.all().order_by('-date', '-start_time')
@@ -72,6 +161,95 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_class = TrainingSessionFilter
     search_fields = ['title', 'description', 'location']
+    
+    def get_queryset(self):
+        """
+        Return training sessions based on user role:
+        - Admin: All training sessions
+        - Coach: Only their team's training sessions
+        - Player: Only their team's training sessions
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
+        
+        # Base queryset
+        base_queryset = TrainingSession.objects.all().order_by('-date', '-start_time')
+        
+        # For admins, show all training sessions
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only their team's training sessions
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(team__in=coach_teams)
+            
+        # For players, show only their team's training sessions
+        if hasattr(user, 'player_profile') and user.player_profile.team:
+            player_team = user.player_profile.team
+            return base_queryset.filter(team=player_team)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access training session data")
+    
+    def get_object(self):
+        """
+        Ensures training sessions can only be accessed based on user role permissions
+        """
+        # Store the unfiltered queryset
+        unfiltered_queryset = TrainingSession.objects.all()
+        
+        # Get the filtered queryset based on user role
+        filtered_queryset = self.filter_queryset(self.get_queryset())
+
+        # Get the lookup value from the URL
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        lookup_value = self.kwargs[lookup_url_kwarg]
+
+        # Try to determine if the lookup value is a numeric ID
+        try:
+            is_numeric = lookup_value.isdigit()
+        except (AttributeError, ValueError):
+            is_numeric = False
+
+        if is_numeric:
+            # If it's numeric, look up by ID
+            filter_kwargs = {"pk": lookup_value}
+        else:
+            # Otherwise, use default lookup field
+            filter_kwargs = {self.lookup_field: lookup_value}
+
+        # First check if the object exists at all in the unfiltered queryset
+        try:
+            obj = unfiltered_queryset.get(**filter_kwargs)
+        except TrainingSession.DoesNotExist:
+            # If the training session doesn't exist at all, raise 404
+            from django.http import Http404
+            raise Http404("Training session does not exist")
+        
+        # Now check if the object is in the filtered queryset (user has access)
+        if not filtered_queryset.filter(**filter_kwargs).exists():
+            # If the training session exists but user doesn't have access, raise permission denied
+            raise PermissionDenied("You don't have permission to access this training session")
+        
+        # Get the object from the filtered queryset
+        obj = filtered_queryset.get(**filter_kwargs)
+        self.check_object_permissions(self.request, obj)
+        return obj
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users (filtered by get_queryset)
+        - POST/CREATE requests are restricted to admin or coach users
+        - PUT/PATCH/DELETE requests can be done by admins or coaches (with team restrictions)
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminOrCoachUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -84,6 +262,62 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         logger.info(f"Training session list - Query params: {request.query_params}")
         
         return super().list(request, *args, **kwargs)
+    
+    def perform_create(self, serializer):
+        from .services import TrainingSessionService
+        
+        # For coaches, ensure they can only create sessions for their teams
+        if self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            team = serializer.validated_data.get('team')
+            if team:
+                coach_teams = list(self.request.user.coach_profile.teams.all())
+                if team not in coach_teams:
+                    raise PermissionDenied("You can only create training sessions for your own teams")
+        
+        session = serializer.save()
+        # Automatically add all team players if session is a team session
+        if session.training_type == 'team' and session.team:
+            service = TrainingSessionService()
+            service.auto_add_team_players(session)
+    
+    def perform_update(self, serializer):
+        """Only allow coaches to update training sessions for their own teams"""
+        if self.request.user.is_admin:
+            # Admins can update any training session
+            serializer.save()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only update training sessions for their teams
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            session = serializer.instance
+            
+            # Check if the session belongs to one of the coach's teams
+            if session.team and session.team in coach_teams:
+                # Also check if they're trying to change the team to one they don't coach
+                new_team = serializer.validated_data.get('team', session.team)
+                if new_team not in coach_teams:
+                    raise PermissionDenied("You can only assign training sessions to your own teams")
+                serializer.save()
+            else:
+                raise PermissionDenied("You can only update training sessions for your own teams")
+        else:
+            raise PermissionDenied("You don't have permission to update training sessions")
+    
+    def perform_destroy(self, instance):
+        """Only allow coaches to delete training sessions for their own teams"""
+        if self.request.user.is_admin:
+            # Admins can delete any training session
+            instance.delete()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only delete training sessions for their teams
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            
+            # Check if the session belongs to one of the coach's teams
+            if instance.team and instance.team in coach_teams:
+                instance.delete()
+            else:
+                raise PermissionDenied("You can only delete training sessions for your own teams")
+        else:
+            raise PermissionDenied("You don't have permission to delete training sessions")
     
     @action(detail=True, methods=['post'])
     def add_players(self, request, pk=None):
@@ -151,6 +385,129 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = PlayerTrainingFilter
+    
+    def get_queryset(self):
+        """
+        Return player training records based on user role:
+        - Admin: All player training records
+        - Coach: Only player training records for their team's players
+        - Player: Only their own training records
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
+        
+        # Base queryset
+        base_queryset = PlayerTraining.objects.all()
+        
+        # For admins, show all player training records
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only player training records for their team's players
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(session__team__in=coach_teams)
+            
+        # For players, show only their own training records
+        if hasattr(user, 'player_profile'):
+            return base_queryset.filter(player=user.player_profile)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access player training data")
+    
+    def get_object(self):
+        """
+        Ensures player training records can only be accessed based on user role permissions
+        """
+        # Store the unfiltered queryset
+        unfiltered_queryset = PlayerTraining.objects.all()
+        
+        # Get the filtered queryset based on user role
+        filtered_queryset = self.filter_queryset(self.get_queryset())
+
+        # Get the lookup value from the URL
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        lookup_value = self.kwargs[lookup_url_kwarg]
+
+        # Try to determine if the lookup value is a numeric ID
+        try:
+            is_numeric = lookup_value.isdigit()
+        except (AttributeError, ValueError):
+            is_numeric = False
+
+        if is_numeric:
+            # If it's numeric, look up by ID
+            filter_kwargs = {"pk": lookup_value}
+        else:
+            # Otherwise, use default lookup field
+            filter_kwargs = {self.lookup_field: lookup_value}
+
+        # First check if the object exists at all in the unfiltered queryset
+        try:
+            obj = unfiltered_queryset.get(**filter_kwargs)
+        except PlayerTraining.DoesNotExist:
+            # If the player training record doesn't exist at all, raise 404
+            from django.http import Http404
+            raise Http404("Player training record does not exist")
+        
+        # Now check if the object is in the filtered queryset (user has access)
+        if not filtered_queryset.filter(**filter_kwargs).exists():
+            # If the player training record exists but user doesn't have access, raise permission denied
+            raise PermissionDenied("You don't have permission to access this player training record")
+        
+        # Get the object from the filtered queryset
+        obj = filtered_queryset.get(**filter_kwargs)
+        self.check_object_permissions(self.request, obj)
+        return obj
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users (filtered by get_queryset)
+        - POST/CREATE requests are restricted to admin or coach users
+        - PUT/PATCH/DELETE requests can be done by admins or coaches (with team restrictions)
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminOrCoachUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
+    
+    def perform_update(self, serializer):
+        """Only allow coaches to update player training records for their own team's players"""
+        if self.request.user.is_admin:
+            # Admins can update any player training record
+            serializer.save()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only update player training records for their team's players
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            player_training = serializer.instance
+            
+            # Check if the player training record belongs to one of the coach's teams
+            if player_training.session.team and player_training.session.team in coach_teams:
+                serializer.save()
+            else:
+                raise PermissionDenied("You can only update player training records for your own team's players")
+        else:
+            raise PermissionDenied("You don't have permission to update player training records")
+    
+    def perform_destroy(self, instance):
+        """Only allow coaches to delete player training records for their own team's players"""
+        if self.request.user.is_admin:
+            # Admins can delete any player training record
+            instance.delete()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only delete player training records for their team's players
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            
+            # Check if the player training record belongs to one of the coach's teams
+            if instance.session.team and instance.session.team in coach_teams:
+                instance.delete()
+            else:
+                raise PermissionDenied("You can only delete player training records for your own team's players")
+        else:
+            raise PermissionDenied("You don't have permission to delete player training records")
     
     @action(detail=True, methods=['post'])
     def record_metrics(self, request, pk=None):
@@ -263,6 +620,86 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['player_training__player', 'metric', 'player_training__session']
+    
+    def get_queryset(self):
+        """
+        Return player metric records based on user role:
+        - Admin: All player metric records
+        - Coach: Only metric records for their team's players
+        - Player: Only their own metric records
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
+        
+        # Base queryset
+        base_queryset = PlayerMetricRecord.objects.all().select_related(
+            'player_training__player', 'player_training__session', 'metric'
+        )
+        
+        # For admins, show all player metric records
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only metric records for their team's players
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(player_training__session__team__in=coach_teams)
+            
+        # For players, show only their own metric records
+        if hasattr(user, 'player_profile'):
+            return base_queryset.filter(player_training__player=user.player_profile)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access player metric records")
+    
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        - GET requests are accessible to authenticated users (filtered by get_queryset)
+        - POST/CREATE requests are restricted to admin or coach users
+        - PUT/PATCH/DELETE requests can be done by admins or coaches (with team restrictions)
+        """
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            permission_classes = [IsAdminOrCoachUser]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
+    
+    def perform_update(self, serializer):
+        """Only allow coaches to update metric records for their own team's players"""
+        if self.request.user.is_admin:
+            # Admins can update any metric record
+            serializer.save()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only update metric records for their team's players
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            metric_record = serializer.instance
+            
+            # Check if the metric record belongs to one of the coach's teams
+            if metric_record.player_training.session.team and metric_record.player_training.session.team in coach_teams:
+                serializer.save()
+            else:
+                raise PermissionDenied("You can only update metric records for your own team's players")
+        else:
+            raise PermissionDenied("You don't have permission to update metric records")
+    
+    def perform_destroy(self, instance):
+        """Only allow coaches to delete metric records for their own team's players"""
+        if self.request.user.is_admin:
+            # Admins can delete any metric record
+            instance.delete()
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only delete metric records for their team's players
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            
+            # Check if the metric record belongs to one of the coach's teams
+            if instance.player_training.session.team and instance.player_training.session.team in coach_teams:
+                instance.delete()
+            else:
+                raise PermissionDenied("You can only delete metric records for your own team's players")
+        else:
+            raise PermissionDenied("You don't have permission to delete metric records")
 
 class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Player.objects.all()
@@ -277,9 +714,33 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
         return context
         
     def get_queryset(self):
-        # Return all players, not just ones with training records
-        # This prevents 404 errors when a player has no training data
-        return super().get_queryset()
+        """
+        Return player progress data based on user role:
+        - Admin: All players
+        - Coach: Only players from their teams
+        - Player: Only their own data
+        - Others: Permission denied for all actions including list
+        """
+        user = self.request.user
+        
+        # Base queryset
+        base_queryset = Player.objects.all()
+        
+        # For admins, show all players
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only players from their teams
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(team__in=coach_teams)
+            
+        # For players, show only their own data
+        if hasattr(user, 'player_profile'):
+            return base_queryset.filter(id=user.player_profile.id)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access player progress data")
         
     @action(detail=False, methods=['get'])
     def multi_player(self, request):
@@ -311,18 +772,49 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
 class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     """
-    ViewSet for attendance analytics and reporting
+    ViewSet for attendance analytics and reporting with role-based access control
     """
     permission_classes = [IsAuthenticated]
+    
+    def get_base_queryset(self, request):
+        """
+        Get base queryset for attendance data based on user role:
+        - Admin: All attendance records
+        - Coach: Only records for their team's players
+        - Player: Only their own attendance records
+        - Others: Permission denied
+        """
+        user = request.user
+        
+        # Base queryset
+        base_queryset = PlayerTraining.objects.all()
+        
+        # For admins, show all attendance records
+        if user.is_admin:
+            return base_queryset
+            
+        # For coaches, show only records for their team's players
+        if hasattr(user, 'coach_profile'):
+            coach_teams = user.coach_profile.teams.all()
+            return base_queryset.filter(session__team__in=coach_teams)
+            
+        # For players, show only their own attendance records
+        if hasattr(user, 'player_profile'):
+            return base_queryset.filter(player=user.player_profile)
+            
+        # User doesn't have appropriate role - deny access
+        raise PermissionDenied("You don't have permission to access attendance analytics")
     
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """Get attendance overview analytics"""
         try:
+            # Apply role-based filtering first
+            base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             
-            # Get attendance data
-            attendance_qs = PlayerTraining.objects.filter(**filters)
+            # Get attendance data with role-based filtering
+            attendance_qs = base_queryset.filter(**filters)
             
             # Calculate overall stats
             total_records = attendance_qs.count()
@@ -352,8 +844,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
               # Session stats
             total_sessions = attendance_qs.values('session').distinct().count()
             avg_per_session = total_records / total_sessions if total_sessions > 0 else 0
-            
-            # Top performers (simplified)
+              # Top performers (simplified)
             top_attendance = []
             
             data = {
@@ -372,15 +863,18 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
     @action(detail=False, methods=['get'])
     def trends(self, request):
         """Get attendance trends over time"""
         try:
+            # Apply role-based filtering first
+            base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             period = request.query_params.get('period', 'daily')
             
-            # Get attendance data grouped by date
-            attendance_qs = PlayerTraining.objects.filter(**filters).select_related(
+            # Get attendance data grouped by date with role-based filtering
+            attendance_qs = base_queryset.filter(**filters).select_related(
                 'session'
             )
             
@@ -403,7 +897,6 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     'total_attendees': total,
                     'present_count': present
                 })
-            
             return Response(trends_data)
             
         except Exception as e:
@@ -416,10 +909,12 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     def heatmap(self, request):
         """Get attendance heatmap data"""        
         try:
+            # Apply role-based filtering first
+            base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             
-            # Get attendance data grouped by date
-            attendance_qs = PlayerTraining.objects.filter(**filters).select_related(
+            # Get attendance data grouped by date with role-based filtering
+            attendance_qs = base_queryset.filter(**filters).select_related(
                 'session'
             )
             
@@ -442,7 +937,6 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     'present_count': present,
                     'attendance_rate': round(attendance_rate, 2)
                 })
-            
             return Response(heatmap_data)
             
         except Exception as e:
@@ -455,9 +949,11 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     def players(self, request):
         """Get individual player attendance analytics"""
         try:
+            # Apply role-based filtering first
+            base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-              # Get all player training records
-            attendance_qs = PlayerTraining.objects.filter(**filters).select_related(
+              # Get all player training records with role-based filtering
+            attendance_qs = base_queryset.filter(**filters).select_related(
                 'player__user', 'session'
             )
             
@@ -501,7 +997,6 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 players_data.append(stats)
               # Sort by attendance rate
             players_data.sort(key=lambda x: x['attendance_rate'], reverse=True)
-            
             return Response(players_data)
             
         except Exception as e:
@@ -521,13 +1016,28 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Apply role-based filtering first
+            base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             filters['player__user_id'] = player_id
             
-            # Get all player training records
-            attendance_qs = PlayerTraining.objects.filter(**filters).select_related(
+            # Get all player training records with role-based filtering
+            attendance_qs = base_queryset.filter(**filters).select_related(
                 'player__user', 'session'
             ).order_by('session__date')
+            
+            # Check if user has permission to view this specific player's data
+            user = request.user
+            if not user.is_admin and hasattr(user, 'player_profile'):
+                # Players can only view their own data
+                if str(user.player_profile.user_id) != str(player_id):
+                    raise PermissionDenied("You can only view your own attendance data")
+            elif not user.is_admin and hasattr(user, 'coach_profile'):
+                # Coaches can only view data for players in their teams
+                coach_teams = user.coach_profile.teams.all()
+                player_accessible = attendance_qs.filter(session__team__in=coach_teams).exists()
+                if not player_accessible:
+                    raise PermissionDenied("You can only view attendance data for players in your teams")
             
             if not attendance_qs.exists():
                 return Response({
@@ -602,14 +1112,30 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     def _get_filters(self, request):
-        """Extract filters from request parameters"""
+        """
+        Extract filters from request parameters
+        Note: Role-based filtering is handled separately in get_base_queryset()
+        """
         filters = {}
-          # Team filter
+        user = request.user
+        
+        # Team filter - apply additional restrictions based on role
         team_id = request.query_params.get('team_id')
         if team_id and team_id != 'all':
-            filters['session__team_id'] = team_id
+            # Validate team access based on user role
+            if hasattr(user, 'coach_profile'):
+                # Coaches can only filter by their own teams
+                coach_teams = user.coach_profile.teams.all()
+                if coach_teams.filter(id=team_id).exists():
+                    filters['session__team_id'] = team_id
+                else:
+                    # Silently ignore unauthorized team filter for coaches
+                    pass
+            elif user.is_admin:
+                # Admins can filter by any team
+                filters['session__team_id'] = team_id
+            # Players don't get team filtering as they only see their own data
         
         # Date range filters
         start_date = request.query_params.get('start_date')
@@ -629,5 +1155,10 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     filters['session__date__lte'] = end_date
             except:
                 pass
+        
+        # Attendance status filter
+        status_filter = request.query_params.get('status')
+        if status_filter and status_filter != 'all':
+            filters['attendance_status'] = status_filter
         
         return filters

@@ -92,51 +92,58 @@ class Command(BaseCommand):
         if players_count > 0 and players_count < players.count():
             players = random.sample(list(players), players_count)
             
-        self.stdout.write(f'Using {len(players)} players from team {team.name}')
-        
-        # Create training sessions
+        self.stdout.write(f'Using {len(players)} players from team {team.name}')        # Create training sessions
         self.stdout.write(f'Creating {count} training sessions for {team.name}...')
-        
-        sessions_created = 0
-          # Generate training session dates (3-4 times per week)
+        sessions_created = 0        # Generate training session dates (3-4 times per week) - FROM TODAY BACKWARDS
         today = timezone.now().date()
-        start_date = today - timedelta(days=days_range)
         
-        # Create a schedule with consistent 3-4 training sessions per week
+        # Create a schedule with consistent 3-4 training sessions per week, working backwards
         session_dates = []
-        current_date = start_date
         
         # Training days: typically teams train on Mon/Wed/Fri plus sometimes Sat
         # Define possible training days (0 = Monday, 6 = Sunday)
         core_training_days = [0, 2, 4]  # Mon, Wed, Fri
         optional_training_day = 5       # Saturday (for the 4th session)
         
-        # Process week by week to ensure proper weekly distribution
-        while current_date <= today and len(session_dates) < count:
-            # Find the start of the week (Monday)
+        # Start from today and work backwards week by week
+        current_date = today
+        sessions_needed = count
+        
+        while sessions_needed > 0:
+            # Find the start of the current week (Monday)
             days_to_monday = current_date.weekday()
             week_start = current_date - timedelta(days=days_to_monday)
             
-            # Set up training days for this week
+            # Set up training days for this week (working backwards)
             weekly_sessions = []
             
-            # Add core training days (Mon/Wed/Fri)
+            # Add core training days (Mon/Wed/Fri) for this week
             for day_offset in core_training_days:
                 training_date = week_start + timedelta(days=day_offset)
-                if training_date >= start_date and training_date <= today:
+                if training_date <= today:  # Only include dates up to today
                     weekly_sessions.append(training_date)
             
             # Add optional Saturday session with 60% probability
             if random.random() < 0.6:  # 60% chance of Saturday session
                 saturday_date = week_start + timedelta(days=optional_training_day)
-                if saturday_date >= start_date and saturday_date <= today:
+                if saturday_date <= today:  # Only include dates up to today
                     weekly_sessions.append(saturday_date)
             
-            # Add this week's sessions to the overall list
-            session_dates.extend(weekly_sessions)
+            # Sort weekly sessions in descending order (most recent first)
+            weekly_sessions.sort(reverse=True)
             
-            # Move to the next week
-            current_date = week_start + timedelta(days=7)
+            # Add sessions for this week (up to what we need)
+            for session_date in weekly_sessions:
+                if sessions_needed > 0:
+                    session_dates.append(session_date)
+                    sessions_needed -= 1
+                else:
+                    break
+              # Move to the previous week
+            current_date = week_start - timedelta(days=1)  # Go to the previous week's Sunday
+        
+        # Sort session dates in chronological order (oldest first) for proper progression
+        session_dates.sort()
         
         # Limit to the requested count
         session_dates = session_dates[:count]

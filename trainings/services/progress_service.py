@@ -200,10 +200,11 @@ class ProgressService:
         
         return None
 
+    
     @staticmethod
     def calculate_recent_improvement(player, date_from=None, date_to=None):
         """
-        Calculate improvement in the last 30 days (or specified range) across all metrics
+        Calculate improvement in the most recent training data (looking backwards from today)
         
         Args:
             player: Player instance
@@ -219,34 +220,70 @@ class ProgressService:
         if not hasattr(player, 'training_records') or not player.training_records.exists():
             return None
             
-        # Get current date and date 30 days ago
+        # Get current date
         today = timezone.now().date()
-        thirty_days_ago = today - timezone.timedelta(days=30)
         
-        # Get query parameters - override 30 days if date_from is provided
-        if date_from:
+        # If specific date range is provided, use that
+        if date_from and date_to:
             if isinstance(date_from, str):
-                thirty_days_ago = datetime.strptime(date_from, '%Y-%m-%d').date()
+                start_date = datetime.strptime(date_from, '%Y-%m-%d').date()
             else:
-                thirty_days_ago = date_from
-        
-        if date_to:
+                start_date = date_from
+                
             if isinstance(date_to, str):
-                today = datetime.strptime(date_to, '%Y-%m-%d').date()
+                end_date = datetime.strptime(date_to, '%Y-%m-%d').date()
             else:
-                today = date_to
-        
-        # Fetch metrics for last 30 days
-        recent_records = PlayerMetricRecord.objects.filter(
-            player_training__player=player,
-            player_training__session__date__gte=thirty_days_ago,
-            player_training__session__date__lte=today
-        ).select_related(
-            'player_training__session',
-            'metric',
-            'metric__metric_unit'  # Add metric_unit to select_related
-        )
-        
+                end_date = date_to
+                
+            recent_records = PlayerMetricRecord.objects.filter(
+                player_training__player=player,
+                player_training__session__date__gte=start_date,
+                player_training__session__date__lte=end_date
+            ).select_related(
+                'player_training__session',
+                'metric',
+                'metric__metric_unit'
+            )
+        else:
+            # Look for the most recent data available, going backwards from today
+            # First, try the standard 30-day window
+            thirty_days_ago = today - timezone.timedelta(days=30)
+            
+            recent_records = PlayerMetricRecord.objects.filter(
+                player_training__player=player,
+                player_training__session__date__gte=thirty_days_ago,
+                player_training__session__date__lte=today
+            ).select_related(
+                'player_training__session',
+                'metric',
+                'metric__metric_unit'
+            )
+            
+            # If no records found in last 30 days, expand the search backwards
+            if not recent_records.exists():
+                # Find the most recent training session for this player
+                most_recent_session = PlayerMetricRecord.objects.filter(
+                    player_training__player=player
+                ).order_by('-player_training__session__date').first()
+                
+                if not most_recent_session:
+                    return None
+                
+                # Use the most recent session date as our end point
+                most_recent_date = most_recent_session.player_training.session.date
+                
+                # Look backwards 30 days from the most recent session
+                start_date = most_recent_date - timezone.timedelta(days=30)
+                recent_records = PlayerMetricRecord.objects.filter(
+                    player_training__player=player,
+                    player_training__session__date__gte=start_date,
+                    player_training__session__date__lte=most_recent_date
+                ).select_related(
+                    'player_training__session',
+                    'metric',
+                    'metric__metric_unit'
+                )
+
         # Group records by metric
         metrics_data = {}
         for record in recent_records:
