@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/', include('leagues.urls')),
     path('api/', include('brackets.urls')),
     path('api/', include('trainings.urls')),
+    path('api/', include('dashboard.urls')),
 ]
 
 if settings.DEBUG:
