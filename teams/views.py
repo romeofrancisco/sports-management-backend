@@ -15,9 +15,10 @@ from rest_framework.pagination import PageNumberPagination
 from django.core.exceptions import PermissionDenied
 
 
-class PlayerPagination(PageNumberPagination):
+class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
+    max_page_size = 50
 
 
 class TeamViewSet(ModelViewSet):
@@ -27,6 +28,7 @@ class TeamViewSet(ModelViewSet):
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["name"]
     filterset_fields = ["sport", "division"]
+    pagination_class = Pagination
     
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -202,7 +204,7 @@ class PlayerViews(ModelViewSet):
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["first_name", "last_name"]
     filterset_class = PlayerFilter
-    pagination_class = PlayerPagination
+    pagination_class = Pagination
     
     def get_serializer_context(self):
         context = super().get_serializer_context()

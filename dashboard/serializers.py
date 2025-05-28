@@ -106,6 +106,8 @@ class PlayerProgressSerializer(serializers.Serializer):
     attendance_rate = serializers.FloatField()
     total_sessions = serializers.IntegerField()
     last_training_date = serializers.DateField(allow_null=True)
+    overall_improvement = serializers.DictField(allow_null=True)
+    recent_improvement = serializers.DictField(allow_null=True)
 
 
 class CoachPlayerProgressSerializer(serializers.Serializer):
