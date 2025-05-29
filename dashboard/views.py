@@ -27,139 +27,424 @@ logger = logging.getLogger(__name__)
 
 
 class DashboardViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
-
+    permission_classes = [IsAuthenticated]    
+    
     @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
     def admin_overview(self, request):
-        """Complete system overview for admins"""
-        # System-wide statistics
-        total_teams = Team.objects.count()
-        total_players = Player.objects.filter(
-            team__isnull=False
-        ).count()  # Only count players with teams
-        total_coaches = Coach.objects.count()
-        total_games = Game.objects.count()
-        total_leagues = League.objects.count()
-        total_sports = Sport.objects.count()
+        """Complete system overview for admins with meaningful metrics"""
+        try:
+            # System-wide statistics
+            total_teams = Team.objects.count()
+            total_players = Player.objects.filter(team__isnull=False).count()
+            total_coaches = Coach.objects.count()
+            total_games = Game.objects.count()
+            total_leagues = League.objects.count()
+            total_sports = Sport.objects.count()
+              # Users without teams (important for admin to track)
+            unassigned_players = Player.objects.filter(team__isnull=True).count()
+            coaches_without_teams = Coach.objects.annotate(
+                team_count=Count('teams')
+            ).filter(team_count=0).count()
 
-        # Recent activity (last 30 days)
-        last_30_days = timezone.now() - timedelta(days=30)
-        recent_games = Game.objects.filter(created_at__gte=last_30_days).count()
-        recent_training_sessions = TrainingSession.objects.filter(
-            date__gte=last_30_days.date()
-        ).count()
-
-        # Team distribution by sport
-        teams_by_sport = (
-            Team.objects.values("sport__name")
-            .annotate(count=Count("id"))
-            .order_by("-count")
-        )
-
-        # Player distribution by sport
-        players_by_sport = (
-            Player.objects.filter(
-                team__isnull=False,  # Only include players with teams
-                team__sport__isnull=False,  # Only include teams with sports
+            # Time-based activity analysis
+            last_30_days = timezone.now() - timedelta(days=30)
+            last_7_days = timezone.now() - timedelta(days=7)
+            last_24_hours = timezone.now() - timedelta(hours=24)
+            
+            # Active users (logged in recently)
+            active_users_today = User.objects.filter(
+                last_login__gte=last_24_hours
+            ).count()
+            active_users_week = User.objects.filter(
+                last_login__gte=last_7_days
+            ).count()
+            
+            # Recent meaningful activity
+            games_this_month = Game.objects.filter(
+                date__gte=last_30_days.date()
+            ).count()
+            completed_games_month = Game.objects.filter(
+                date__gte=last_30_days.date(),
+                status='completed'
+            ).count()
+            training_sessions_month = TrainingSession.objects.filter(
+                date__gte=last_30_days.date()
+            ).count()
+            
+            # New registrations with better context
+            new_users_month = User.objects.filter(
+                date_joined__gte=last_30_days
+            ).count()
+            new_users_week = User.objects.filter(
+                date_joined__gte=last_7_days
+            ).count()            # System health metrics
+            teams_without_coaches = Team.objects.filter(
+                coach__isnull=True
+            ).count()
+            teams_with_few_players = Team.objects.annotate(
+                player_count=Count('players')
+            ).filter(player_count__lt=5).count()
+            
+            # Engagement metrics
+            games_scheduled = Game.objects.filter(
+                status='scheduled',
+                date__gte=timezone.now().date()
+            ).count()
+            
+            upcoming_trainings = TrainingSession.objects.filter(
+                date__gte=timezone.now().date(),
+                date__lte=(timezone.now() + timedelta(days=7)).date()
+            ).count()            # Distribution statistics with more detail            
+            teams_by_sport = list(
+            Team.objects.values("sport__name", "sport__id")
+                .annotate(
+                    team_count=Count("id", distinct=True),
+                    active_players=Count("players", distinct=True),
+                    total_coaches=Count("coach", distinct=True)
+                )
+                .order_by("-team_count")
             )
-            .values("team__sport__name")
-            .annotate(count=Count("user"))
-            .order_by("-count")
-        )
 
-        # Recent registrations (players assigned to teams)
-        recent_players = Player.objects.filter(
-            user__date_joined__gte=last_30_days,
-            team__isnull=False,  # Only count players with teams
-        ).count()
+            players_by_sport = list(
+                Player.objects.filter(team__isnull=False, team__sport__isnull=False)
+                .values("team__sport__name", "team__sport__id")
+                .annotate(count=Count("user"))
+                .order_by("-count")
+            )
 
-        # Games by status
-        games_by_status = Game.objects.values("status").annotate(count=Count("id"))
+            # Gender-based statistics
+            male_players = Player.objects.filter(
+                team__isnull=False, 
+                user__sex='male'
+            ).count()
+            female_players = Player.objects.filter(
+                team__isnull=False, 
+                user__sex='female'
+            ).count()
+            
+            male_teams = Team.objects.filter(division='male').count()
+            female_teams = Team.objects.filter(division='female').count()
+            
+            # Players by gender and sport
+            players_by_gender_sport = list(
+                Player.objects.filter(team__isnull=False, team__sport__isnull=False)
+                .values("team__sport__name", "user__sex")
+                .annotate(count=Count("user"))
+                .order_by("team__sport__name", "user__sex")
+            )
+            
+            # Teams by division and sport
+            teams_by_division_sport = list(
+                Team.objects.values("sport__name", "division")
+                .annotate(count=Count("id"))
+                .order_by("sport__name", "division")
+            )            # League activity summary
+            active_leagues = League.objects.annotate(
+                active_seasons=Count('seasons', filter=Q(seasons__status='ongoing')),
+                total_teams=Count('seasons__teams', distinct=True)
+            ).filter(active_seasons__gt=0)
 
-        data = {
-            "system_overview": {
-                "total_teams": total_teams,
-                "total_players": total_players,
-                "total_coaches": total_coaches,
-                "total_games": total_games,
-                "total_leagues": total_leagues,
-                "total_sports": total_sports,
-            },
-            "recent_activity": {
-                "recent_games": recent_games,
-                "recent_training_sessions": recent_training_sessions,
-                "recent_player_registrations": recent_players,
-            },
-            "distribution_stats": {
-                "teams_by_sport": list(teams_by_sport),
-                "players_by_sport": list(players_by_sport),
-                "games_by_status": list(games_by_status),
-            },
-        }
+            league_summary = [{
+                'id': league.id,
+                'name': league.name,
+                'sport': league.sport.name,
+                'active_seasons': league.active_seasons,
+                'total_teams': league.total_teams
+            } for league in active_leagues[:5]]            # Performance indicators
+            avg_players_per_team = (
+                Team.objects.annotate(player_count=Count('players'))
+                .aggregate(avg_players=Avg('player_count'))['avg_players'] or 0
+            )
 
-        serializer = AdminOverviewSerializer(data)
-        return Response(serializer.data)
+            # System Performance Summary calculations for frontend
+            # Training engagement analytics
+            total_training_records = PlayerTraining.objects.count()
+            training_attendance_rate = 0
+            if total_training_records > 0:
+                present_count = PlayerTraining.objects.filter(
+                    attendance_status="present"
+                ).count()
+                training_attendance_rate = (present_count / total_training_records) * 100
 
+            # Team utilization metrics
+            teams_active_last_month = Team.objects.filter(
+                Q(training_sessions__date__gte=last_30_days.date()) |
+                Q(home_games__date__gte=last_30_days.date()) |
+                Q(away_games__date__gte=last_30_days.date())
+            ).distinct().count()
+            team_utilization_rate = (teams_active_last_month / total_teams * 100) if total_teams > 0 else 0
+
+            # League health metrics
+            leagues_with_active_seasons = League.objects.filter(
+                seasons__status__in=['ongoing', 'upcoming']
+            ).distinct().count()
+            league_activity_rate = (leagues_with_active_seasons / total_leagues * 100) if total_leagues > 0 else 0
+
+            # System health score calculation
+            system_health_score = self._calculate_system_health_score()
+
+            # Calculate summary counts for insights
+            warnings_count = (
+                (1 if teams_without_coaches > 0 else 0) +
+                (1 if teams_with_few_players > 0 else 0) +
+                (1 if unassigned_players > 0 else 0) +
+                (1 if training_attendance_rate < 70 else 0)
+            )
+            successes_count = (
+                (1 if system_health_score >= 80 else 0) +
+                (1 if league_activity_rate >= 75 else 0) +
+                (1 if team_utilization_rate >= 60 else 0)
+            )
+
+            data = {
+                "system_overview": {
+                    "total_teams": total_teams,
+                    "total_players": total_players,
+                    "total_coaches": total_coaches,
+                    "total_games": total_games,
+                    "total_leagues": total_leagues,
+                    "total_sports": total_sports,
+                    "unassigned_players": unassigned_players,
+                    "coaches_without_teams": coaches_without_teams,
+                    "avg_players_per_team": round(avg_players_per_team, 1)
+                },
+                "user_activity": {
+                    "active_users_today": active_users_today,
+                    "active_users_week": active_users_week,
+                    "new_users_month": new_users_month,
+                    "new_users_week": new_users_week,
+                },
+                "recent_activity": {
+                    "games_this_month": games_this_month,
+                    "completed_games_month": completed_games_month,
+                    "training_sessions_month": training_sessions_month,
+                    "games_scheduled": games_scheduled,
+                    "upcoming_trainings": upcoming_trainings,
+                },
+                "system_health": {
+                    "teams_without_coaches": teams_without_coaches,
+                    "teams_with_few_players": teams_with_few_players,
+                    "unassigned_players": unassigned_players,
+                },
+                "distribution_stats": {
+                    "teams_by_sport": teams_by_sport,
+                    "players_by_sport": players_by_sport,
+                    "active_leagues": league_summary,
+                    "gender_stats": {
+                        "male_players": male_players,
+                        "female_players": female_players,
+                        "male_teams": male_teams,
+                        "female_teams": female_teams,
+                        "players_by_gender_sport": players_by_gender_sport,
+                        "teams_by_division_sport": teams_by_division_sport,
+                    },
+                },
+                # Analytics data for System Performance Summary
+                "analytics": {
+                    "training_analytics": {
+                        "overall_attendance_rate": round(training_attendance_rate, 2),
+                        "training_trend": "stable"
+                    },
+                    "performance_analytics": {
+                        "team_utilization_rate": round(team_utilization_rate, 2)
+                    },
+                    "system_health": {
+                        "league_activity_rate": round(league_activity_rate, 2)
+                    }
+                },
+                # Insights data for System Performance Summary
+                "insights": {
+                    "system_health_score": round(system_health_score, 0),
+                    "summary": {
+                        "warnings": warnings_count,
+                        "successes": successes_count
+                    }
+                }
+            }
+
+            serializer = AdminOverviewSerializer(data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in admin_overview: {str(e)}")
+            return Response(
+                {"error": "An error occurred while fetching admin overview data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )    
+    
     @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
     def admin_analytics(self, request):
-        """Advanced analytics for admins"""
-        # Training attendance analytics across all teams
-        total_training_records = PlayerTraining.objects.count()
-        overall_attendance_rate = 0
-        if total_training_records > 0:
-            present_count = PlayerTraining.objects.filter(
-                attendance_status="present"
+        """Advanced analytics for admins with actionable insights"""
+        try:
+            last_30_days = timezone.now() - timedelta(days=30)
+            last_90_days = timezone.now() - timedelta(days=90)
+            
+            # Training engagement analytics
+            total_training_records = PlayerTraining.objects.count()
+            training_attendance_rate = 0
+            if total_training_records > 0:
+                present_count = PlayerTraining.objects.filter(
+                    attendance_status="present"
+                ).count()
+                training_attendance_rate = (present_count / total_training_records) * 100
+
+            # Monthly training trends
+            monthly_training_sessions = TrainingSession.objects.filter(
+                date__gte=last_30_days.date()
             ).count()
-            overall_attendance_rate = (present_count / total_training_records) * 100
+            
+            previous_month_sessions = TrainingSession.objects.filter(
+                date__gte=(timezone.now() - timedelta(days=60)).date(),
+                date__lt=last_30_days.date()
+            ).count()
+            
+            training_trend = "stable"
+            if previous_month_sessions > 0:
+                trend_percentage = ((monthly_training_sessions - previous_month_sessions) / previous_month_sessions) * 100
+                if trend_percentage > 10:
+                    training_trend = "increasing"
+                elif trend_percentage < -10:
+                    training_trend = "decreasing"
 
-        # Game completion status
-        completed_games = Game.objects.filter(status="completed").count()
-        upcoming_games = Game.objects.filter(status="scheduled").count()
-        in_progress_games = Game.objects.filter(status="in_progress").count()
+            # Game completion and scheduling analytics
+            completed_games = Game.objects.filter(status="completed").count()
+            scheduled_games = Game.objects.filter(status="scheduled").count()
+            in_progress_games = Game.objects.filter(status="in_progress").count()
+            
+            # Games completion rate in last 30 days
+            recent_games = Game.objects.filter(date__gte=last_30_days.date())
+            recent_completed = recent_games.filter(status="completed").count()
+            recent_total = recent_games.count()
+            completion_rate = (recent_completed / recent_total * 100) if recent_total > 0 else 0
 
-        # Top teams by wins (simplified calculation)
-        teams_with_wins = []
-        for team in Team.objects.all()[:10]:  # Limit to top 10
-            wins, losses = team.win_loss_record()
-            teams_with_wins.append(
-                {
-                    "team_name": team.name,
-                    "wins": wins,
-                    "losses": losses,
-                    "win_rate": round(
-                        (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0, 2
-                    ),
+            # Team performance analytics
+            top_performing_teams = []
+            teams_with_stats = Team.objects.annotate(
+                games_played=Count('home_games', filter=Q(home_games__status='completed')) + 
+                             Count('away_games', filter=Q(away_games__status='completed')),
+                recent_games=Count('home_games', filter=Q(home_games__date__gte=last_30_days.date())) +
+                           Count('away_games', filter=Q(away_games__date__gte=last_30_days.date()))
+            ).filter(games_played__gt=0)[:10]
+
+            for team in teams_with_stats:
+                wins, losses = team.win_loss_record()
+                if wins + losses > 0:
+                    top_performing_teams.append({
+                        "team_id": team.id,
+                        "team_name": team.name,
+                        "sport": team.sport.name if team.sport else "No Sport",
+                        "wins": wins,
+                        "losses": losses,
+                        "games_played": wins + losses,
+                        "win_rate": round((wins / (wins + losses) * 100), 2),
+                        "recent_activity": team.recent_games
+                    })
+            
+            top_performing_teams.sort(key=lambda x: (x["win_rate"], x["games_played"]), reverse=True)            # Coach effectiveness analytics
+            coach_analytics = []
+            active_coaches = Coach.objects.annotate(
+                team_count=Count("teams", distinct=True),
+                total_players=Count("teams__players", distinct=True),
+                recent_trainings=Count(
+                    "teams__training_sessions",
+                    filter=Q(teams__training_sessions__date__gte=last_30_days.date())
+                )
+            ).filter(team_count__gt=0)[:10]
+            for coach in active_coaches:
+                # Calculate average attendance for coach's teams
+                coach_training_records = PlayerTraining.objects.filter(
+                    session__team__in=coach.teams.all(),
+                    session__date__gte=last_30_days.date()
+                )
+                total_records = coach_training_records.count()
+                present_records = coach_training_records.filter(attendance_status="present").count()
+                attendance_rate = (present_records / total_records * 100) if total_records > 0 else 0
+
+                coach_analytics.append({
+                    "coach_id": coach.user.id,
+                    "coach_name": coach.user.get_full_name(),
+                    "team_count": coach.team_count,
+                    "total_players": coach.total_players,
+                    "recent_trainings": coach.recent_trainings,
+                    "attendance_rate": round(attendance_rate, 2),
+                    "effectiveness_score": round((attendance_rate + (coach.recent_trainings * 10)) / 2, 2)
+                })
+
+            coach_analytics.sort(key=lambda x: x["effectiveness_score"], reverse=True)
+
+            # System utilization metrics
+            teams_active_last_month = Team.objects.filter(
+                Q(training_sessions__date__gte=last_30_days.date()) |
+                Q(home_games__date__gte=last_30_days.date()) |
+                Q(away_games__date__gte=last_30_days.date())
+            ).distinct().count()
+            
+            total_teams = Team.objects.count()
+            team_utilization_rate = (teams_active_last_month / total_teams * 100) if total_teams > 0 else 0
+
+            # Player engagement metrics
+            active_players = Player.objects.filter(            training_records__session__date__gte=last_30_days.date()
+            ).distinct().count()
+            
+            # League health metrics
+            leagues_with_active_seasons = League.objects.filter(
+                seasons__status__in=['ongoing', 'upcoming']
+            ).distinct().count()
+            
+            total_leagues = League.objects.count()
+            league_activity_rate = (leagues_with_active_seasons / total_leagues * 100) if total_leagues > 0 else 0
+
+            # Growth metrics
+            teams_created_month = Team.objects.filter(
+                created_at__gte=last_30_days
+            ).count()
+            
+            players_joined_month = Player.objects.filter(
+                user__date_joined__gte=last_30_days
+            ).count()
+
+            data = {
+                "training_analytics": {
+                    "total_training_records": total_training_records,
+                    "overall_attendance_rate": round(training_attendance_rate, 2),
+                    "monthly_sessions": monthly_training_sessions,
+                    "training_trend": training_trend,
+                    "active_players_month": active_players,
+                },
+                "game_analytics": {
+                    "completed_games": completed_games,
+                    "scheduled_games": scheduled_games,
+                    "in_progress_games": in_progress_games,
+                    "completion_rate_month": round(completion_rate, 2),
+                    "recent_games_total": recent_total,
+                },
+                "performance_analytics": {
+                    "top_teams": top_performing_teams[:8],
+                    "team_utilization_rate": round(team_utilization_rate, 2),
+                    "teams_active_month": teams_active_last_month,
+                },
+                "coach_analytics": coach_analytics[:6],
+                "system_health": {
+                    "league_activity_rate": round(league_activity_rate, 2),
+                    "active_leagues": leagues_with_active_seasons,
+                    "total_leagues": total_leagues,
+                },
+                "growth_metrics": {
+                    "new_teams_month": teams_created_month,
+                    "new_players_month": players_joined_month,
+                    "growth_trend": "stable"  # Could be calculated based on historical data
                 }
+            }
+
+            serializer = AdminAnalyticsSerializer(data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in admin_analytics: {str(e)}")
+            return Response(
+                {"error": "An error occurred while fetching admin analytics data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        # Sort by win rate
-        teams_with_wins.sort(key=lambda x: x["win_rate"], reverse=True)
-
-        # Active coaches and their teams
-        active_coaches = Coach.objects.annotate(team_count=Count("teams")).order_by(
-            "-team_count"
-        )[:10]
-
-        coach_stats = [
-            {"coach_name": coach.user.get_full_name(), "team_count": coach.team_count}
-            for coach in active_coaches
-        ]
-
-        data = {
-            "training_analytics": {
-                "total_training_records": total_training_records,
-                "overall_attendance_rate": round(overall_attendance_rate, 2),
-            },
-            "game_analytics": {
-                "completed_games": completed_games,
-                "upcoming_games": upcoming_games,
-                "in_progress_games": in_progress_games,
-            },
-            "top_teams": teams_with_wins[:6],
-            "coach_statistics": coach_stats,
-        }
-
-        serializer = AdminAnalyticsSerializer(data)
-        return Response(serializer.data)
 
     @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def coach_overview(self, request):
@@ -537,4 +822,579 @@ class DashboardViewSet(viewsets.ViewSet):
         data = {"progress_summary": progress_data, "metric_trends": metric_trends}
 
         serializer = PlayerProgressDetailSerializer(data)
-        return Response(serializer.data)
+        return Response(serializer.data)    
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
+    def admin_insights(self, request):
+        """Advanced insights and recommendations for administrators with AI analysis"""
+        try:
+            last_30_days = timezone.now() - timedelta(days=30)
+            last_90_days = timezone.now() - timedelta(days=90)
+            
+            insights = []
+            recommendations = []
+            ai_insights = None
+            
+            # Check if AI analysis is requested
+            use_ai = request.query_params.get('ai', 'false').lower() == 'true'
+              # Generate AI-powered insights if requested
+            if use_ai:
+                try:
+                    from .ai_analysis import analyze_system_health, collect_system_data
+                    
+                    # Collect comprehensive system data
+                    system_data = collect_system_data()
+                    
+                    # Generate AI analysis
+                    ai_insights = analyze_system_health(system_data)
+                    
+                    # Convert AI insights to standard insight format
+                    if 'ai_analysis' in ai_insights:
+                        ai_analysis = ai_insights['ai_analysis']
+                        
+                        # Add AI-generated insights to the insights list
+                        if 'Critical Issues' in ai_analysis:
+                            insights.append({
+                                "type": "warning",
+                                "title": "AI Analysis: Critical Issues",
+                                "message": ai_analysis['Critical Issues'],
+                                "action": "Review AI recommendations for immediate actions",
+                                "source": "ai"
+                            })
+                        
+                        if 'Success Indicators' in ai_analysis:
+                            insights.append({
+                                "type": "success", 
+                                "title": "AI Analysis: Success Indicators",
+                                "message": ai_analysis['Success Indicators'],
+                                "action": "Continue current successful strategies",
+                                "source": "ai"
+                            })
+                        
+                        if 'Opportunity Areas' in ai_analysis:
+                            insights.append({
+                                "type": "info",
+                                "title": "AI Analysis: Growth Opportunities", 
+                                "message": ai_analysis['Opportunity Areas'],
+                                "action": "Explore identified improvement areas",
+                                "source": "ai"
+                            })
+                        
+                        # Add AI recommendations
+                        if 'Strategic Recommendations' in ai_analysis:
+                            recommendations.append({
+                                "priority": "high",
+                                "category": "ai_strategic",
+                                "title": "AI Strategic Recommendations",
+                                "description": ai_analysis['Strategic Recommendations'],
+                                "suggested_actions": ai_analysis.get('Priority Actions', '').split('. ') if 'Priority Actions' in ai_analysis else [
+                                    "Review AI analysis for specific actions",
+                                    "Implement suggested improvements",
+                                    "Monitor system health metrics"
+                                ],
+                                "source": "ai"
+                            })
+                        
+                        # When AI is enabled, return only AI insights
+                        data = {
+                            "insights": insights,
+                            "recommendations": recommendations,
+                            "system_health_score": self._calculate_system_health_score(),
+                            "generated_at": timezone.now().isoformat(),
+                            "ai_analysis_enabled": use_ai,
+                            "ai_insights": ai_insights,
+                            "summary": {
+                                "total_insights": len(insights),
+                                "warnings": len([i for i in insights if i["type"] == "warning"]),
+                                "opportunities": len([i for i in insights if i["type"] == "info"]),
+                                "successes": len([i for i in insights if i["type"] == "success"]),
+                                "ai_insights": len([i for i in insights if i.get("source") == "ai"])
+                            }
+                        }
+                        return Response(data)
+                        
+                except Exception as ai_error:
+                    # If AI analysis fails, add a notification
+                    insights.append({
+                        "type": "warning",
+                        "title": "AI Analysis Error",
+                        "message": f"AI-powered insights unavailable: {str(ai_error)}",
+                        "action": "Please try again or use standard analysis"
+                    })
+                    
+                    # Return error response for AI mode
+                    data = {
+                        "insights": insights,
+                        "recommendations": [],
+                        "system_health_score": self._calculate_system_health_score(),
+                        "generated_at": timezone.now().isoformat(),
+                        "ai_analysis_enabled": use_ai,
+                        "ai_insights": None,
+                        "summary": {
+                            "total_insights": len(insights),
+                            "warnings": 1,
+                            "opportunities": 0,
+                            "successes": 0,
+                            "ai_insights": 0
+                        }
+                    }
+                    return Response(data)            
+            # When AI is disabled, use built-in rule-based analysis
+            # Check for teams that need attention
+            teams_without_recent_activity = Team.objects.exclude(
+                Q(training_sessions__date__gte=last_30_days.date()) |
+                Q(home_games__date__gte=last_30_days.date()) |
+                Q(away_games__date__gte=last_30_days.date())
+            ).count()
+            
+            if teams_without_recent_activity > 0:
+                insights.append({
+                    "type": "warning",
+                    "title": "Inactive Teams Detected",
+                    "message": f"{teams_without_recent_activity} teams have had no activity in the last 30 days",
+                    "action": "Review team status and contact coaches"
+                })
+            
+            # Check for coaches with low engagement
+            low_engagement_coaches = Coach.objects.annotate(
+                recent_sessions=Count(
+                    'teams__training_sessions',
+                    filter=Q(teams__training_sessions__date__gte=last_30_days.date())
+                )
+            ).filter(recent_sessions__lt=2, teams__isnull=False).count()
+            
+            if low_engagement_coaches > 0:
+                insights.append({
+                    "type": "info",
+                    "title": "Coach Engagement Opportunity",
+                    "message": f"{low_engagement_coaches} coaches have conducted fewer than 2 training sessions this month",
+                    "action": "Provide coaching support or training resources"
+                })
+            
+            # Check attendance trends
+            recent_attendance_records = PlayerTraining.objects.filter(
+                session__date__gte=last_30_days.date()
+            )
+            if recent_attendance_records.exists():
+                total_records = recent_attendance_records.count()
+                present_records = recent_attendance_records.filter(attendance_status="present").count()
+                attendance_rate = (present_records / total_records) * 100
+                
+                if attendance_rate < 70:
+                    insights.append({
+                        "type": "warning",
+                        "title": "Low Attendance Alert",
+                        "message": f"Overall attendance rate is {attendance_rate:.1f}% (below 70% threshold)",
+                        "action": "Investigate attendance issues and consider engagement strategies"
+                    })
+                elif attendance_rate > 85:
+                    insights.append({
+                        "type": "success",
+                        "title": "Excellent Attendance",
+                        "message": f"Outstanding attendance rate of {attendance_rate:.1f}%",
+                        "action": "Continue current engagement strategies"
+                    })
+            
+            # Check for unassigned players
+            unassigned_players = Player.objects.filter(team__isnull=True).count()
+            if unassigned_players > 0:
+                insights.append({
+                    "type": "info",
+                    "title": "Players Need Team Assignment",
+                    "message": f"{unassigned_players} players are not assigned to any team",
+                    "action": "Review player assignments and create teams if needed"
+                })
+            
+            # Check for teams with insufficient players
+            understaffed_teams = Team.objects.annotate(
+                player_count=Count('players')
+            ).filter(player_count__lt=5).count()
+            
+            if understaffed_teams > 0:
+                insights.append({
+                    "type": "warning",
+                    "title": "Teams Need More Players",
+                    "message": f"{understaffed_teams} teams have fewer than 5 players",
+                    "action": "Recruit more players or consider team consolidation"
+                })
+            
+            # Generate recommendations based on system analysis
+            if Team.objects.count() > 0:
+                avg_players_per_team = Player.objects.filter(team__isnull=False).count() / Team.objects.count()
+                if avg_players_per_team < 8:
+                    recommendations.append({
+                        "priority": "high",
+                        "category": "recruitment",
+                        "title": "Increase Player Recruitment",
+                        "description": f"Average of {avg_players_per_team:.1f} players per team is below optimal range (8-15)",
+                        "suggested_actions": [
+                            "Launch recruitment campaigns",
+                            "Partner with schools for player development",
+                            "Organize open trials and events"
+                        ]
+                    })
+            
+            # System health score calculation
+            health_score = self._calculate_system_health_score()
+            
+            # Additional recommendations based on health score
+            if health_score < 60:
+                recommendations.append({
+                    "priority": "high",
+                    "category": "system_health",
+                    "title": "System Health Improvement Needed",
+                    "description": f"System health score is {health_score}/100, indicating areas for improvement",
+                    "suggested_actions": [
+                        "Address inactive teams and coaches",
+                        "Improve player assignment processes",
+                        "Increase training session frequency"
+                    ]
+                })
+            
+            # Return built-in insights when AI is disabled
+            data = {
+                "insights": insights[:10],  # Limit to top 10 insights
+                "recommendations": recommendations[:5],  # Limit to top 5 recommendations
+                "system_health_score": health_score,
+                "generated_at": timezone.now().isoformat(),
+                "ai_analysis_enabled": use_ai,
+                "ai_insights": None,  # No AI analysis when disabled
+                "summary": {
+                    "total_insights": len(insights),
+                    "warnings": len([i for i in insights if i["type"] == "warning"]),
+                    "opportunities": len([i for i in insights if i["type"] == "info"]),
+                    "successes": len([i for i in insights if i["type"] == "success"]),
+                    "ai_insights": 0  # No AI insights when disabled
+                }
+            }
+            
+            return Response(data)
+            
+        except Exception as e:
+            logger.error(f"Error in admin_insights: {str(e)}")
+            return Response(
+                {"error": "An error occurred while generating insights"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
+    def admin_reports(self, request):
+        """Generate comprehensive reports for administrators"""
+        try:
+            report_type = request.query_params.get('type', 'summary')
+            date_from = request.query_params.get('date_from')
+            date_to = request.query_params.get('date_to')
+            
+            # Set default date range if not provided
+            if not date_from:
+                date_from = (timezone.now() - timedelta(days=30)).date()
+            else:
+                date_from = timezone.datetime.strptime(date_from, '%Y-%m-%d').date()
+                
+            if not date_to:
+                date_to = timezone.now().date()
+            else:
+                date_to = timezone.datetime.strptime(date_to, '%Y-%m-%d').date()
+            
+            if report_type == 'attendance':
+                return self._generate_attendance_report(date_from, date_to)
+            elif report_type == 'performance':
+                return self._generate_performance_report(date_from, date_to)
+            elif report_type == 'usage':
+                return self._generate_usage_report(date_from, date_to)
+            else:
+                return self._generate_summary_report(date_from, date_to)
+                
+        except Exception as e:
+            logger.error(f"Error in admin_reports: {str(e)}")
+            return Response(
+                {"error": "An error occurred while generating reports"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _calculate_system_health_score(self):
+        """Calculate an overall system health score (0-100)"""
+        try:
+            score = 100
+            
+            # Deduct points for system issues
+            total_teams = Team.objects.count()
+            if total_teams > 0:                # Teams without coaches
+                teams_without_coaches = Team.objects.filter(coach__isnull=True).count()
+                score -= (teams_without_coaches / total_teams) * 20
+                
+                # Teams with too few players
+                understaffed_teams = Team.objects.annotate(
+                    player_count=Count('players')
+                ).filter(player_count__lt=5).count()
+                score -= (understaffed_teams / total_teams) * 15
+                
+                # Inactive teams (last 30 days)
+                last_30_days = timezone.now() - timedelta(days=30)
+                inactive_teams = Team.objects.exclude(
+                    Q(training_sessions__date__gte=last_30_days.date()) |
+                    Q(home_games__date__gte=last_30_days.date()) |
+                    Q(away_games__date__gte=last_30_days.date())
+                ).count()
+                score -= (inactive_teams / total_teams) * 25
+            
+            # Check overall attendance rate
+            recent_attendance = PlayerTraining.objects.filter(
+                session__date__gte=(timezone.now() - timedelta(days=30)).date()
+            )
+            if recent_attendance.exists():
+                present_count = recent_attendance.filter(attendance_status="present").count()
+                attendance_rate = (present_count / recent_attendance.count()) * 100
+                if attendance_rate < 80:
+                    score -= (80 - attendance_rate) * 0.5
+            
+            # Check for unassigned players
+            total_players = Player.objects.count()
+            if total_players > 0:
+                unassigned_players = Player.objects.filter(team__isnull=True).count()
+                score -= (unassigned_players / total_players) * 10
+            
+            return max(0, min(100, round(score)))
+            
+        except Exception as e:
+            logger.error(f"Error calculating system health score: {str(e)}")
+            return 50  # Default middle score if calculation fails
+
+    def _generate_attendance_report(self, date_from, date_to):
+        """Generate detailed attendance report"""
+        # Get all training sessions in the date range
+        training_sessions = TrainingSession.objects.filter(
+            date__gte=date_from, date__lte=date_to
+        ).select_related('team', 'team__sport')
+        
+        team_attendance = {}
+        overall_stats = {
+            'total_sessions': training_sessions.count(),
+            'total_records': 0,
+            'total_present': 0,
+            'total_absent': 0
+        }
+        
+        for session in training_sessions:
+            team_name = session.team.name
+            if team_name not in team_attendance:
+                team_attendance[team_name] = {
+                    'team_id': session.team.id,
+                    'sport': session.team.sport.name if session.team.sport else 'No Sport',
+                    'sessions': 0,
+                    'total_records': 0,
+                    'present': 0,
+                    'absent': 0,
+                    'attendance_rate': 0
+                }
+            
+            team_attendance[team_name]['sessions'] += 1
+            
+            # Get attendance records for this session
+            records = PlayerTraining.objects.filter(session=session)
+            present_count = records.filter(attendance_status='present').count()
+            absent_count = records.filter(attendance_status='absent').count()
+            
+            team_attendance[team_name]['total_records'] += records.count()
+            team_attendance[team_name]['present'] += present_count
+            team_attendance[team_name]['absent'] += absent_count
+            
+            overall_stats['total_records'] += records.count()
+            overall_stats['total_present'] += present_count
+            overall_stats['total_absent'] += absent_count
+        
+        # Calculate attendance rates
+        for team_data in team_attendance.values():
+            if team_data['total_records'] > 0:
+                team_data['attendance_rate'] = round(
+                    (team_data['present'] / team_data['total_records']) * 100, 2
+                )
+        
+        overall_attendance_rate = 0
+        if overall_stats['total_records'] > 0:
+            overall_attendance_rate = round(
+                (overall_stats['total_present'] / overall_stats['total_records']) * 100, 2
+            )
+        
+        attendance_data = {
+            'report_type': 'attendance',
+            'date_range': {
+                'from': date_from.isoformat(),
+                'to': date_to.isoformat()
+            },
+            'overall_stats': {
+                **overall_stats,
+                'attendance_rate': overall_attendance_rate
+            },
+            'team_breakdown': list(team_attendance.values()),
+            'generated_at': timezone.now().isoformat()
+        }
+        
+        return Response(attendance_data)
+
+    def _generate_performance_report(self, date_from, date_to):
+        """Generate team performance report"""
+        teams = Team.objects.all().select_related('sport')
+        team_performance = []
+        
+        for team in teams:
+            # Get games in date range
+            games = Game.objects.filter(
+                Q(home_team=team) | Q(away_team=team),
+                date__gte=date_from,
+                date__lte=date_to,
+                status='completed'
+            )
+            
+            wins = 0
+            losses = 0
+            total_score_for = 0
+            total_score_against = 0
+            
+            for game in games:
+                if game.home_team == team:
+                    team_score = game.home_team_score or 0
+                    opponent_score = game.away_team_score or 0
+                else:
+                    team_score = game.away_team_score or 0
+                    opponent_score = game.home_team_score or 0
+                
+                total_score_for += team_score
+                total_score_against += opponent_score
+                
+                if team_score > opponent_score:
+                    wins += 1
+                elif team_score < opponent_score:
+                    losses += 1
+            
+            games_played = wins + losses
+            win_rate = (wins / games_played * 100) if games_played > 0 else 0
+            avg_score_for = total_score_for / games_played if games_played > 0 else 0
+            avg_score_against = total_score_against / games_played if games_played > 0 else 0
+            
+            team_performance.append({
+                'team_id': team.id,
+                'team_name': team.name,
+                'sport': team.sport.name if team.sport else 'No Sport',
+                'games_played': games_played,
+                'wins': wins,
+                'losses': losses,
+                'win_rate': round(win_rate, 2),
+                'avg_score_for': round(avg_score_for, 2),
+                'avg_score_against': round(avg_score_against, 2),
+                'score_differential': round(avg_score_for - avg_score_against, 2)
+            })
+        
+        # Sort by win rate and games played
+        team_performance.sort(key=lambda x: (x['win_rate'], x['games_played']), reverse=True)
+        
+        performance_data = {
+            'report_type': 'performance',
+            'date_range': {
+                'from': date_from.isoformat(),
+                'to': date_to.isoformat()
+            },
+            'team_performance': team_performance,
+            'summary': {
+                'teams_with_games': len([t for t in team_performance if t['games_played'] > 0]),
+                'total_games': sum(t['games_played'] for t in team_performance),
+                'avg_win_rate': round(
+                    sum(t['win_rate'] for t in team_performance if t['games_played'] > 0) / 
+                    len([t for t in team_performance if t['games_played'] > 0]), 2
+                ) if any(t['games_played'] > 0 for t in team_performance) else 0
+            },
+            'generated_at': timezone.now().isoformat()
+        }
+        
+        return Response(performance_data)
+
+    def _generate_usage_report(self, date_from, date_to):
+        """Generate system usage report"""
+        # User activity
+        active_users = User.objects.filter(
+            last_login__gte=timezone.make_aware(
+                timezone.datetime.combine(date_from, timezone.datetime.min.time())
+            )
+        ).count()
+        
+        new_users = User.objects.filter(
+            date_joined__gte=timezone.make_aware(
+                timezone.datetime.combine(date_from, timezone.datetime.min.time())
+            ),
+            date_joined__lte=timezone.make_aware(
+                timezone.datetime.combine(date_to, timezone.datetime.max.time())
+            )
+        ).count()
+        
+        # Activity metrics
+        training_sessions = TrainingSession.objects.filter(
+            date__gte=date_from, date__lte=date_to
+        ).count()
+        
+        games_played = Game.objects.filter(
+            date__gte=date_from, date__lte=date_to, status='completed'
+        ).count()
+        
+        games_scheduled = Game.objects.filter(
+            date__gte=date_from, date__lte=date_to, status='scheduled'
+        ).count()
+        
+        # Feature utilization
+        teams_with_activity = Team.objects.filter(
+            Q(training_sessions__date__gte=date_from) |
+            Q(home_games__date__gte=date_from) |
+            Q(away_games__date__gte=date_from)
+        ).distinct().count()
+        
+        total_teams = Team.objects.count()
+        utilization_rate = (teams_with_activity / total_teams * 100) if total_teams > 0 else 0
+        
+        usage_data = {
+            'report_type': 'usage',
+            'date_range': {
+                'from': date_from.isoformat(),
+                'to': date_to.isoformat()
+            },
+            'user_activity': {
+                'active_users': active_users,
+                'new_users': new_users,
+                'total_users': User.objects.count()
+            },
+            'system_activity': {
+                'training_sessions': training_sessions,
+                'games_completed': games_played,
+                'games_scheduled': games_scheduled,
+                'teams_with_activity': teams_with_activity,
+                'team_utilization_rate': round(utilization_rate, 2)
+            },
+            'generated_at': timezone.now().isoformat()
+        }
+        
+        return Response(usage_data)
+
+    def _generate_summary_report(self, date_from, date_to):
+        """Generate comprehensive summary report"""
+        summary_data = {
+            'report_type': 'summary',
+            'date_range': {
+                'from': date_from.isoformat(),
+                'to': date_to.isoformat()
+            },            'key_metrics': {
+                'total_teams': Team.objects.count(),
+                'total_players': Player.objects.filter(team__isnull=False).count(),
+                'total_coaches': Coach.objects.count(),
+                'active_leagues': League.objects.filter(seasons__status__in=['ongoing', 'upcoming']).distinct().count(),
+                'games_in_period': Game.objects.filter(date__gte=date_from, date__lte=date_to).count(),
+                'training_sessions_in_period': TrainingSession.objects.filter(date__gte=date_from, date__lte=date_to).count()
+            },
+            'health_indicators': {
+                'system_health_score': self._calculate_system_health_score(),                'unassigned_players': Player.objects.filter(team__isnull=True).count(),
+                'teams_without_coaches': Team.objects.filter(coach__isnull=True).count(),
+                'inactive_teams': Team.objects.exclude(
+                    Q(training_sessions__date__gte=date_from) |
+                    Q(home_games__date__gte=date_from) |
+                    Q(away_games__date__gte=date_from)            ).count()
+            },
+            'generated_at': timezone.now().isoformat()
+        }
+        
+        return Response(summary_data)

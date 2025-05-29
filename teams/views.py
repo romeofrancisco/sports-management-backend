@@ -34,7 +34,6 @@ class TeamViewSet(ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
-    
     def get_queryset(self):
         """
         Return teams based on user role:
@@ -45,17 +44,16 @@ class TeamViewSet(ModelViewSet):
         """
         user = self.request.user
         
-        # For admins, show all teams
+        # For admins, show all teams with optimized queries
         if user.is_admin:
-            return Team.objects.all()
-            
-        # For coaches, show only their teams
+            return Team.objects.select_related('sport', 'coach__user').prefetch_related('players')
+              # For coaches, show only their teams with optimized queries
         if hasattr(user, 'coach_profile'):
-            return user.coach_profile.teams.all()
+            return user.coach_profile.teams.select_related('sport', 'coach__user').prefetch_related('players')
             
-        # For players, show only their team
+        # For players, show only their team with optimized queries
         if hasattr(user, 'player_profile') and user.player_profile.team:
-            return Team.objects.filter(id=user.player_profile.team.id)
+            return Team.objects.select_related('sport', 'coach__user').prefetch_related('players').filter(id=user.player_profile.team.id)
             
         # User doesn't have appropriate role - deny access
         raise PermissionDenied("You don't have permission to access team data")

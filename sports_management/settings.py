@@ -105,6 +105,7 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": False,
     "BLACKLIST_TOKEN_CHECKS": False,
+    "UPDATE_LAST_LOGIN": True,
 }
 
 # Cloud Storage
