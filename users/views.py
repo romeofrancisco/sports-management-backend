@@ -7,6 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from datetime import timedelta, datetime, timezone
+from django.contrib.auth.models import update_last_login
 
 from .serializers import (
     UserSerializer,
@@ -41,6 +42,9 @@ class LoginView(GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data
+
+        # Update last_login field manually since we're using custom JWT auth
+        update_last_login(None, user)
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)

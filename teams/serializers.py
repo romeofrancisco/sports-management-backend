@@ -8,11 +8,23 @@ from sports.serializers import SportSerializer, PositionSerializer
 
 class TeamSerializer(ModelSerializer):
     logo = serializers.ImageField(use_url=True, required=False)
+    coach_name = serializers.SerializerMethodField()
+    coach_id = serializers.IntegerField(source="coach.user.id", read_only=True, allow_null=True)
+    sport_name = serializers.CharField(source="sport.name", read_only=True)
+    player_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Team
         fields = "__all__"
         read_only_fields = ("created_at", "slug")
+
+    def get_coach_name(self, obj):
+        if obj.coach and obj.coach.user:
+            return f"{obj.coach.user.first_name} {obj.coach.user.last_name}"
+        return None
+
+    def get_player_count(self, obj):
+        return obj.players.count()
 
 class SportsTeamSerializer(Serializer):
     sport = serializers.CharField()

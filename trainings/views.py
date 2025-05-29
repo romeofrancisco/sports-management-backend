@@ -812,16 +812,17 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            
-            # Get attendance data with role-based filtering
+              # Get attendance data with role-based filtering
             attendance_qs = base_queryset.filter(**filters)
             
             # Calculate overall stats
             total_records = attendance_qs.count()
+            total_players = attendance_qs.values('player').distinct().count()  # Count unique players
+            
             if total_records == 0:
                 return Response({
                     'total_sessions': 0,
-                    'total_attendees': 0,
+                    'total_players': 0,
                     'overall_attendance_rate': 0.0,
                     'average_attendance_per_session': 0.0,
                     'attendance_distribution': {},
@@ -836,22 +837,22 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             attendance_distribution = {}
             for item in distribution:
                 status = item['attendance_status'] or 'pending'
-                attendance_distribution[status] = item['count']
-            
-            # Calculate rates
+                attendance_distribution[status] = item['count']            # Calculate rates - include both present and late as "attended"
             present_count = attendance_distribution.get('present', 0)
-            overall_rate = (present_count / total_records * 100) if total_records > 0 else 0
+            late_count = attendance_distribution.get('late', 0)
+            attended_count = present_count + late_count  # Both present and late count as attended
+            overall_rate = (attended_count / total_records * 100) if total_records > 0 else 0
               # Session stats
             total_sessions = attendance_qs.values('session').distinct().count()
-            avg_per_session = total_records / total_sessions if total_sessions > 0 else 0
+            # Calculate average attended players per session (present + late)
+            avg_attended_per_session = attended_count / total_sessions if total_sessions > 0 else 0
               # Top performers (simplified)
             top_attendance = []
-            
             data = {
                 'total_sessions': total_sessions,
-                'total_attendees': total_records,
+                'total_players': total_players,  # Changed from total_attendees to total_players
                 'overall_attendance_rate': round(overall_rate, 2),
-                'average_attendance_per_session': round(avg_per_session, 2),
+                'average_attendance_per_session': round(avg_attended_per_session, 2),
                 'attendance_distribution': attendance_distribution,
                 'top_attendance': top_attendance
             }
@@ -883,7 +884,6 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             session_dates = attendance_qs.values_list(
                 'session__date', flat=True
             ).distinct().order_by('session__date')
-            
             for date in session_dates:
                 day_records = attendance_qs.filter(session__date=date)
                 total = day_records.count()
@@ -894,7 +894,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 trends_data.append({
                     'date': date.isoformat(),
                     'attendance_rate': round(attendance_rate, 2),
-                    'total_attendees': total,
+                    'total_records': total,  # Changed to be more clear - total attendance records for this date
                     'present_count': present
                 })
             return Response(trends_data)
