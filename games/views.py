@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db import transaction
+from django.db import transaction, models
 from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField
 from rest_framework.pagination import PageNumberPagination
@@ -20,7 +20,8 @@ from .serializers import (
     GameCurrentPlayersSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
-from sports_management.permissions import IsAdminOrCoachUser
+from sports_management.permissions import IsAdminOrCoachUser, CanManageGamePermission, CanCreateGamePermission
+from rest_framework.exceptions import PermissionDenied
 from .services import (
     PlayerStatsSummaryService,
     RecordingService,
@@ -165,6 +166,18 @@ class GameViewSet(viewsets.ModelViewSet):
     filterset_class = GameFilter
     pagination_class = GamePagination
     
+    def get_permissions(self):
+        """
+        Instantiate and return the list of permissions that this view requires.
+        """
+        if self.action == 'create':
+            permission_classes = [CanCreateGamePermission]
+        elif self.action in ['manage', 'update_scores', 'partial_update', 'update', 'destroy']:        permission_classes = [CanManageGamePermission]
+        else:
+            permission_classes = [IsAuthenticated]
+            
+        return [permission() for permission in permission_classes]
+    
     def get_queryset(self):
         """
         Filter games based on game type and user role:
@@ -179,27 +192,25 @@ class GameViewSet(viewsets.ModelViewSet):
         # If admin, return all games
         if user.is_admin:
             return queryset
-            
+              
         # Filter normal games based on user role, but keep all league/tournament games
         if hasattr(user, 'coach_profile'):
-            # For coaches: normal games only for teams they coach
+            # For coaches: practice games only for teams they coach
             coach_teams = user.coach_profile.teams.all()
             return queryset.filter(
                 # Keep all league/tournament games
-                models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |
-                # Plus normal games only for their teams
-                (models.Q(type=Game.Type.NORMAL) & 
+                models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |                # Plus practice games only for their teams
+                (models.Q(type=Game.Type.PRACTICE) & 
                  (models.Q(home_team__in=coach_teams) | models.Q(away_team__in=coach_teams)))
             )
         elif hasattr(user, 'player_profile'):
-            # For players: normal games only for their team
+            # For players: practice games only for their team
             player_team = user.player_profile.team
             if player_team:
                 return queryset.filter(
                     # Keep all league/tournament games
-                    models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |
-                    # Plus normal games only for their team
-                    (models.Q(type=Game.Type.NORMAL) & 
+                    models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |                    # Plus practice games only for their team
+                    (models.Q(type=Game.Type.PRACTICE) & 
                      (models.Q(home_team=player_team) | models.Q(away_team=player_team)))
                 )
             else:
@@ -208,9 +219,34 @@ class GameViewSet(viewsets.ModelViewSet):
         
         # Default: only show league and tournament games for other users
         return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
-    
     def perform_create(self, serializer):
-        serializer.save(creator=self.request.user)
+        user = self.request.user
+        game_type = serializer.validated_data.get('type', Game.Type.PRACTICE)
+        
+        # Admins can create any type of game
+        if user.is_admin:
+            serializer.save(creator=user)
+            return
+        
+        # Coaches can only create practice games for their teams
+        if user.is_coach and hasattr(user, 'coach_profile'):
+            # Restrict to practice games only
+            if game_type != Game.Type.PRACTICE:  # PRACTICE maps to practice games
+                raise PermissionDenied("Coaches can only create practice games")
+            
+            # Check if coach owns either team in the game
+            home_team = serializer.validated_data.get('home_team')
+            away_team = serializer.validated_data.get('away_team')
+            coach_teams = list(user.coach_profile.teams.all())
+            
+            if home_team not in coach_teams and away_team not in coach_teams:
+                raise PermissionDenied("You can only create games for teams you coach")
+            
+            serializer.save(creator=user)
+            return
+        
+        # Deny access for other users
+        raise PermissionDenied("You don't have permission to create games")
         
     @action(detail=True, methods=["get"])
     def game_leaders(self, request, pk=None):

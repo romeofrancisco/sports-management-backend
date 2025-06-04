@@ -49,6 +49,11 @@ class TrainingSession(models.Model):
         TEAM = "team", "Team Training"
         INDIVIDUAL = "individual", "Individual Training"
     
+    class Status(models.TextChoices):
+        UPCOMING = "upcoming", "Upcoming"
+        ONGOING = "ongoing", "Ongoing"
+        COMPLETED = "completed", "Completed"
+    
     title = models.CharField(max_length=200)
     session_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     description = models.TextField(blank=True)
@@ -59,6 +64,7 @@ class TrainingSession(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True, related_name='training_sessions')    
     coach = models.ForeignKey(Coach, on_delete=models.SET_NULL, null=True, related_name='conducted_sessions')
     training_type = models.CharField(max_length=20, choices=TrainingType.choices, default=TrainingType.TEAM)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
     categories = models.ManyToManyField(TrainingCategory, related_name='sessions')
     metrics = models.ManyToManyField('TrainingMetric', related_name='sessions', blank=True)
     notes = models.TextField(blank=True)
@@ -85,6 +91,61 @@ class TrainingSession(models.Model):
             
         duration = end_datetime - start_datetime
         return int(duration.total_seconds() / 60)
+
+    def get_auto_status(self):
+        """Automatically determine status based on current time and session timing"""
+        from django.utils import timezone
+        now = timezone.now()
+        session_start = timezone.datetime.combine(self.date, self.start_time)
+        session_end = timezone.datetime.combine(self.date, self.end_time)
+        
+        # Make timezone-aware
+        session_start = timezone.make_aware(session_start)
+        session_end = timezone.make_aware(session_end)
+        
+        if now < session_start:
+            return self.Status.UPCOMING
+        elif session_start <= now <= session_end:
+            return self.Status.ONGOING
+        else:
+            return self.Status.COMPLETED
+    
+    def update_status(self):
+        """Update the status field based on current time"""
+        auto_status = self.get_auto_status()
+        if self.status != auto_status:
+            self.status = auto_status
+            self.save(update_fields=['status'])    
+        
+    def can_manage_attendance(self):
+        """Check if attendance can be managed for this session"""
+        if self.status == self.Status.ONGOING:
+            return True
+        elif self.status == self.Status.COMPLETED:
+            # Allow attendance management for completed sessions within 24 hours
+            from django.utils import timezone
+            session_end = timezone.datetime.combine(self.date, self.end_time)
+            session_end = timezone.make_aware(session_end)
+            hours_since_completion = (timezone.now() - session_end).total_seconds() / 3600
+            return hours_since_completion <= 24  # 24 hours grace period
+        else:
+            return False  # Upcoming sessions cannot have attendance managed
+    def can_configure_metrics(self):
+        """Check if metrics can be configured for this session"""
+        return self.status == self.Status.UPCOMING
+    
+    def can_record_metrics(self):
+        """Check if metrics can be recorded for this session"""
+        return self.status == self.Status.ONGOING
+    
+    @property
+    def is_past_due(self):
+        """Check if the session is past due based on current time"""
+        from django.utils import timezone
+        now = timezone.now()
+        session_end = timezone.datetime.combine(self.date, self.end_time)
+        session_end = timezone.make_aware(session_end)
+        return now > session_end
 
 class PlayerTraining(models.Model):
     """Records an individual player's participation in a training session"""

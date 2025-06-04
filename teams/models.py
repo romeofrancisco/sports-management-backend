@@ -11,6 +11,7 @@ class Team(models.Model):
     class Division(models.TextChoices):
         MALE = "male", "Male"
         FEMALE = "female", "Female"
+        
     name = models.CharField(max_length=100)
     abbreviation = models.CharField(max_length=5)
     color = models.CharField(max_length=20, default="#000000")
@@ -21,12 +22,21 @@ class Team(models.Model):
     slug = models.SlugField(unique=True, blank=True)  
     created_at = models.DateTimeField(auto_now_add=True)
     
+    class Meta:
+        ordering = ['name', 'created_at']
+    
     def __str__(self):
         return f"{self.name} ({self.sport}) "
     
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)  # Auto-generate slug from name
+        
+        # Validate coach can handle this sport
+        if self.coach and not self.coach.can_coach_team(self):
+            from django.core.exceptions import ValidationError
+            raise ValidationError(f"Coach {self.coach} cannot coach {self.sport.name} teams.")
+            
         super().save(*args, **kwargs)
         
     def win_loss_record(self):
@@ -60,9 +70,17 @@ class Coach(models.Model):
         related_name='coach_profile',
         primary_key=True
     )
+    sports = models.ManyToManyField(Sport, related_name='coaches', blank=True)
+    
+    class Meta:
+        ordering = ['user__first_name', 'user__last_name']
     
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+    def can_coach_team(self, team):
+        """Check if coach can coach a specific team based on their sports"""
+        return self.sports.filter(id=team.sport.id).exists()
 
 class PlayerManager(models.Manager):
     def active_in_game(self, game):

@@ -2,10 +2,10 @@ from rest_framework import serializers
 from .models import Game, PlayerStat, StartingLineup, Substitution
 from teams.serializers import TeamSerializer
 from teams.models import Team, Player
-from sports.models import SportStatType, Position
+from sports.models import SportStatType, Position, Sport
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
-from sports.models import Sport
+from leagues.models import League, Season
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -91,6 +91,9 @@ class GameSerializer(serializers.ModelSerializer):
     score_summary = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
     sport = serializers.PrimaryKeyRelatedField(queryset=Sport.objects.all(), read_only=False)
+      # Nested league and season data for frontend display
+    league = serializers.SerializerMethodField()
+    season = serializers.SerializerMethodField()
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -98,6 +101,12 @@ class GameSerializer(serializers.ModelSerializer):
     )
     away_team_id = serializers.PrimaryKeyRelatedField(
         queryset=Team.objects.all(), write_only=True, source="away_team"
+    )
+    league_id = serializers.PrimaryKeyRelatedField(
+        queryset=League.objects.all(), write_only=True, source="league", required=False
+    )
+    season_id = serializers.PrimaryKeyRelatedField(
+        queryset=Season.objects.all(), write_only=True, source="season", required=False
     )
 
     class Meta:
@@ -111,19 +120,19 @@ class GameSerializer(serializers.ModelSerializer):
             "is_recorded",
             "score_summary",
             "type",
-            "creator",
             "home_team",
             "away_team",
             "home_team_id",
             "away_team_id",
+            "league_id",
+            "season_id",
             "lineup_status",
             "date",
             "location",
             "status",
             "started_at",
             "ended_at",
-            "duration",
-            "home_team_score",
+            "duration",            "home_team_score",
             "away_team_score",
             "current_period",
             "winner",
@@ -140,6 +149,25 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
+    
+    def get_league(self, obj):
+        """Return league data with name only for frontend display"""
+        if obj.league:
+            return {
+                "id": obj.league.id,
+                "name": obj.league.name
+            }
+        return None
+    
+    def get_season(self, obj):
+        """Return season data with name and year only for frontend display"""
+        if obj.season:
+            return {
+                "id": obj.season.id,
+                "name": obj.season.name,
+                "year": obj.season.year
+            }
+        return None
     
     def get_score_summary(self, obj):
         return obj.score_summary
@@ -378,3 +406,30 @@ class StartingLineupSerializer(serializers.ModelSerializer):
             raise ValidationError("Player not in this game")
 
         return attrs
+
+
+class GameSummarySerializer(serializers.ModelSerializer):
+    """
+    Simplified serializer for game analytics and summaries.
+    Only includes essential data for charts and performance visualization.
+    """
+    home_team_name = serializers.CharField(source="home_team.name", read_only=True)
+    away_team_name = serializers.CharField(source="away_team.name", read_only=True)
+    winner_team_name = serializers.CharField(source="winner_team.name", read_only=True)
+    sport_name = serializers.CharField(source="sport.name", read_only=True)
+    
+    class Meta:
+        model = Game
+        fields = [
+            "id",
+            "date", 
+            "home_team_name",
+            "away_team_name",
+            "home_team_score",
+            "away_team_score", 
+            "status",
+            "winner_team_name",
+            "sport_name",
+            "location"
+        ]
+        read_only_fields = fields

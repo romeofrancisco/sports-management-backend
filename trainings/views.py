@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Avg, Max, Min
@@ -19,6 +20,7 @@ from .models import (
     TrainingMetric, 
     PlayerMetricRecord
 )
+from .services.attendance_analytics_service import AttendanceAnalyticsService, TeamAnalyticsService, TrainingEfficiencyService
 from .filters import TrainingSessionFilter, PlayerTrainingFilter
 from .serializers import (
     MetricUnitSerializer,
@@ -29,6 +31,11 @@ from .serializers import (
     TrainingMetricSerializer,
     PlayerMetricRecordSerializer,
     PlayerProgressSerializer,
+)
+from .services.attendance_analytics_service import (
+    AttendanceAnalyticsService,
+    TeamAnalyticsService,
+    TrainingEfficiencyService
 )
 from teams.models import Player, Team
 from rest_framework.pagination import PageNumberPagination
@@ -343,8 +350,8 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         service = TrainingSessionService()
         analytics_data = service.get_session_analytics(session)
-        
         return Response(analytics_data)
+    
     def perform_create(self, serializer):
         from .services import TrainingSessionService
         
@@ -360,6 +367,15 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         from .services import TrainingSessionService
         
         session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         metric_ids = request.data.get('metrics', [])
         
         if not isinstance(metric_ids, list):
@@ -377,6 +393,69 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "created_records": result.get('total_created_records', 0),
             "updated_records": result.get('total_deleted_records', 0),
             "player_results": result.get('player_results', [])
+        })
+    
+    @action(detail=True, methods=['post'])
+    def start_training(self, request, pk=None):
+        """Manually start a training session (change status from UPCOMING to ONGOING)"""
+        session = self.get_object()
+        
+        # Check if session can be started
+        if session.status != session.Status.UPCOMING:
+            return Response({
+                "detail": f"Training session cannot be started. Current status: {session.status}. Only upcoming sessions can be started.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has permission to start this session
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and session.team in user.coach_profile.teams.all())):
+            return Response({
+                "detail": "You don't have permission to start this training session."
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update session status to ONGOING
+        session.status = session.Status.ONGOING
+        session.save(update_fields=['status'])
+        return Response({
+            "detail": "Training session started successfully.",
+            "session_status": session.status,
+            "auto_status": session.get_auto_status(),
+            "session_id": session.id,
+            "session_title": session.title
+        })
+    
+    @action(detail=True, methods=['post'])
+    def end_training(self, request, pk=None):
+        """Manually end a training session (change status from ONGOING to COMPLETED)"""
+        session = self.get_object()
+        
+        # Check if session can be ended
+        if session.status != session.Status.ONGOING:
+            return Response({
+                "detail": f"Training session cannot be ended. Current status: {session.status}. Only ongoing sessions can be ended.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has permission to end this session
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and session.team in user.coach_profile.teams.all())):
+            return Response({
+                "detail": "You don't have permission to end this training session."
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update session status to COMPLETED
+        session.status = session.Status.COMPLETED
+        session.save(update_fields=['status'])
+        
+        return Response({
+            "detail": "Training session ended successfully.",
+            "session_status": session.status,
+            "auto_status": session.get_auto_status(),
+            "session_id": session.id,
+            "session_title": session.title
         })
 
 class PlayerTrainingViewSet(viewsets.ModelViewSet):
@@ -508,13 +587,22 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied("You can only delete player training records for your own team's players")
         else:
             raise PermissionDenied("You don't have permission to delete player training records")
-    
     @action(detail=True, methods=['post'])
     def record_metrics(self, request, pk=None):
         """Record multiple metrics for a player's training"""
         from .services import PlayerTrainingService
         
         player_training = self.get_object()
+        session = player_training.session
+        
+        # Check if metrics can be recorded for this session
+        if not session.can_record_metrics():
+            return Response({
+                "detail": f"Metrics cannot be recorded for {session.status} sessions. Only ongoing and completed sessions allow metrics recording.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         metrics_data = request.data.get('metrics', [])
         
         if not metrics_data:
@@ -559,7 +647,8 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         """Get previous records for this player across metrics"""
         from .services import PlayerTrainingService
         
-        service = PlayerTrainingService()
+        service = PlayerTrainingService()        
+        
         return service.get_previous_records(player_training)
     
     @action(detail=True, methods=['patch'])
@@ -568,6 +657,14 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         from .services import PlayerTrainingService
         
         player_training = self.get_object()
+        session = player_training.session        # Check if attendance can be managed for this session
+        if not session.can_manage_attendance():
+            return Response({
+                "detail": f"Attendance cannot be managed for {session.status} sessions. Only ongoing sessions or completed sessions within 24 hours allow attendance management.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         new_status = request.data.get('attendance_status')
         notes = request.data.get('notes', player_training.notes)
         
@@ -588,7 +685,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         return Response({
             "previous_records": previous_records
         })
-        
+    
     @action(detail=False, methods=['post'])
     def bulk_update_attendance(self, request):
         """Update attendance status for multiple player training records"""
@@ -600,7 +697,17 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         if not session_id:
             return Response({"detail": "Session ID is required."}, status=status.HTTP_400_BAD_REQUEST)
         if not player_records:
-            return Response({"detail": "No player records provided."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "No player records provided."}, status=status.HTTP_400_BAD_REQUEST)        # Check session status before updating attendance
+        try:
+            session = TrainingSession.objects.get(id=session_id)
+            if not session.can_manage_attendance():
+                return Response({
+                    "detail": f"Attendance cannot be managed for {session.status} sessions. Only ongoing sessions or completed sessions within 24 hours allow attendance management.",
+                    "session_status": session.status,
+                    "auto_status": session.get_auto_status()
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except TrainingSession.DoesNotExist:
+            return Response({"detail": "Training session not found."}, status=status.HTTP_404_NOT_FOUND)
         
         service = PlayerTrainingService()
         result = service.bulk_update_attendance(session_id, player_records)
@@ -665,6 +772,35 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             permission_classes = [IsAuthenticated]
             
         return [permission() for permission in permission_classes]
+    
+    def perform_create(self, serializer):
+        """Validate session status before creating metric records"""
+        player_training = serializer.validated_data.get('player_training')
+        session = player_training.session
+        
+        # Check if metrics can be recorded for this session
+        if not session.can_record_metrics():
+            raise ValidationError({
+                'detail': f'Metrics cannot be recorded for {session.status} sessions. Only ongoing and completed sessions allow metrics recording.',
+                'session_status': session.status,
+                'auto_status': session.get_auto_status()
+            })
+        
+        # Validate team permissions for coaches
+        if self.request.user.is_admin:
+            # Admins can create metric records for any team
+            serializer.save(recorded_by_id=getattr(self.request.user, 'coach_profile_id', None))
+        elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
+            # Coaches can only create metric records for their team's players
+            coach_teams = list(self.request.user.coach_profile.teams.all())
+            
+            # Check if the metric record belongs to one of the coach's teams
+            if session.team and session.team in coach_teams:
+                serializer.save(recorded_by=self.request.user.coach_profile)
+            else:
+                raise PermissionDenied("You can only create metric records for your own team's players")
+        else:
+            raise PermissionDenied("You don't have permission to create metric records")
     
     def perform_update(self, serializer):
         """Only allow coaches to update metric records for their own team's players"""
@@ -759,7 +895,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
         - latest_only: boolean (optional, only fetch most recent training session data, default false)
         - page_size: int (optional, pagination control, default 50)
         - page: int (optional, pagination control, default 1)
-        """
+        """        
         from .services import MultiPlayerProgressService
         try:
             service = MultiPlayerProgressService(request)
@@ -769,6 +905,187 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'])
+    def player_radar_chart(self, request):
+        """Get radar chart data for a player's performance across training categories"""
+        from django.db.models import Avg, Max, Min, Count
+        from decimal import Decimal
+        from django.utils.dateparse import parse_date
+        
+        player_id = request.query_params.get('player_id')
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if not player_id:
+            return Response(
+                {"detail": "player_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            player = Player.objects.get(user_id=player_id)
+        except Player.DoesNotExist:
+            return Response(
+                {"detail": "Player not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Apply role-based access control
+        user = request.user
+        if not user.is_admin:
+            # For coaches, check if player is in their teams
+            if hasattr(user, 'coach_profile'):
+                coach_teams = user.coach_profile.teams.all()
+                if player.team not in coach_teams:
+                    raise PermissionDenied("You can only access radar chart data for players in your teams")
+            # For players, check if they're accessing their own data
+            elif hasattr(user, 'player_profile'):
+                if player != user.player_profile:
+                    raise PermissionDenied("You can only access your own radar chart data")
+            else:
+                raise PermissionDenied("You don't have permission to access radar chart data")
+        
+        # Build base query for player's metric records
+        records_query = PlayerMetricRecord.objects.filter(
+            player_training__player=player
+        ).select_related(
+            'metric__category',
+            'metric__metric_unit',
+            'player_training__session'
+        )
+        
+        # Apply date filters if provided
+        if date_from:
+            try:
+                date_from_parsed = parse_date(date_from)
+                records_query = records_query.filter(
+                    player_training__session__date__gte=date_from_parsed
+                )
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "Invalid date_from format. Use YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        if date_to:
+            try:
+                date_to_parsed = parse_date(date_to)
+                records_query = records_query.filter(
+                    player_training__session__date__lte=date_to_parsed
+                )
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "Invalid date_to format. Use YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Get all training categories with metrics for this player
+        categories_with_data = []
+        categories = TrainingCategory.objects.filter(
+            metrics__records__player_training__player=player
+        ).distinct()
+        
+        for category in categories:
+            # Get all records for metrics in this category
+            category_records = records_query.filter(
+                metric__category=category
+            ).order_by('player_training__session__date')
+            
+            if not category_records.exists():
+                continue
+            
+            # Calculate performance metrics for this category
+            category_metrics = []
+            metrics_in_category = TrainingMetric.objects.filter(
+                category=category,
+                records__player_training__player=player
+            ).distinct()
+            
+            total_improvement = 0
+            metrics_with_improvement = 0
+            latest_performance_score = 0
+            
+            for metric in metrics_in_category:
+                metric_records = category_records.filter(metric=metric)
+                
+                if metric_records.count() < 2:
+                    continue
+                
+                # Get first and latest records for improvement calculation
+                first_record = metric_records.first()
+                latest_record = metric_records.last()
+                
+                first_value = float(first_record.value)
+                latest_value = float(latest_record.value)
+                
+                # Calculate improvement percentage
+                if first_value != 0:
+                    raw_improvement = ((latest_value - first_value) / first_value) * 100
+                    
+                    # Apply normalization and direction logic
+                    normalization_weight = 1.0
+                    if metric.metric_unit:
+                        normalization_weight = float(metric.metric_unit.normalization_weight)
+                    
+                    improvement = raw_improvement * normalization_weight
+                    
+                    # For metrics where lower is better, invert the improvement
+                    if metric.is_lower_better:
+                        improvement = -improvement
+                    
+                    total_improvement += improvement
+                    metrics_with_improvement += 1
+                    
+                    # Calculate latest performance score (0-100 scale)
+                    # This is a normalized score based on improvement
+                    performance_score = max(0, min(100, 50 + (improvement / 2)))
+                    latest_performance_score += performance_score
+                
+                category_metrics.append({
+                    'metric_name': metric.name,
+                    'metric_unit': metric.metric_unit.code if metric.metric_unit else '',
+                    'latest_value': float(latest_record.value),
+                    'improvement_percentage': improvement if first_value != 0 else 0,
+                    'records_count': metric_records.count()
+                })
+            
+            # Calculate category averages
+            avg_improvement = (total_improvement / metrics_with_improvement) if metrics_with_improvement > 0 else 0
+            avg_performance_score = (latest_performance_score / metrics_with_improvement) if metrics_with_improvement > 0 else 50
+            
+            categories_with_data.append({
+                'category_id': category.id,
+                'category_name': category.name,
+                'description': category.description,
+                'average_improvement': round(avg_improvement, 2),
+                'performance_score': round(avg_performance_score, 2),
+                'metrics_count': metrics_with_improvement,
+                'total_records': category_records.count(),
+                'metrics_data': category_metrics
+            })
+        
+        # Prepare radar chart data
+        chart_data = {
+            'player_id': player_id,
+            'player_name': f"{player.user.first_name} {player.user.last_name}",
+            'categories': categories_with_data,
+            'chart_labels': [cat['category_name'] for cat in categories_with_data],
+            'performance_scores': [cat['performance_score'] for cat in categories_with_data],
+            'improvement_percentages': [cat['average_improvement'] for cat in categories_with_data],
+            'date_range': {
+                'from': date_from,
+                'to': date_to
+            },
+            'summary': {
+                'categories_tracked': len(categories_with_data),
+                'total_metrics': sum(cat['metrics_count'] for cat in categories_with_data),
+                'overall_performance': round(sum(cat['performance_score'] for cat in categories_with_data) / len(categories_with_data), 2) if categories_with_data else 0,
+                'overall_improvement': round(sum(cat['average_improvement'] for cat in categories_with_data) / len(categories_with_data), 2) if categories_with_data else 0
+            }
+        }
+        
+        return Response(chart_data)
 
 class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     """
@@ -804,58 +1121,17 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             
         # User doesn't have appropriate role - deny access
         raise PermissionDenied("You don't have permission to access attendance analytics")
-    
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """Get attendance overview analytics"""
         try:
-            # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-              # Get attendance data with role-based filtering
-            attendance_qs = base_queryset.filter(**filters)
             
-            # Calculate overall stats
-            total_records = attendance_qs.count()
-            total_players = attendance_qs.values('player').distinct().count()  # Count unique players
-            
-            if total_records == 0:
-                return Response({
-                    'total_sessions': 0,
-                    'total_players': 0,
-                    'overall_attendance_rate': 0.0,
-                    'average_attendance_per_session': 0.0,
-                    'attendance_distribution': {},
-                    'top_attendance': []
-                })
-            
-            # Attendance distribution
-            distribution = attendance_qs.values('attendance_status').annotate(
-                count=Count('id')
+            # Use service to calculate overview analytics
+            data = AttendanceAnalyticsService.calculate_attendance_overview(
+                base_queryset, filters
             )
-            
-            attendance_distribution = {}
-            for item in distribution:
-                status = item['attendance_status'] or 'pending'
-                attendance_distribution[status] = item['count']            # Calculate rates - include both present and late as "attended"
-            present_count = attendance_distribution.get('present', 0)
-            late_count = attendance_distribution.get('late', 0)
-            attended_count = present_count + late_count  # Both present and late count as attended
-            overall_rate = (attended_count / total_records * 100) if total_records > 0 else 0
-              # Session stats
-            total_sessions = attendance_qs.values('session').distinct().count()
-            # Calculate average attended players per session (present + late)
-            avg_attended_per_session = attended_count / total_sessions if total_sessions > 0 else 0
-              # Top performers (simplified)
-            top_attendance = []
-            data = {
-                'total_sessions': total_sessions,
-                'total_players': total_players,  # Changed from total_attendees to total_players
-                'overall_attendance_rate': round(overall_rate, 2),
-                'average_attendance_per_session': round(avg_attended_per_session, 2),
-                'attendance_distribution': attendance_distribution,
-                'top_attendance': top_attendance
-            }
             
             return Response(data)
             
@@ -864,39 +1140,18 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     @action(detail=False, methods=['get'])
     def trends(self, request):
         """Get attendance trends over time"""
         try:
-            # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            period = request.query_params.get('period', 'daily')
             
-            # Get attendance data grouped by date with role-based filtering
-            attendance_qs = base_queryset.filter(**filters).select_related(
-                'session'
+            # Use service to calculate trends
+            trends_data = AttendanceAnalyticsService.calculate_attendance_trends(
+                base_queryset, filters
             )
             
-            # Group by training session date
-            trends_data = []
-            session_dates = attendance_qs.values_list(
-                'session__date', flat=True
-            ).distinct().order_by('session__date')
-            for date in session_dates:
-                day_records = attendance_qs.filter(session__date=date)
-                total = day_records.count()
-                present = day_records.filter(attendance_status='present').count()
-                
-                attendance_rate = (present / total * 100) if total > 0 else 0
-                
-                trends_data.append({
-                    'date': date.isoformat(),
-                    'attendance_rate': round(attendance_rate, 2),
-                    'total_records': total,  # Changed to be more clear - total attendance records for this date
-                    'present_count': present
-                })
             return Response(trends_data)
             
         except Exception as e:
@@ -904,39 +1159,18 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     @action(detail=False, methods=['get'])
     def heatmap(self, request):
         """Get attendance heatmap data"""        
         try:
-            # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             
-            # Get attendance data grouped by date with role-based filtering
-            attendance_qs = base_queryset.filter(**filters).select_related(
-                'session'
+            # Use service to calculate heatmap
+            heatmap_data = AttendanceAnalyticsService.calculate_attendance_heatmap(
+                base_queryset, filters
             )
             
-            # Group by training session date
-            heatmap_data = []
-            session_dates = attendance_qs.values_list(
-                'session__date', flat=True
-            ).distinct().order_by('session__date')
-            
-            for date in session_dates:
-                day_records = attendance_qs.filter(session__date=date)
-                total = day_records.count()
-                present = day_records.filter(attendance_status='present').count()
-                
-                attendance_rate = (present / total * 100) if total > 0 else 0
-                
-                heatmap_data.append({
-                    'date': date.isoformat(),
-                    'total_players': total,
-                    'present_count': present,
-                    'attendance_rate': round(attendance_rate, 2)
-                })
             return Response(heatmap_data)
             
         except Exception as e:
@@ -944,59 +1178,18 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     @action(detail=False, methods=['get'])
     def players(self, request):
         """Get individual player attendance analytics"""
         try:
-            # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-              # Get all player training records with role-based filtering
-            attendance_qs = base_queryset.filter(**filters).select_related(
-                'player__user', 'session'
+            
+            # Use service to calculate player analytics
+            players_data = AttendanceAnalyticsService.calculate_player_attendance_analytics(
+                base_queryset, filters
             )
             
-            # Group by player
-            player_stats = {}
-            for record in attendance_qs:
-                player_id = record.player.user_id
-                if player_id not in player_stats:
-                    player_stats[player_id] = {
-                        'player_id': player_id,
-                        'player_name': record.player.user.get_full_name(),
-                        'total_sessions': 0,
-                        'present_count': 0,
-                        'absent_count': 0,
-                        'late_count': 0,
-                        'excused_count': 0,
-                        'current_streak': 0,
-                        'best_streak': 0
-                    }
-                
-                stats = player_stats[player_id]
-                stats['total_sessions'] += 1
-                
-                if record.attendance_status == 'present':
-                    stats['present_count'] += 1
-                elif record.attendance_status == 'absent':
-                    stats['absent_count'] += 1
-                elif record.attendance_status == 'late':
-                    stats['late_count'] += 1
-                elif record.attendance_status == 'excused':
-                    stats['excused_count'] += 1
-            
-            # Calculate attendance rates
-            players_data = []
-            for stats in player_stats.values():
-                total = stats['total_sessions']
-                present = stats['present_count']
-                attendance_rate = (present / total * 100) if total > 0 else 0
-                
-                stats['attendance_rate'] = round(attendance_rate, 2)
-                players_data.append(stats)
-              # Sort by attendance rate
-            players_data.sort(key=lambda x: x['attendance_rate'], reverse=True)
             return Response(players_data)
             
         except Exception as e:
@@ -1004,7 +1197,6 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     @action(detail=False, methods=['get'])
     def player_detail(self, request):
         """Get detailed attendance analytics for a specific player"""
@@ -1016,94 +1208,14 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Apply role-based filtering first
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            filters['player__user_id'] = player_id
-            
-            # Get all player training records with role-based filtering
-            attendance_qs = base_queryset.filter(**filters).select_related(
-                'player__user', 'session'
-            ).order_by('session__date')
-            
-            # Check if user has permission to view this specific player's data
             user = request.user
-            if not user.is_admin and hasattr(user, 'player_profile'):
-                # Players can only view their own data
-                if str(user.player_profile.user_id) != str(player_id):
-                    raise PermissionDenied("You can only view your own attendance data")
-            elif not user.is_admin and hasattr(user, 'coach_profile'):
-                # Coaches can only view data for players in their teams
-                coach_teams = user.coach_profile.teams.all()
-                player_accessible = attendance_qs.filter(session__team__in=coach_teams).exists()
-                if not player_accessible:
-                    raise PermissionDenied("You can only view attendance data for players in your teams")
             
-            if not attendance_qs.exists():
-                return Response({
-                    'player_id': player_id,
-                    'player_name': 'Unknown Player',
-                    'total_sessions': 0,
-                    'attendance_rate': 0.0,
-                    'attendance_distribution': {},
-                    'trends': [],
-                    'recent_sessions': []
-                })
-            
-            # Get player info from first record
-            first_record = attendance_qs.first()
-            player_name = first_record.player.user.get_full_name()
-            
-            # Calculate overall stats
-            total_sessions = attendance_qs.count()
-            present_count = attendance_qs.filter(attendance_status='present').count()
-            absent_count = attendance_qs.filter(attendance_status='absent').count()
-            late_count = attendance_qs.filter(attendance_status='late').count()
-            excused_count = attendance_qs.filter(attendance_status='excused').count()
-            
-            attendance_rate = (present_count / total_sessions * 100) if total_sessions > 0 else 0
-            
-            # Attendance distribution
-            attendance_distribution = {
-                'present': present_count,
-                'absent': absent_count,
-                'late': late_count,
-                'excused': excused_count
-            }
-            
-            # Trends data (last 30 sessions or all if less)
-            recent_records = attendance_qs.order_by('-session__date')[:30]
-            trends = []
-            for record in reversed(recent_records):
-                trends.append({
-                    'date': record.session.date.isoformat(),
-                    'status': record.attendance_status or 'pending',
-                    'session_name': record.session.title
-                })
-            
-            # Recent sessions details
-            recent_sessions = []
-            for record in attendance_qs.order_by('-session__date')[:10]:
-                recent_sessions.append({
-                    'date': record.session.date.isoformat(),
-                    'session_name': record.session.title,
-                    'status': record.attendance_status or 'pending',
-                    'notes': record.notes or ''
-                })
-            
-            data = {
-                'player_id': player_id,
-                'player_name': player_name,
-                'total_sessions': total_sessions,
-                'present_count': present_count,
-                'absent_count': absent_count,
-                'late_count': late_count,
-                'excused_count': excused_count,
-                'attendance_rate': round(attendance_rate, 2),
-                'attendance_distribution': attendance_distribution,
-                'trends': trends,
-                'recent_sessions': recent_sessions
-            }
+            # Use service to get player detail analytics
+            data = AttendanceAnalyticsService.get_player_detail_analytics(
+                player_id, base_queryset, filters, user
+            )
             
             return Response(data)
             
@@ -1117,48 +1229,4 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         Extract filters from request parameters
         Note: Role-based filtering is handled separately in get_base_queryset()
         """
-        filters = {}
-        user = request.user
-        
-        # Team filter - apply additional restrictions based on role
-        team_id = request.query_params.get('team_id')
-        if team_id and team_id != 'all':
-            # Validate team access based on user role
-            if hasattr(user, 'coach_profile'):
-                # Coaches can only filter by their own teams
-                coach_teams = user.coach_profile.teams.all()
-                if coach_teams.filter(id=team_id).exists():
-                    filters['session__team_id'] = team_id
-                else:
-                    # Silently ignore unauthorized team filter for coaches
-                    pass
-            elif user.is_admin:
-                # Admins can filter by any team
-                filters['session__team_id'] = team_id
-            # Players don't get team filtering as they only see their own data
-        
-        # Date range filters
-        start_date = request.query_params.get('start_date')
-        if start_date:
-            try:
-                start_date = parse_date(start_date)
-                if start_date:
-                    filters['session__date__gte'] = start_date
-            except:
-                pass
-        
-        end_date = request.query_params.get('end_date')
-        if end_date:
-            try:
-                end_date = parse_date(end_date)
-                if end_date:
-                    filters['session__date__lte'] = end_date
-            except:
-                pass
-        
-        # Attendance status filter
-        status_filter = request.query_params.get('status')
-        if status_filter and status_filter != 'all':
-            filters['attendance_status'] = status_filter
-        
-        return filters
+        return AttendanceAnalyticsService.get_filters(request)
