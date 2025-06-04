@@ -21,6 +21,19 @@ from .serializers import (
     CoachPlayerProgressSerializer,
     PlayerOverviewSerializer,
     PlayerProgressDetailSerializer,
+    DashboardSummarySerializer,
+    TrainingSummarySerializer,
+    LeagueSummarySerializer,
+    GameSummarySerializer,
+    AnalyticsSerializer,
+    ChartDataSerializer
+)
+from .services import (
+    DashboardSummaryService,
+    TrainingSummaryService,
+    LeagueSummaryService,
+    GameSummaryService,
+    AnalyticsService
 )
 
 logger = logging.getLogger(__name__)
@@ -1398,3 +1411,344 @@ class DashboardViewSet(viewsets.ViewSet):
         }
         
         return Response(summary_data)
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def dashboard_summary(self, request):
+        """
+        Get comprehensive dashboard summary data using DashboardSummaryService.
+        Suitable for main dashboard overview across all user roles.
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            
+            # Get data from DashboardSummaryService
+            system_overview = DashboardSummaryService.get_system_overview(days)
+            health_indicators = DashboardSummaryService.get_health_indicators()
+            user_activity_summary = DashboardSummaryService.get_user_activity_summary(days)
+            performance_indicators = DashboardSummaryService.get_performance_indicators(days)
+            trend_data = DashboardSummaryService.get_trend_data(days)
+            distribution_stats = DashboardSummaryService.get_distribution_stats(days)
+            
+            # Combine all data
+            summary_data = {
+                'system_overview': system_overview,
+                'health_indicators': health_indicators,
+                'user_activity_summary': user_activity_summary,
+                'performance_indicators': performance_indicators,
+                'trend_data': trend_data,
+                'distribution_stats': distribution_stats
+            }
+            
+            serializer = DashboardSummarySerializer(summary_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in dashboard_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch dashboard summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def training_summary(self, request):
+        """
+        Get training summary data for dashboard visualization.
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            
+            # Get data from TrainingSummaryService
+            training_overview = TrainingSummaryService.get_training_overview(days)
+            training_trends = TrainingSummaryService.get_training_trends(days)
+            training_performance = TrainingSummaryService.get_training_performance(days)
+            health_indicators = TrainingSummaryService.get_training_health_indicators()
+            
+            # Combine all data
+            summary_data = {
+                'training_overview': training_overview,
+                'training_trends': training_trends,
+                'training_performance': training_performance,
+                'health_indicators': health_indicators
+            }
+            
+            serializer = TrainingSummarySerializer(summary_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in training_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch training summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def league_summary(self, request):
+        """
+        Get league summary data for dashboard visualization.
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            
+            # Get data from LeagueSummaryService
+            league_overview = LeagueSummaryService.get_league_overview(days)
+            league_trends = LeagueSummaryService.get_league_trends(days)
+            league_performance = LeagueSummaryService.get_league_performance(days)
+            health_indicators = LeagueSummaryService.get_league_health_indicators()
+            
+            # Combine all data
+            summary_data = {
+                'league_overview': league_overview,
+                'league_trends': league_trends,
+                'league_performance': league_performance,
+                'health_indicators': health_indicators
+            }
+            
+            serializer = LeagueSummarySerializer(summary_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in league_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch league summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def game_summary(self, request):
+        """
+        Get game summary data for dashboard visualization.
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            
+            # Get data from GameSummaryService
+            game_overview = GameSummaryService.get_game_overview(days)
+            game_trends = GameSummaryService.get_game_trends(days)
+            game_performance = GameSummaryService.get_game_performance(days)
+            health_indicators = GameSummaryService.get_game_health_indicators()
+            
+            # Combine all data
+            summary_data = {
+                'game_overview': game_overview,
+                'game_trends': game_trends,
+                'game_performance': game_performance,
+                'health_indicators': health_indicators
+            }
+            
+            serializer = GameSummarySerializer(summary_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in game_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch game summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def analytics(self, request):
+        """
+        Get comprehensive analytics data including engagement and performance comparisons.
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            
+            # Get data from AnalyticsService
+            engagement_analytics = AnalyticsService.get_engagement_analytics(days)
+            performance_comparison = AnalyticsService.get_performance_comparison(days)
+            
+            # Combine all data
+            analytics_data = {
+                'engagement_analytics': engagement_analytics,
+                'performance_comparison': performance_comparison
+            }
+            
+            serializer = AnalyticsSerializer(analytics_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in analytics: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch analytics data'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def chart_data(self, request):
+        """
+        Get formatted chart data for specific chart types.
+        
+        Query parameters:
+        - chart_type: 'activity_timeline', 'sport_distribution', 'performance_comparison', 'engagement_heatmap'
+        - days: Number of days to analyze (default: 30)
+        """
+        try:
+            chart_type = request.query_params.get('chart_type', 'activity_timeline')
+            days = int(request.query_params.get('days', 30))
+            
+            # Get chart data from AnalyticsService
+            chart_data = AnalyticsService.get_chart_data(chart_type, days)
+            
+            serializer = ChartDataSerializer(chart_data)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error in chart_data: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch chart data'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # New Summary Service Endpoints
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def training_summary(self, request):
+        """
+        Get comprehensive training summary data for dashboard.
+        
+        Query parameters:
+        - days: Number of days to analyze (default: 30)
+        - weeks: Number of weeks for trends (default: 8)
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            weeks = int(request.query_params.get('weeks', 8))
+            
+            summary_data = {
+                'overview': TrainingSummaryService.get_training_overview(days),
+                'weekly_trends': TrainingSummaryService.get_weekly_trends(weeks),
+                'performance_indicators': TrainingSummaryService.get_performance_indicators(),
+                'recent_activity': TrainingSummaryService.get_recent_activity(),
+                'health_indicators': TrainingSummaryService.get_training_health_indicators()
+            }
+            
+            return Response(summary_data)
+            
+        except Exception as e:
+            logger.error(f"Error in training_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch training summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def game_summary(self, request):
+        """
+        Get comprehensive game summary data for dashboard.
+        
+        Query parameters:
+        - days: Number of days to analyze (default: 30)
+        - weeks: Number of weeks for trends (default: 8)
+        - limit: Number of recent activities (default: 10)
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            weeks = int(request.query_params.get('weeks', 8))
+            limit = int(request.query_params.get('limit', 10))
+            
+            summary_data = {
+                'overview': GameSummaryService.get_game_overview(days),
+                'weekly_trends': GameSummaryService.get_weekly_trends(weeks),
+                'performance_indicators': GameSummaryService.get_performance_indicators(),
+                'statistics_summary': GameSummaryService.get_game_statistics_summary(),
+                'recent_activity': GameSummaryService.get_recent_activity(limit),
+                'health_indicators': GameSummaryService.get_game_health_indicators()
+            }
+            
+            return Response(summary_data)
+            
+        except Exception as e:
+            logger.error(f"Error in game_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch game summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def league_summary(self, request):
+        """
+        Get comprehensive league summary data for dashboard.
+        
+        Query parameters:
+        - days: Number of days to analyze (default: 30)
+        - limit: Number of recent activities (default: 10)
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            limit = int(request.query_params.get('limit', 10))
+            
+            summary_data = {
+                'overview': LeagueSummaryService.get_league_overview(days),
+                'performance_indicators': LeagueSummaryService.get_performance_indicators(),
+                'recent_activity': LeagueSummaryService.get_recent_activity(limit),
+                'health_indicators': LeagueSummaryService.get_league_health_indicators()
+            }
+            
+            return Response(summary_data)
+            
+        except Exception as e:
+            logger.error(f"Error in league_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch league summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
+    def analytics_summary(self, request):
+        """
+        Get comprehensive analytics data for dashboard.
+        
+        Query parameters:
+        - days: Number of days for engagement analysis (default: 30)
+        - months: Number of months for growth analysis (default: 12)
+        - heatmap_days: Number of days for heatmap (default: 30)
+        """
+        try:
+            days = int(request.query_params.get('days', 30))
+            months = int(request.query_params.get('months', 12))
+            heatmap_days = int(request.query_params.get('heatmap_days', 30))
+            
+            summary_data = {
+                'engagement_analytics': AnalyticsService.get_engagement_analytics(days),
+                'comparative_analytics': AnalyticsService.get_comparative_analytics(),
+                'growth_analytics': AnalyticsService.get_growth_analytics(months),
+                'activity_heatmap': AnalyticsService.get_activity_heatmap(heatmap_days),
+                'performance_analytics': AnalyticsService.get_performance_analytics()
+            }
+            
+            return Response(summary_data)
+            
+        except Exception as e:
+            logger.error(f"Error in analytics_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch analytics summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def system_summary(self, request):
+        """
+        Get overall system summary combining all modules.
+        
+        Query parameters:
+        - days: Number of days to analyze (default: 7)
+        """
+        try:
+            days = int(request.query_params.get('days', 7))
+            
+            summary_data = {
+                'system_overview': DashboardSummaryService.get_system_overview(),
+                'health_indicators': DashboardSummaryService.get_health_indicators(),
+                'user_activity': DashboardSummaryService.get_user_activity(days),
+                'performance_indicators': DashboardSummaryService.get_performance_indicators(),
+                'trend_data': DashboardSummaryService.get_trend_data(days),
+                'distribution_stats': DashboardSummaryService.get_distribution_stats()
+            }
+            
+            return Response(summary_data)
+            
+        except Exception as e:
+            logger.error(f"Error in system_summary: {str(e)}")
+            return Response(
+                {'error': 'Failed to fetch system summary'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

@@ -42,9 +42,7 @@ def analyze_system_health(system_data):
     PERFORMANCE INDICATORS:
     - Average Players per Team: {system_data.get('avg_players_per_team', 0):.1f}
     - Games Completion Rate: {system_data.get('games_completion_rate', 0):.1f}%
-    - Coach Effectiveness Score: {system_data.get('avg_coach_effectiveness', 0):.1f}/100
-
-    Provide a comprehensive analysis with:
+    - Coach Effectiveness Score: {system_data.get('avg_coach_effectiveness', 0):.1f}/100    Provide a comprehensive analysis with:
     1. System Health Assessment - Overall system performance evaluation
     2. Critical Issues - Most urgent problems requiring immediate attention
     3. Opportunity Areas - Areas with potential for improvement
@@ -62,11 +60,26 @@ def analyze_system_health(system_data):
         "Strategic Recommendations": "your analysis here",
         "Priority Actions": "your analysis here"
     }}    Keep each section's analysis insightful but concise (2-4 sentences per section).
+    For Priority Actions and Strategic Recommendations, use bullet points (•) with each item on a NEW LINE.
+    For any actionable items within other sections, also use bullet points (•) format with each item on a NEW LINE.
     Focus on actionable insights that administrators can implement.
+    
+    CRITICAL: When using bullet points, format them exactly like this with line breaks:
+    • First action item
+    • Second action item  
+    • Third action item
+    
+    DO NOT format bullet points like this: • item1 • item2 • item3
+    Each bullet point MUST be on its own line with a line break after each item.
     """
     
     try:
-        ai_response = generate_response(prompt)
+        # Call AI with timeout
+        ai_response = generate_response(prompt, timeout=20)
+        
+        # Check if the response is an error message
+        if ai_response.startswith("Error generating response"):
+            raise Exception(ai_response)
         
         # Clean the response to ensure it's valid JSON
         ai_response = ai_response.strip()
@@ -86,10 +99,13 @@ def analyze_system_health(system_data):
             'analysis_type': 'system_health'
         }
     except Exception as e:
+        # Enhanced fallback with more specific error handling
+        error_msg = str(e)
+        is_timeout = "timed out" in error_msg.lower()
         return {
             'ai_analysis': {
                 'System Health Assessment': 'AI analysis temporarily unavailable. Using standard system monitoring.',
-                'Critical Issues': f'Error generating AI insights: {str(e)}',
+                'Critical Issues': 'AI request timed out - system under high load' if is_timeout else f'Error generating AI insights: {error_msg}',
                 'Opportunity Areas': 'Review dashboard metrics manually for improvement opportunities.',
                 'Success Indicators': 'Check attendance rates and team activity levels.',
                 'Strategic Recommendations': 'Consult with technical team for system optimization.',
@@ -98,7 +114,8 @@ def analyze_system_health(system_data):
             'system_metrics': system_data,
             'generated_at': timezone.now().isoformat(),
             'analysis_type': 'system_health',
-            'fallback_used': True
+            'fallback_used': True,
+            'error_type': 'timeout' if is_timeout else 'general'
         }
 
 def analyze_attendance_patterns(attendance_data):
@@ -123,20 +140,50 @@ def analyze_attendance_patterns(attendance_data):
     DEMOGRAPHIC INSIGHTS:
     - Most Consistent Age Group: {attendance_data.get('consistent_age_group', 'Unknown')}
     - Sport with Best Attendance: {attendance_data.get('best_sport', 'Unknown')}
-    - Average Session Size: {attendance_data.get('avg_session_size', 0)}
-
-    Provide analysis focusing on:
+    - Average Session Size: {attendance_data.get('avg_session_size', 0)}    Provide analysis focusing on:
     1. Attendance Trend Analysis - What the patterns reveal
     2. Risk Factors - Why some teams/players have poor attendance
     3. Success Patterns - What contributes to high attendance
     4. Improvement Strategies - Specific tactics to boost attendance
     5. Seasonal Recommendations - How to maintain engagement year-round
 
-    Format as JSON with these exact keys. Be specific and actionable.
+    IMPORTANT: You must respond with ONLY a valid JSON object in this exact format. Do not include any other text, markdown formatting, or explanations:
+
+    {{
+        "Attendance Trend Analysis": "your analysis here",
+        "Risk Factors": "your analysis here",
+        "Success Patterns": "your analysis here", 
+        "Improvement Strategies": "your analysis here",
+        "Seasonal Recommendations": "your analysis here"
+    }}    Keep each section's analysis insightful but concise (2-4 sentences per section).
+    For any actionable items, use bullet points (•) with each item on a NEW LINE.
+    Focus on specific, implementable recommendations.
+    
+    CRITICAL: When using bullet points, format them exactly like this with line breaks:
+    • First action item
+    • Second action item
+    • Third action item
+    
+    DO NOT format bullet points like this: • item1 • item2 • item3
+    Each bullet point MUST be on its own line with a line break after each item.
     """
     
     try:
-        ai_response = generate_response(prompt)
+        ai_response = generate_response(prompt, timeout=20)
+        
+        # Check if the response is an error message
+        if ai_response.startswith("Error generating response"):
+            raise Exception(ai_response)
+            
+        # Clean the response to ensure it's valid JSON
+        ai_response = ai_response.strip()
+        
+        # Remove any markdown formatting if present
+        if ai_response.startswith('```json'):
+            ai_response = ai_response.replace('```json', '').replace('```', '').strip()
+        elif ai_response.startswith('```'):
+            ai_response = ai_response.replace('```', '').strip()
+            
         analysis = json.loads(ai_response)
         
         return {
@@ -145,6 +192,8 @@ def analyze_attendance_patterns(attendance_data):
             'analysis_type': 'attendance_patterns'
         }
     except Exception as e:
+        error_msg = str(e)
+        is_timeout = "timed out" in error_msg.lower()
         return {
             'ai_analysis': {
                 'Attendance Trend Analysis': 'Standard attendance monitoring active.',
@@ -155,7 +204,8 @@ def analyze_attendance_patterns(attendance_data):
             },
             'attendance_data': attendance_data,
             'analysis_type': 'attendance_patterns',
-            'fallback_used': True
+            'fallback_used': True,
+            'error_type': 'timeout' if is_timeout else 'general'
         }
 
 def generate_predictive_insights(historical_data):
@@ -179,20 +229,50 @@ def generate_predictive_insights(historical_data):
     RESOURCE UTILIZATION:
     - Facility Usage Rate: {historical_data.get('facility_usage', 0):.1f}%
     - Coach Workload Distribution: {historical_data.get('coach_workload', 'balanced')}
-    - Equipment Utilization: {historical_data.get('equipment_usage', 'normal')}
-
-    Provide forward-looking analysis with:
+    - Equipment Utilization: {historical_data.get('equipment_usage', 'normal')}    Provide forward-looking analysis with:
     1. Short-term Predictions - What to expect in the next 30 days
     2. Resource Planning - Anticipated resource needs
     3. Risk Predictions - Potential challenges to prepare for
     4. Growth Opportunities - Areas likely to expand
     5. Optimization Recommendations - How to prepare for predicted changes
 
-    Format as JSON. Focus on actionable predictions with timeframes.
+    IMPORTANT: You must respond with ONLY a valid JSON object in this exact format. Do not include any other text, markdown formatting, or explanations:
+
+    {{
+        "Short-term Predictions": "your analysis here",
+        "Resource Planning": "your analysis here",
+        "Risk Predictions": "your analysis here",
+        "Growth Opportunities": "your analysis here",
+        "Optimization Recommendations": "your analysis here"
+    }}    Keep each section's analysis insightful but concise (2-4 sentences per section).
+    For any actionable items, use bullet points (•) with each item on a NEW LINE.
+    Focus on specific, implementable recommendations with clear timeframes.
+    
+    CRITICAL: When using bullet points, format them exactly like this with line breaks:
+    • First action item
+    • Second action item
+    • Third action item
+    
+    DO NOT format bullet points like this: • item1 • item2 • item3
+    Each bullet point MUST be on its own line with a line break after each item.
     """
     
     try:
-        ai_response = generate_response(prompt)
+        ai_response = generate_response(prompt, timeout=20)
+        
+        # Check if the response is an error message
+        if ai_response.startswith("Error generating response"):
+            raise Exception(ai_response)
+            
+        # Clean the response to ensure it's valid JSON
+        ai_response = ai_response.strip()
+        
+        # Remove any markdown formatting if present
+        if ai_response.startswith('```json'):
+            ai_response = ai_response.replace('```json', '').replace('```', '').strip()
+        elif ai_response.startswith('```'):
+            ai_response = ai_response.replace('```', '').strip()
+            
         analysis = json.loads(ai_response)
         
         return {
@@ -201,6 +281,8 @@ def generate_predictive_insights(historical_data):
             'analysis_type': 'predictive_insights'
         }
     except Exception as e:
+        error_msg = str(e)
+        is_timeout = "timed out" in error_msg.lower()
         return {
             'ai_analysis': {
                 'Short-term Predictions': 'Monitor current trends for 30-day outlook.',
@@ -211,7 +293,8 @@ def generate_predictive_insights(historical_data):
             },
             'historical_data': historical_data,
             'analysis_type': 'predictive_insights',
-            'fallback_used': True
+            'fallback_used': True,
+            'error_type': 'timeout' if is_timeout else 'general'
         }
 
 def collect_system_data():
@@ -288,7 +371,8 @@ def collect_system_data():
         'unassigned_players': unassigned_players,
         'understaffed_teams': understaffed_teams,
         'avg_players_per_team': avg_players_per_team,
-        'games_completion_rate': games_completion_rate,        'health_score': max(0, min(100, health_score)),
+        'games_completion_rate': games_completion_rate,
+        'health_score': max(0, min(100, health_score)),
         'good_attendance_players': 0,  # Simplified calculation to avoid PostgreSQL issues
         'avg_coach_effectiveness': 75.0  # Placeholder for more complex calculation
     }

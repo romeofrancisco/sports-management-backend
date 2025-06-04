@@ -30,7 +30,22 @@ class PlayerFilter(django_filters.FilterSet):
 
 class CoachFilter(django_filters.FilterSet):
     sex = django_filters.ChoiceFilter(field_name="user__sex", choices=User.Sex.choices)
+    sport = django_filters.NumberFilter(field_name="sports", lookup_expr="exact")
+    search = django_filters.CharFilter(method='filter_search')
+
+    def filter_search(self, queryset, name, value):
+        """
+        Search by coach's first name, last name, or email
+        """
+        if not value:
+            return queryset
+        
+        return queryset.filter(
+            Q(user__first_name__icontains=value) |
+            Q(user__last_name__icontains=value) |
+            Q(user__email__icontains=value)
+        )
 
     class Meta:
         model = Coach
-        fields = ['sex']
+        fields = ['sex', 'sport', 'search']

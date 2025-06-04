@@ -16,14 +16,14 @@ class Game(models.Model):
     class Type(models.TextChoices):
         LEAGUE = "league", "League"
         TOURNAMENT = "tournament", "Tournament"
-        NORMAL = "normal", "Normal"
+        PRACTICE = "practice", "Practice"
 
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     league = models.ForeignKey(League, on_delete=models.CASCADE, null=True)
     season = models.ForeignKey(
         Season, on_delete=models.CASCADE, null=True, related_name="games"
     )
-    type = models.CharField(max_length=20, choices=Type.choices, default=Type.NORMAL)
+    type = models.CharField(max_length=20, choices=Type.choices, default=Type.PRACTICE)
     is_recorded = models.BooleanField(default=False)
     creator = models.ForeignKey(
         "users.User", on_delete=models.SET_NULL, null=True, related_name="creator"
@@ -37,11 +37,14 @@ class Game(models.Model):
     )
     home_team_score = models.PositiveIntegerField(default=0)
     away_team_score = models.PositiveIntegerField(default=0)
-    
+
     # Add an explicit winner field that can be set directly
     winner_team = models.ForeignKey(
-        "teams.Team", on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="games_won"
+        "teams.Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="games_won",
     )
 
     date = models.DateTimeField(null=True, blank=True)
@@ -81,7 +84,7 @@ class Game(models.Model):
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
-        if self.type == self.Type.NORMAL:
+        if self.type == self.Type.PRACTICE:
             self.is_recorded = False
         super().save(*args, **kwargs)
 
@@ -161,31 +164,26 @@ class Game(models.Model):
                 }
 
             # Overtime validation - check if trying to go to overtime
-            if (action == "next_period" 
-                and sport.has_period 
-                and sport.max_period
-            ):
+            if action == "next_period" and sport.has_period and sport.max_period:
                 # Check if we're at max regular periods or already in overtime
                 is_overtime_now = self.current_period > sport.max_period
                 reaching_max_period = self.current_period == sport.max_period
                 is_tied = self.home_team_score == self.away_team_score
-                
+
                 # Case 1: Not in overtime yet but reaching max period
                 if reaching_max_period and sport.has_overtime:
                     if not is_tied:
                         return {
                             "error": "Cannot proceed to overtime when scores aren't tied"
                         }
-                
+
                 # Case 2: Already in overtime and checking if we can extend to another OT
                 elif is_overtime_now:
                     # For multiple overtimes, we need to be in OT already AND have tied scores
                     if sport.has_overtime and is_tied:
                         pass  # Allow advancing to another overtime period
                     else:
-                        return {
-                            "error": "Game should be completed after overtime"
-                        }
+                        return {"error": "Game should be completed after overtime"}
 
             # For point-based sports with periods, validate max periods reached
             if action == "complete" and sport.has_period and sport.max_period:
@@ -213,7 +211,7 @@ class Game(models.Model):
                         return {
                             "error": f"Score difference must be at least {sport.win_margin} to win"
                         }
-        
+
         return None  # No errors
 
     def _calculate_team_scores(self):
@@ -239,23 +237,17 @@ class Game(models.Model):
             # Add points from positive stats for this team
             positive_points = (
                 PlayerStat.objects.filter(
-                    **filters,
-                    player__team=team,
-                    stat_type__is_negative=False
-                ).aggregate(
-                    total=Sum("stat_type__point_value")
-                )["total"] or 0
+                    **filters, player__team=team, stat_type__is_negative=False
+                ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                or 0
             )
 
             # Add points from negative stats from opposing team
             negative_points = (
                 PlayerStat.objects.filter(
-                    **filters,
-                    player__team=opposing_team,
-                    stat_type__is_negative=True
-                ).aggregate(
-                    total=Sum("stat_type__point_value")
-                )["total"] or 0
+                    **filters, player__team=opposing_team, stat_type__is_negative=True
+                ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                or 0
             )
 
             return positive_points + negative_points
@@ -361,12 +353,15 @@ class Game(models.Model):
     def next_period(self):
         """Proceed to next period with sport-specific validation"""
         # Direct check for overtime limitations - only checks if scores aren't tied
-        if (self.sport.scoring_type == Sport.SCORING_TYPES.POINTS
+        if (
+            self.sport.scoring_type == Sport.SCORING_TYPES.POINTS
             and self.sport.has_period
             and self.current_period >= self.sport.max_period
             and self.home_team_score != self.away_team_score
         ):
-            raise ValidationError({"error": "Cannot proceed to more overtime - scores not tied"})
+            raise ValidationError(
+                {"error": "Cannot proceed to more overtime - scores not tied"}
+            )
 
         # Regular validation through validate_game_state
         if error := self.validate_game_state("next_period"):
@@ -471,7 +466,7 @@ class Game(models.Model):
         # First, check if we have an explicitly set winner
         if self.winner_team is not None:
             return self.winner_team
-            
+
         # If no explicit winner is set, calculate based on scores
         if self.status != self.Status.COMPLETED:
             return None  # Match is still in progress
@@ -500,7 +495,7 @@ class Game(models.Model):
             elif self.away_team_score > self.home_team_score:
                 return self.away_team
             return None  # Tie
-            
+
     @winner.setter
     def winner(self, team):
         """Set the winner_team field when winner property is assigned to."""
@@ -516,96 +511,117 @@ class Game(models.Model):
 
         # For set-based sports (volleyball, tennis, etc.)
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
-            sets = self.sets.all().order_by('period')
-            summary['periods'] = [
+            sets = self.sets.all().order_by("period")
+            summary["periods"] = [
                 {
                     "period": s.period,
                     "label": s.period,
                     "home": s.home_team_score,
                     "away": s.away_team_score,
                     "completed": True,
-                    "winner": s.winner.id if s.winner else None
+                    "winner": s.winner.id if s.winner else None,
                 }
                 for s in sets
             ]
-            summary['total'] = {
+            summary["total"] = {
                 "home": self.sets.filter(winner=self.home_team).count(),
                 "away": self.sets.filter(winner=self.away_team).count(),
-                "difference": abs(self.sets.filter(winner=self.home_team).count() - 
-                            self.sets.filter(winner=self.away_team).count())
+                "difference": abs(
+                    self.sets.filter(winner=self.home_team).count()
+                    - self.sets.filter(winner=self.away_team).count()
+                ),
             }
-            summary['win_threshold'] = self.sport.win_threshold
+            summary["win_threshold"] = self.sport.win_threshold
 
         # For point-based sports with periods (basketball, etc.)
-        elif self.sport.scoring_type == Sport.SCORING_TYPES.POINTS and self.sport.has_period:
+        elif (
+            self.sport.scoring_type == Sport.SCORING_TYPES.POINTS
+            and self.sport.has_period
+        ):
             for period in range(1, self.current_period + 1):
                 # Determine period label
                 if period <= self.sport.max_period:
                     label = period
                 else:
                     ot_number = period - self.sport.max_period
-                    label = "OT" if ot_number == 1 else f"{ot_number}OT"  # OT, 2OT, 3OT etc.
-                
+                    label = (
+                        "OT" if ot_number == 1 else f"{ot_number}OT"
+                    )  # OT, 2OT, 3OT etc.
+
                 # Calculate home team points
-                home_positive_points = PlayerStat.objects.filter(
-                    game=self,
-                    player__team=self.home_team,
-                    stat_type__point_value__gt=0,
-                    stat_type__is_negative=False,
-                    period=period
-                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
-                
-                away_negative_points = PlayerStat.objects.filter(
-                    game=self,
-                    player__team=self.away_team,
-                    stat_type__point_value__gt=0,
-                    stat_type__is_negative=True,
-                    period=period
-                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                home_positive_points = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.home_team,
+                        stat_type__point_value__gt=0,
+                        stat_type__is_negative=False,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
+
+                away_negative_points = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.away_team,
+                        stat_type__point_value__gt=0,
+                        stat_type__is_negative=True,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
 
                 home_score = home_positive_points + away_negative_points
 
                 # Calculate away team points
-                away_positive_points = PlayerStat.objects.filter(
-                    game=self,
-                    player__team=self.away_team,
-                    stat_type__point_value__gt=0,
-                    stat_type__is_negative=False,
-                    period=period
-                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
-                
-                home_negative_points = PlayerStat.objects.filter(
-                    game=self,
-                    player__team=self.home_team,
-                    stat_type__point_value__gt=0,
-                    stat_type__is_negative=True,
-                    period=period
-                ).aggregate(total=Sum('stat_type__point_value'))['total'] or 0
+                away_positive_points = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.away_team,
+                        stat_type__point_value__gt=0,
+                        stat_type__is_negative=False,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
+
+                home_negative_points = (
+                    PlayerStat.objects.filter(
+                        game=self,
+                        player__team=self.home_team,
+                        stat_type__point_value__gt=0,
+                        stat_type__is_negative=True,
+                        period=period,
+                    ).aggregate(total=Sum("stat_type__point_value"))["total"]
+                    or 0
+                )
 
                 away_score = away_positive_points + home_negative_points
-                
-                summary['periods'].append({
-                    "period": period,
-                    "label": label,
-                    "home": home_score,
-                    "away": away_score,
-                    "completed": period < self.current_period,
-                    "winner": None  # Winner determined by total score
-                })
+
+                summary["periods"].append(
+                    {
+                        "period": period,
+                        "label": label,
+                        "home": home_score,
+                        "away": away_score,
+                        "completed": period < self.current_period,
+                        "winner": None,  # Winner determined by total score
+                    }
+                )
 
             # Add total scores
-            summary['total'] = {
+            summary["total"] = {
                 "home": self.home_team_score,
                 "away": self.away_team_score,
-                "difference": abs(self.home_team_score - self.away_team_score)
+                "difference": abs(self.home_team_score - self.away_team_score),
             }
 
         # Default for point-based sports without periods
         else:
-            summary['total'] = {
+            summary["total"] = {
                 "home": self.home_team_score,
                 "away": self.away_team_score,
-                "difference": abs(self.home_team_score - self.away_team_score)
+                "difference": abs(self.home_team_score - self.away_team_score),
             }
 
         return summary

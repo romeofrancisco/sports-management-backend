@@ -71,12 +71,18 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
     coach_name = serializers.CharField(source="coach.user.get_full_name", read_only=True)
     categories_count = serializers.IntegerField(source="categories.count", read_only=True)
     players_count = serializers.SerializerMethodField()
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_manage_attendance = serializers.BooleanField(read_only=True)
+    can_configure_metrics = serializers.BooleanField(read_only=True)
+    can_record_metrics = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = TrainingSession
         fields = ["id", "session_id", "title", "date", "start_time", "end_time", 
                   "team", "team_name", "coach", "coach_name", "location",
-                  "training_type", "duration_minutes", "categories_count", "players_count"]
+                  "training_type", "status", "auto_status", "duration_minutes", 
+                  "categories_count", "players_count", "can_manage_attendance", 
+                  "can_configure_metrics", "can_record_metrics"]
     
     def get_players_count(self, obj):
         return obj.player_records.count()
@@ -87,13 +93,18 @@ class TrainingSessionDetailSerializer(serializers.ModelSerializer):
     coach_name = serializers.CharField(source="coach.user.get_full_name", read_only=True)
     categories = TrainingCategorySerializer(many=True, read_only=True)
     player_records = PlayerTrainingSerializer(many=True, read_only=True)
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_manage_attendance = serializers.BooleanField(read_only=True)
+    can_configure_metrics = serializers.BooleanField(read_only=True)
+    can_record_metrics = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = TrainingSession
         fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
                   "team", "team_name", "coach", "coach_name", "location",
-                  "training_type", "categories", "notes", "created_at", "updated_at",
-                  "duration_minutes", "player_records"]
+                  "training_type", "status", "auto_status", "categories", "notes", 
+                  "created_at", "updated_at", "duration_minutes", "player_records",
+                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
 
 
 from trainings.services.metrics_service import MetricService

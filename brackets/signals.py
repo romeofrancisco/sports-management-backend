@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @receiver(post_save, sender=Game)
 def update_match_winner(sender, instance, **kwargs):
     # Only process completed games that are part of a tournament or league
-    if instance.status != Game.Status.COMPLETED or instance.type == Game.Type.NORMAL:
+    if instance.status != Game.Status.COMPLETED or instance.type == Game.Type.PRACTICE:
         return
 
     try:

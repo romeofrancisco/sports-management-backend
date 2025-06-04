@@ -112,7 +112,6 @@ class MultiPlayerProgressService:
         return players_query.select_related('team', 'user').only(
             'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name'
         )
-    
     def _paginate_players(self, players_query):
         """
         Apply pagination to the players query.
@@ -122,9 +121,6 @@ class MultiPlayerProgressService:
             
         Returns:
             tuple: (paginated_players_list, total_count)
-            
-        Raises:
-            Http404: If no players found after pagination
         """
         # Count total players for pagination metadata
         total_players = players_query.count()
@@ -134,10 +130,7 @@ class MultiPlayerProgressService:
         end_idx = start_idx + self.page_size
         paginated_players = list(players_query[start_idx:end_idx])
         
-        # If no players found after pagination
-        if not paginated_players:
-            raise Http404("No players found with the provided criteria.")
-            
+        # Return empty list if no players found - this is a valid scenario for teams with no players
         return paginated_players, total_players
     
     def _prepare_player_info(self, paginated_players):
@@ -189,13 +182,45 @@ class MultiPlayerProgressService:
                     # Sort by date and keep only the most recent record
                     records_by_player[player_id].sort(key=lambda x: x['date'])
                     records_by_player[player_id] = [records_by_player[player_id][-1]]
-        
-        # Calculate overall improvement metrics for each player
-        player_improvements = calculate_player_improvement(
-            records_by_player, 
-            metric_data['is_lower_better'],
-            self.metric_id
-        )
+          # Calculate overall improvement metrics for each player using ProgressService
+        # This ensures consistency with the coach dashboard calculations
+        player_improvements = {}
+        for player_id in selected_player_ids:
+            from ..services.progress_service import ProgressService
+            from ..models import Player
+            
+            try:
+                player = Player.objects.get(user_id=player_id)
+                
+                # Use the same ProgressService methods as coach dashboard for consistency
+                overall_improvement = ProgressService.calculate_overall_improvement(
+                    player, 
+                    date_from=self.date_from, 
+                    date_to=self.date_to
+                )
+                recent_improvement = ProgressService.calculate_recent_improvement(
+                    player, 
+                    date_from=self.date_from, 
+                    date_to=self.date_to
+                )
+                best_performance = ProgressService.find_best_performance(
+                    player, 
+                    date_from=self.date_from, 
+                    date_to=self.date_to
+                )
+                
+                player_improvements[player_id] = {
+                    'overall_improvement': overall_improvement,
+                    'recent_improvement': recent_improvement,
+                    'best_performance': best_performance
+                }
+            except Player.DoesNotExist:
+                # Handle case where player doesn't exist
+                player_improvements[player_id] = {
+                    'overall_improvement': None,
+                    'recent_improvement': None,
+                    'best_performance': None
+                }
         
         return records_by_player, player_improvements
     
@@ -224,16 +249,59 @@ class MultiPlayerProgressService:
                 
                 # Add to player's metrics
                 player_info[player_id]['metrics_data'] = [player_metric_data]
-                
-                # Add improvement metrics if available
+                  # Add improvement metrics if available
                 if player_id in player_improvements:
                     improvement_data = player_improvements[player_id]
+                    
+                    # Calculate training session metrics to match coach dashboard
+                    from ..models import Player, PlayerTraining
+                    try:
+                        player = Player.objects.get(user_id=player_id)
+                        
+                        # Calculate training sessions and attendance rate
+                        training_records_query = PlayerTraining.objects.filter(player=player)
+                        
+                        # Apply date filters if provided
+                        if self.date_from:
+                            training_records_query = training_records_query.filter(session__date__gte=self.date_from)
+                        if self.date_to:
+                            training_records_query = training_records_query.filter(session__date__lte=self.date_to)
+                        
+                        total_sessions = training_records_query.count()
+                        attended_sessions = training_records_query.filter(attendance_status="present").count()
+                        attendance_rate = (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
+                        
+                        # Get recent metrics count
+                        from ..models import PlayerMetricRecord
+                        recent_metrics_query = PlayerMetricRecord.objects.filter(
+                            player_training__player=player
+                        )
+                        if self.date_from:
+                            recent_metrics_query = recent_metrics_query.filter(recorded_at__gte=self.date_from)
+                        if self.date_to:
+                            recent_metrics_query = recent_metrics_query.filter(recorded_at__lte=self.date_to)
+                        
+                        recent_metrics_count = recent_metrics_query.count()
+                        
+                        # Get last training date
+                        last_training = training_records_query.order_by('-session__date').first()
+                        last_training_date = last_training.session.date if last_training else None
+                        
+                    except Player.DoesNotExist:
+                        total_sessions = 0
+                        attendance_rate = 0
+                        recent_metrics_count = 0
+                        last_training_date = None
                     
                     player_info[player_id].update({
                         'overall_improvement': improvement_data['overall_improvement'],
                         'recent_improvement': improvement_data['recent_improvement'],
                         'best_performance': improvement_data['best_performance'],
-                        'training_count': len(records)
+                        'training_count': len(records),
+                        'total_sessions': total_sessions,
+                        'attendance_rate': round(attendance_rate, 2),
+                        'recent_metrics_count': recent_metrics_count,
+                        'last_training_date': last_training_date
                     })
         
         # Format response with performance metadata
@@ -245,7 +313,6 @@ class MultiPlayerProgressService:
                 'data_points_count': sum(len(records) for records in records_by_player.values())
             }
         }
-        
         return response_data
     
     def get_multi_player_progress(self):
@@ -267,6 +334,17 @@ class MultiPlayerProgressService:
         
         # Apply pagination
         paginated_players, total_players = self._paginate_players(players_query)
+        
+        # Handle empty team case
+        if not paginated_players:
+            return {
+                'results': {},
+                'performance': {
+                    'execution_time_ms': round((time.time() - self.start_time) * 1000, 2),
+                    'metrics_evaluated': 0,
+                    'data_points_count': 0
+                }
+            }
         
         # Get all user_ids from the paginated players
         selected_player_ids = [player.user_id for player in paginated_players]

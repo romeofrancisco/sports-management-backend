@@ -4,6 +4,71 @@ from .models import Team, Player, Coach
 from users.serializers import PlayerSerializer, CoachSerializer
 from sports.models import Sport, Position
 from sports.serializers import SportSerializer, PositionSerializer
+# Import Game model for the summary serializer
+from games.models import Game
+
+
+class GameSummarySerializer(ModelSerializer):
+    """Simplified game serializer for analytics and performance data"""
+    home_team_name = serializers.CharField(source="home_team.name", read_only=True)
+    away_team_name = serializers.CharField(source="away_team.name", read_only=True)
+    home_team_abbreviation = serializers.CharField(source="home_team.abbreviation", read_only=True)
+    away_team_abbreviation = serializers.CharField(source="away_team.abbreviation", read_only=True)
+    result = serializers.SerializerMethodField()
+    score_summary = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Game
+        fields = [
+            'id',
+            'date',
+            'home_team_name',
+            'away_team_name', 
+            'home_team_abbreviation',
+            'away_team_abbreviation',
+            'home_team_score',
+            'away_team_score',
+            'status',
+            'result',
+            'score_summary',
+            'location'
+        ]
+    
+    def get_result(self, obj):
+        """Determine the result from the perspective of the requesting team"""
+        # Get the team from context if available
+        request = self.context.get('request')
+        team = self.context.get('team')
+        
+        if not team or obj.status != Game.Status.COMPLETED:
+            return None
+            
+        if obj.winner_team == team:
+            return 'win'
+        elif obj.winner_team is None:
+            return 'draw'
+        else:
+            return 'loss'
+    
+    def get_score_summary(self, obj):
+        """Get a formatted score summary"""
+        if obj.home_team_score is not None and obj.away_team_score is not None:
+            return f"{obj.home_team_score} - {obj.away_team_score}"
+        return "TBD"
+
+
+class SimpleTeamSerializer(ModelSerializer):
+    """Simplified team serializer to avoid circular imports when used in coach info"""
+    logo = serializers.ImageField(use_url=True, required=False)
+    sport_name = serializers.CharField(source="sport.name", read_only=True)
+    player_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Team
+        fields = ['id', 'name', 'abbreviation', 'color', 'logo', 'sport_name', 'division', 'slug', 'player_count']
+
+    def get_player_count(self, obj):
+        return obj.players.count()
 
 
 class TeamSerializer(ModelSerializer):
@@ -12,6 +77,9 @@ class TeamSerializer(ModelSerializer):
     coach_id = serializers.IntegerField(source="coach.user.id", read_only=True, allow_null=True)
     sport_name = serializers.CharField(source="sport.name", read_only=True)
     player_count = serializers.SerializerMethodField()
+    
+    # Enhanced coach information
+    coach_info = serializers.SerializerMethodField()
 
     class Meta:
         model = Team
@@ -25,6 +93,43 @@ class TeamSerializer(ModelSerializer):
 
     def get_player_count(self, obj):
         return obj.players.count()
+    
+    def get_coach_info(self, obj):
+        """Return comprehensive coach information"""
+        if not obj.coach:
+            return None
+            
+        coach = obj.coach
+        user = coach.user
+        
+        return {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'full_name': f"{user.first_name} {user.last_name}",
+            'email': user.email,
+            'sex': user.sex,
+            'profile': user.profile.url if user.profile else None,
+            'sports': [{'id': sport.id, 'name': sport.name, 'slug': sport.slug} for sport in coach.sports.all()],
+            'teams_count': coach.teams.count(),
+        }
+    
+    def validate(self, data):
+        """Validate that coach can handle the sport for this team"""
+        coach = data.get('coach')
+        sport = data.get('sport')
+        
+        # If we're updating, get current values if not provided
+        if self.instance:
+            coach = coach or self.instance.coach
+            sport = sport or self.instance.sport
+        
+        if coach and sport and not coach.can_coach_team(type('Team', (), {'sport': sport})()):
+            raise serializers.ValidationError({
+                'coach': f"Selected coach cannot coach {sport.name} teams. Please assign a coach who handles this sport."
+            })
+        
+        return data
 
 class SportsTeamSerializer(Serializer):
     sport = serializers.CharField()
@@ -143,12 +248,23 @@ class CoachInfoSerializer(ModelSerializer):
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex")
     password = serializers.CharField(source="user.password", required=True, write_only=True)
-    teams = TeamSerializer(many=True, read_only=True) 
+    teams = SimpleTeamSerializer(many=True, read_only=True)  # Use SimpleTeamSerializer to avoid circular imports
+    
+    # Sports handling
+    sport_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Sport.objects.all(), 
+        many=True, 
+        write_only=True, 
+        required=False,
+        source='sports'
+    )
+    sports = SportSerializer(many=True, read_only=True)
     
     full_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = Coach
-        fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", "teams"]
+        fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", "teams", "sport_ids", "sports"]
         
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
@@ -161,17 +277,21 @@ class CoachInfoSerializer(ModelSerializer):
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")
+        sports = validated_data.pop("sports", [])
 
         # Create the User instance using the nested serializer
         user_serializer = CoachSerializer(data=user_data)
         user_serializer.is_valid(raise_exception=True)  # Ensures data is valid
         user = user_serializer.save()
 
-        # Create the Player instance with the user instance
+        # Create the Coach instance with the user instance
         coach = Coach.objects.create(user=user, **validated_data)
+        coach.sports.set(sports)
         return coach
+        
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
+        sports = validated_data.pop("sports", None)
         user = instance.user
 
         # Update the User model
@@ -181,6 +301,10 @@ class CoachInfoSerializer(ModelSerializer):
             else:
                 setattr(user, attr, value)
         user.save()
+
+        # Update sports if provided
+        if sports is not None:
+            instance.sports.set(sports)
 
         # Update the Coach model
         for attr, value in validated_data.items():
