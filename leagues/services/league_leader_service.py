@@ -16,12 +16,15 @@ class LeagueLeaderService:
         self.league = League.objects.select_related("sport").get(pk=league_id)
         self.sport = self.league.sport
         self.request = request
-        
-        # Get all seasons in this league
+          # Get all seasons in this league
         self.seasons = Season.objects.filter(league=self.league)
         
         # Get teams across all seasons in this league
-        self.teams = list(set().union(*[season.teams.all() for season in self.seasons]))
+        team_sets = [season.teams.all() for season in self.seasons]
+        if team_sets:
+            self.teams = list(set().union(*team_sets))
+        else:
+            self.teams = []
         
         # Get all completed games across all seasons
         self.games = Game.objects.filter(
@@ -111,12 +114,13 @@ class LeagueLeaderService:
                 ).values('game').distinct().count()
                 
             # Default to 1 to avoid division by zero
-            games_played = max(1, games_played)
-                
-            # Get player profile URL
+            games_played = max(1, games_played)            # Get player profile URL
             profile_url = None
             if self.request and player.user.profile:
-                profile_url = self.request.build_absolute_uri(player.user.profile.url)
+                try:
+                    profile_url = self.request.build_absolute_uri(player.user.profile.url)
+                except (ValueError, AttributeError):
+                    profile_url = None
             
             # Create short name like "FirstName L."
             short_name = f"{player.user.first_name} {player.user.last_name[0]}."

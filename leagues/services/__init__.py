@@ -12,8 +12,7 @@ from .league_leader_service import LeagueLeaderService
 __all__ = [
     'TeamPerformanceService',
     'SeasonManagementService',
-    'SeasonTeamService',
-    'SeasonComparisonService',
+    'SeasonTeamService',    'SeasonComparisonService',
     'SeasonGamesService',
     'SeasonTeamsService',
     'TeamFormService',
