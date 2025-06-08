@@ -19,7 +19,11 @@ class SeasonPagination(PageNumberPagination):
     max_page_size = 50
 
 class LeagueViewSet(viewsets.ModelViewSet):
-    queryset = League.objects.all()
+    queryset = League.objects.select_related('sport').prefetch_related(
+        'seasons',
+        'seasons__teams',
+        'seasons__games'
+    )
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_serializer_class(self):

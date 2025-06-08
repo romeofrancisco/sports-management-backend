@@ -347,3 +347,207 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
         }
     
     return improvements
+
+
+def calculate_best_category(categories_data):
+    """
+    Calculate the best performing training category for a player based on improvement metrics.
+    
+    Args:
+        categories_data: List of category dictionaries containing 'average_improvement' values
+                        (as returned by player_radar_chart endpoint)
+        
+    Returns:
+        dict: The category with the highest average improvement, or None if no categories provided
+        
+    Example:
+        categories = [
+            {'category_name': 'Strength', 'average_improvement': 15.5},
+            {'category_name': 'Speed', 'average_improvement': 22.3},
+            {'category_name': 'Endurance', 'average_improvement': 8.7}
+        ]
+        best = calculate_best_category(categories)
+        # Returns: {'category_name': 'Speed', 'average_improvement': 22.3}
+    """
+    if not categories_data:
+        return None
+    
+    # Filter out categories with no improvement data
+    valid_categories = [
+        category for category in categories_data 
+        if 'average_improvement' in category and category['average_improvement'] is not None
+    ]
+    
+    if not valid_categories:
+        return None
+    
+    # Find the category with the highest average improvement
+    best_category = max(valid_categories, key=lambda x: x['average_improvement'])
+    
+    return best_category
+
+
+def calculate_best_category_for_player(player_id, date_from=None, date_to=None):
+    """
+    Calculate the best performing training category for a specific player.
+    
+    This function uses the same logic as the player_radar_chart endpoint to ensure consistency.
+    
+    Args:
+        player_id: ID of the player
+        date_from: Optional start date filter (YYYY-MM-DD format)
+        date_to: Optional end date filter (YYYY-MM-DD format)
+        
+    Returns:
+        dict: Contains best_category info and summary statistics, or None if no data
+        
+    Example:
+        result = calculate_best_category_for_player(123, '2024-01-01', '2024-12-31')
+        # Returns:
+        # {
+        #     'best_category': {
+        #         'category_id': 2,
+        #         'category_name': 'Speed',
+        #         'average_improvement': 22.3,
+        #         'performance_score': 75.2
+        #     },
+        #     'summary': {
+        #         'categories_analyzed': 5,
+        #         'overall_improvement': 14.2
+        #     }
+        # }
+    """
+    from django.db.models import Avg, Max, Min, Count
+    from decimal import Decimal
+    from django.utils.dateparse import parse_date
+    from teams.models import Player
+    from trainings.models import TrainingCategory, TrainingMetric, PlayerMetricRecord
+    
+    try:
+        player = Player.objects.get(user_id=player_id)
+    except Player.DoesNotExist:
+        return None
+    
+    # Build base query for player's metric records
+    records_query = PlayerMetricRecord.objects.filter(
+        player_training__player=player
+    ).select_related(
+        'metric__category',
+        'metric__metric_unit',
+        'player_training__session'
+    )
+    
+    # Apply date filters if provided
+    if date_from:
+        try:
+            date_from_parsed = parse_date(date_from)
+            records_query = records_query.filter(
+                player_training__session__date__gte=date_from_parsed
+            )
+        except (ValueError, TypeError):
+            return None
+    
+    if date_to:
+        try:
+            date_to_parsed = parse_date(date_to)
+            records_query = records_query.filter(
+                player_training__session__date__lte=date_to_parsed
+            )
+        except (ValueError, TypeError):
+            return None
+    
+    # Get all training categories with metrics for this player
+    categories_with_data = []
+    categories = TrainingCategory.objects.filter(
+        metrics__records__player_training__player=player
+    ).distinct()
+    
+    for category in categories:
+        # Get all records for metrics in this category
+        category_records = records_query.filter(
+            metric__category=category
+        ).order_by('player_training__session__date')
+        
+        if not category_records.exists():
+            continue
+        
+        # Calculate performance metrics for this category
+        metrics_in_category = TrainingMetric.objects.filter(
+            category=category,
+            records__player_training__player=player
+        ).distinct()
+        
+        total_improvement = 0
+        metrics_with_improvement = 0
+        latest_performance_score = 0
+        
+        for metric in metrics_in_category:
+            metric_records = category_records.filter(metric=metric)
+            
+            if metric_records.count() < 2:
+                continue
+            
+            # Get first and latest records for improvement calculation
+            first_record = metric_records.first()
+            latest_record = metric_records.last()
+            
+            first_value = float(first_record.value)
+            latest_value = float(latest_record.value)
+            
+            # Calculate improvement percentage
+            if first_value != 0:
+                raw_improvement = ((latest_value - first_value) / first_value) * 100
+                
+                # Apply normalization and direction logic
+                normalization_weight = 1.0
+                if metric.metric_unit:
+                    normalization_weight = float(metric.metric_unit.normalization_weight)
+                
+                improvement = raw_improvement * normalization_weight
+                
+                # For metrics where lower is better, invert the improvement
+                if metric.is_lower_better:
+                    improvement = -improvement
+                
+                total_improvement += improvement
+                metrics_with_improvement += 1
+                
+                # Calculate latest performance score (0-100 scale)
+                performance_score = max(0, min(100, 50 + (improvement / 2)))
+                latest_performance_score += performance_score
+        
+        # Calculate category averages
+        avg_improvement = (total_improvement / metrics_with_improvement) if metrics_with_improvement > 0 else 0
+        avg_performance_score = (latest_performance_score / metrics_with_improvement) if metrics_with_improvement > 0 else 50
+        
+        categories_with_data.append({
+            'category_id': category.id,
+            'category_name': category.name,
+            'description': category.description,
+            'average_improvement': round(avg_improvement, 2),
+            'performance_score': round(avg_performance_score, 2),
+            'metrics_count': metrics_with_improvement,
+            'total_records': category_records.count()
+        })
+    
+    if not categories_with_data:
+        return None
+    
+    # Calculate the best category
+    best_category = calculate_best_category(categories_with_data)
+    
+    if not best_category:
+        return None
+    
+    # Calculate summary statistics
+    overall_improvement = sum(cat['average_improvement'] for cat in categories_with_data) / len(categories_with_data)
+    
+    return {
+        'best_category': best_category,
+        'summary': {
+            'categories_analyzed': len(categories_with_data),
+            'overall_improvement': round(overall_improvement, 2),
+            'total_metrics': sum(cat['metrics_count'] for cat in categories_with_data)
+        },
+        'all_categories': categories_with_data
+    }

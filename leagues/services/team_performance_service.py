@@ -55,6 +55,7 @@ class TeamPerformanceService:
             team_performance.sort(key=lambda x: -x['point_differential'])
         
         return team_performance
+    
     def _calculate_set_based_performance(self, team, team_games, games_count):
         """Calculate performance metrics for set-based sports like volleyball or tennis.
         
@@ -72,16 +73,8 @@ class TeamPerformanceService:
         total_points_scored = 0
         total_points_conceded = 0
         
-        # Track set margin metrics
-        close_sets = 0  # Sets won/lost by < 3 points
-        dominant_sets = 0  # Sets won by > 10 points
-        extended_sets = 0  # Sets that went beyond standard win threshold (usually 25 points in volleyball)
-        
         # Track efficiency metrics
         total_set_efficiency = 0  # Percentage of points won vs total points in sets
-          # Standard win threshold for volleyball is 25 points (or 15 for final set)
-        # This will be used to identify extended sets
-        standard_win_threshold = 25
         
         for game in team_games:
             # Get all sets for this game
@@ -101,21 +94,6 @@ class TeamPerformanceService:
                     is_winner = game.winner == team
                     if is_winner:
                         sets_won += 1
-                    
-                    # Calculate margin metrics
-                    score_diff = abs(team_score - opponent_score)
-                    
-                    # Close set - margin less than 3 points
-                    if score_diff < 3:
-                        close_sets += 1
-                    
-                    # Dominant set - team won by more than 10 points
-                    if is_winner and score_diff > 10:
-                        dominant_sets += 1
-                    
-                    # Extended set - went beyond standard win threshold
-                    if team_score > standard_win_threshold or opponent_score > standard_win_threshold:
-                        extended_sets += 1
                         
                     # Calculate set efficiency for this single-set game
                     total_points = team_score + opponent_score
@@ -131,21 +109,6 @@ class TeamPerformanceService:
                     is_winner = game.winner == team
                     if is_winner:
                         sets_won += 1
-                    
-                    # Calculate margin metrics
-                    score_diff = abs(team_score - opponent_score)
-                    
-                    # Close set - margin less than 3 points
-                    if score_diff < 3:
-                        close_sets += 1
-                    
-                    # Dominant set - team won by more than 10 points
-                    if is_winner and score_diff > 10:
-                        dominant_sets += 1
-                    
-                    # Extended set - went beyond standard win threshold
-                    if team_score > standard_win_threshold or opponent_score > standard_win_threshold:
-                        extended_sets += 1
                         
                     # Calculate set efficiency for this single-set game
                     total_points = team_score + opponent_score
@@ -175,21 +138,6 @@ class TeamPerformanceService:
                     
                     total_sets_played += 1
                     
-                    # Calculate set margin metrics
-                    score_diff = abs(team_score - opponent_score)
-                    
-                    # Close set - margin less than 3 points
-                    if score_diff < 3:
-                        close_sets += 1
-                    
-                    # Dominant set - team won by more than 10 points
-                    if is_winner and score_diff > 10:
-                        dominant_sets += 1
-                    
-                    # Extended set - went beyond standard win threshold 
-                    if team_score > standard_win_threshold or opponent_score > standard_win_threshold:
-                        extended_sets += 1
-                    
                     # Calculate set efficiency (% of total points won)
                     points_in_set = team_score + opponent_score
                     if points_in_set > 0:
@@ -212,50 +160,6 @@ class TeamPerformanceService:
         
         # Calculate match win percentage
         match_win_percentage = round((wins / games_count) * 100, 2) if games_count > 0 else 0
-          # Get first and second half performance
-        half_count = len(team_games) // 2
-        first_half_games = list(team_games.order_by('date'))[:half_count]
-        second_half_games = list(team_games.order_by('date'))[half_count:]
-        
-        first_half_wins = 0
-        second_half_wins = 0
-        first_half_sets_won = 0
-        second_half_sets_won = 0
-        
-        # For set-based sports, we need to count sets won in each half of the season
-        for game in first_half_games:
-            # Count match wins (for backward compatibility)
-            if game.winner == team:
-                first_half_wins += 1
-            
-            # Count sets won in first half
-            game_sets = GameSet.objects.filter(game=game)
-            if not game_sets.exists():
-                # Single set game
-                if game.winner == team:
-                    first_half_sets_won += 1
-            else:
-                # Multiple sets in game
-                for game_set in game_sets:
-                    if game_set.winner == team:
-                        first_half_sets_won += 1
-        
-        for game in second_half_games:
-            # Count match wins (for backward compatibility)
-            if game.winner == team:
-                second_half_wins += 1
-                
-            # Count sets won in second half
-            game_sets = GameSet.objects.filter(game=game)
-            if not game_sets.exists():
-                # Single set game
-                if game.winner == team:
-                    second_half_sets_won += 1
-            else:
-                # Multiple sets in game
-                for game_set in game_sets:
-                    if game_set.winner == team:
-                        second_half_sets_won += 1
         
         # Calculate streak
         current_streak = 0
@@ -269,7 +173,9 @@ class TeamPerformanceService:
             else:
                 current_streak = current_streak - 1 if current_streak <= 0 else -1
             
-            max_streak = max(max_streak, current_streak)        # Create the performance metrics dictionary
+            max_streak = max(max_streak, current_streak)
+        
+        # Create the performance metrics dictionary
         performance = {
             'team_id': team.id,
             'team_name': team.name,
@@ -290,20 +196,13 @@ class TeamPerformanceService:
             'total_points_conceded': total_points_conceded,
             'points_per_set': points_per_set,
             'points_against_per_set': points_against_per_set,
-            'first_half_wins': first_half_wins,
-            'second_half_wins': second_half_wins,
-            'first_half_sets_won': first_half_sets_won,
-            'second_half_sets_won': second_half_sets_won,
             'max_streak': max_streak,
             'current_streak': current_streak,
             'total_games': games_count,
-            # Set margin metrics
-            'close_games': close_sets,  # Using the UI convention of 'games' even for sets
-            'blowout_wins': dominant_sets,  # Using the UI convention of 'blowout_wins' even for dominant sets
-            'overtime_games': extended_sets  # Using the UI convention of 'overtime_games' even for extended sets
         }
         
         return performance
+    
     def _calculate_point_based_performance(self, team, team_games, games_count):
         """Calculate performance metrics for point-based sports like basketball, football, etc.
         
@@ -318,72 +217,23 @@ class TeamPerformanceService:
         points_scored = 0
         points_conceded = 0
         
-        # Track game margin metrics
-        close_games = 0  # Games decided by < 5 points
-        blowout_wins = 0  # Games won by > 15 points
-        overtime_games = 0  # Games that went to overtime
-        
         for game in team_games:
-            # Check if game went to overtime
-            if game.sport.has_period and game.current_period > game.sport.max_period:
-                overtime_games += 1
-                
             if game.home_team == team:
                 # Team is home team
                 team_score = game.home_team_score
                 opponent_score = game.away_team_score
                 points_scored += team_score
                 points_conceded += opponent_score
-                
-                # Calculate margin metrics
-                score_diff = abs(team_score - opponent_score)
-                
-                # Close game
-                if score_diff < 5:
-                    close_games += 1
-                
-                # Blowout win (only if team won)
-                if team_score > opponent_score and score_diff > 15:
-                    blowout_wins += 1
             else:
                 # Team is away team
                 team_score = game.away_team_score
                 opponent_score = game.home_team_score
                 points_scored += team_score
                 points_conceded += opponent_score
-                
-                # Calculate margin metrics
-                score_diff = abs(team_score - opponent_score)
-                
-                # Close game
-                if score_diff < 5:
-                    close_games += 1
-                
-                # Blowout win (only if team won)
-                if team_score > opponent_score and score_diff > 15:
-                    blowout_wins += 1
-                
+        
         # Calculate averages
         avg_points_scored = points_scored / games_count if games_count > 0 else 0
         avg_points_conceded = points_conceded / games_count if games_count > 0 else 0
-        
-        # Get first and second half performance
-        half_count = len(team_games) // 2
-        first_half_games = list(team_games.order_by('date'))[:half_count]
-        second_half_games = list(team_games.order_by('date'))[half_count:]
-        
-        first_half_wins = 0
-        second_half_wins = 0
-        
-        for game in first_half_games:
-            if (game.home_team == team and game.home_team_score > game.away_team_score) or \
-               (game.away_team == team and game.away_team_score > game.home_team_score):
-                first_half_wins += 1
-                
-        for game in second_half_games:
-            if (game.home_team == team and game.home_team_score > game.away_team_score) or \
-               (game.away_team == team and game.away_team_score > game.home_team_score):
-                second_half_wins += 1
         
         # Get win streaks
         current_streak = 0
@@ -399,7 +249,8 @@ class TeamPerformanceService:
                 current_streak = current_streak - 1 if current_streak <= 0 else -1
             
             max_streak = max(max_streak, current_streak)
-          # Compile team performance data
+        
+        # Compile team performance data
         performance = {
             'team_id': team.id,
             'team_name': team.name,
@@ -409,16 +260,10 @@ class TeamPerformanceService:
             'games_played': games_count,
             'avg_points_scored': round(avg_points_scored, 2),
             'avg_points_conceded': round(avg_points_conceded, 2),
-            'first_half_wins': first_half_wins,
-            'second_half_wins': second_half_wins,
             'point_differential': round(avg_points_scored - avg_points_conceded, 2),
             'max_streak': max_streak,
             'current_streak': current_streak,
             'total_games': games_count,
-            # Game margin metrics
-            'close_games': close_games,
-            'blowout_wins': blowout_wins,
-            'overtime_games': overtime_games
         }
         
         return performance
