@@ -5,10 +5,45 @@ from teams.models import Team
 
 class LeagueSerializer(serializers.ModelSerializer):
     sport = SportSerializer()
+    teams_count = serializers.SerializerMethodField()
+    games_count = serializers.SerializerMethodField()
+    season = serializers.SerializerMethodField()
+    seasons_count = serializers.SerializerMethodField()
+    
     class Meta:
         model = League
-        fields = ["id", "name", "logo", "sport"]
+        fields = ["id", "name", "logo", "sport", "teams_count", "games_count", "season", "seasons_count"]
         read_only_fields = ['created_at']
+        
+    def get_teams_count(self, obj):
+        """Get total number of teams across all seasons"""
+        # Get all unique teams across all seasons
+        all_teams = set()
+        for season in obj.seasons.all():
+            all_teams.update(season.teams.all())
+        return len(all_teams)
+    
+    def get_games_count(self, obj):
+        """Get total number of games across all seasons"""
+        total_games = 0
+        for season in obj.seasons.all():
+            total_games += season.games_count
+        return total_games
+    
+    def get_season(self, obj):
+        """Get current season name/year"""
+        # Try to get the most recent ongoing season, otherwise the most recent season
+        current_season = obj.seasons.filter(status='ongoing').first()
+        if not current_season:
+            current_season = obj.seasons.order_by('-year').first()
+        
+        if current_season:
+            return current_season.name or str(current_season.year)
+        return None
+    
+    def get_seasons_count(self, obj):
+        """Get total number of seasons for this league"""
+        return obj.seasons.count()
         
 class LeagueWriteSerializer(serializers.ModelSerializer):
     class Meta:

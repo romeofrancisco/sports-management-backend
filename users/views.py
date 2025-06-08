@@ -48,10 +48,8 @@ class LoginView(GenericAPIView):
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
-        access_token = str(refresh.access_token)
-
-        # Build response with user data and set tokens as cookies.
-        response = Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+        access_token = str(refresh.access_token)        # Build response with user data and set tokens as cookies.
+        response = Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
         response.set_cookie(key="access_token", value=access_token, **COOKIE_SETTINGS)
         response.set_cookie(key="refresh_token", value=str(refresh), **COOKIE_SETTINGS)
         set_auth_cookies(response, access_token, str(refresh))

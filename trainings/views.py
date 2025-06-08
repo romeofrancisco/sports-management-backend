@@ -869,12 +869,10 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
         # For coaches, show only players from their teams
         if hasattr(user, 'coach_profile'):
             coach_teams = user.coach_profile.teams.all()
-            return base_queryset.filter(team__in=coach_teams)
-            
-        # For players, show only their own data
+            return base_queryset.filter(team__in=coach_teams)        # For players, show only their own data
         if hasattr(user, 'player_profile'):
-            return base_queryset.filter(id=user.player_profile.id)
-            
+            return base_queryset.filter(user_id=user.id)
+
         # User doesn't have appropriate role - deny access
         raise PermissionDenied("You don't have permission to access player progress data")
         

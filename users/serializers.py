@@ -5,9 +5,12 @@ from django.contrib.auth import authenticate
 
 
 class UserSerializer(ModelSerializer):
+    profile = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = (
+            "id",
             "profile",
             "first_name",
             "last_name",
@@ -16,9 +19,19 @@ class UserSerializer(ModelSerializer):
             "role",
             "date_of_birth",
         )
+    
+    def get_profile(self, obj):
+        if obj.profile:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile.url)
+            return obj.profile.url
+        return None
 
 
 class PlayerSerializer(ModelSerializer):
+    profile = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = (
@@ -33,12 +46,22 @@ class PlayerSerializer(ModelSerializer):
         extra_kwargs = {"password": {"write_only": True}}
         read_only_fields = ("id",)
 
+    def get_profile(self, obj):
+        if obj.profile:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile.url)
+            return obj.profile.url
+        return None
+
     def create(self, validated_data):
         user = User.objects.create_player(**validated_data)
         return user
 
 
 class CoachSerializer(ModelSerializer):
+    profile = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = (
@@ -51,6 +74,14 @@ class CoachSerializer(ModelSerializer):
             "password",
         )
         extra_kwargs = {"password": {"write_only": True}}
+
+    def get_profile(self, obj):
+        if obj.profile:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile.url)
+            return obj.profile.url
+        return None
 
     def create(self, validated_data):
         user = User.objects.create_coach(**validated_data)

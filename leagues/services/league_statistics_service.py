@@ -5,6 +5,7 @@ from games.models import Game, GameSet
 
 class LeagueStatisticsService:
     def __init__(self, league, request=None):
+        
         """Initialize the service with a league object.
         
         Args:
@@ -132,6 +133,9 @@ class LeagueStatisticsService:
             season__league=self.league,
             winner__isnull=False
         ).values('season__year', 'winner__name', 'winner__id').order_by('-season__year')
+          # Get set-based highlights
+        highest_scoring_sets = self._get_highest_scoring_sets()
+        biggest_margin_sets = self._get_biggest_margin_sets()
         
         # Compile response
         response = {
@@ -144,6 +148,8 @@ class LeagueStatisticsService:
             "avg_sets_per_match": round(avg_sets_per_match, 2),
             "avg_points_per_set": round(avg_points_per_set, 2),
             "common_set_scores": common_scores,
+            "highest_scoring_sets": highest_scoring_sets,
+            "biggest_margin_sets": biggest_margin_sets,
             "teams": sorted_teams,
             "champions": list(champions),
             "seasons_count": self.league.seasons.count(),
@@ -445,3 +451,61 @@ class LeagueStatisticsService:
             'teams': teams_data,
             'form': results
         }
+    
+    def _get_highest_scoring_sets(self):
+        """Get the highest scoring sets in the league"""
+        highest_scoring_sets = GameSet.objects.filter(
+            game__season__league=self.league,
+            home_team_score__gt=0,
+            away_team_score__gt=0
+        ).annotate(
+            total_score=F('home_team_score') + F('away_team_score')
+        ).order_by('-total_score')[:5]
+        
+        highlights = []
+        for game_set in highest_scoring_sets:
+            highlights.append({
+                'set_id': game_set.id,
+                'game_id': game_set.game.id,
+                'date': game_set.game.date.strftime('%Y-%m-%d'),
+                'home_team': game_set.game.home_team.name,
+                'away_team': game_set.game.away_team.name,
+                'home_score': game_set.home_team_score,
+                'away_score': game_set.away_team_score,
+                'total_score': game_set.home_team_score + game_set.away_team_score,
+                'set_number': game_set.period,
+                'winner': game_set.winner.name if game_set.winner else None,
+                'season': game_set.game.season.name,
+                'season_year': game_set.game.season.year
+            })
+        
+        return highlights
+    
+    def _get_biggest_margin_sets(self):
+        """Get the sets with biggest point margins in the league"""
+        biggest_margin_sets = GameSet.objects.filter(
+            game__season__league=self.league,
+            home_team_score__gt=0,
+            away_team_score__gt=0
+        ).annotate(
+            margin=Func(F('home_team_score') - F('away_team_score'), function='ABS')
+        ).order_by('-margin')[:5]
+        
+        highlights = []
+        for game_set in biggest_margin_sets:
+            highlights.append({
+                'set_id': game_set.id,
+                'game_id': game_set.game.id,
+                'date': game_set.game.date.strftime('%Y-%m-%d'),
+                'home_team': game_set.game.home_team.name,
+                'away_team': game_set.game.away_team.name,
+                'home_score': game_set.home_team_score,
+                'away_score': game_set.away_team_score,
+                'margin': abs(game_set.home_team_score - game_set.away_team_score),
+                'set_number': game_set.period,
+                'winner': game_set.winner.name if game_set.winner else None,
+                'season': game_set.game.season.name,
+                'season_year': game_set.game.season.year
+            })
+        
+        return highlights

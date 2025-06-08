@@ -19,7 +19,11 @@ class SeasonPagination(PageNumberPagination):
     max_page_size = 50
 
 class LeagueViewSet(viewsets.ModelViewSet):
-    queryset = League.objects.all()
+    queryset = League.objects.select_related('sport').prefetch_related(
+        'seasons',
+        'seasons__teams',
+        'seasons__games'
+    )
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_serializer_class(self):
@@ -38,21 +42,21 @@ class LeagueViewSet(viewsets.ModelViewSet):
     def statistics(self, request, pk=None):
         """Get comprehensive league statistics for the dashboard"""
         league = self.get_object()
-        
         from .services import LeagueStatisticsService
         service = LeagueStatisticsService(league, request)
         statistics = service.get_statistics()
         
         return Response(statistics)
-    
     @action(detail=True, methods=["get"])
     def team_form(self, request, pk=None):
         """Get the recent form for top teams in the league"""
         league = self.get_object()
         
         from .services import LeagueStatisticsService
-        service = LeagueStatisticsService(league, request)
-        team_form_data = service.get_team_form()
+        
+        # Get team form data
+        stats_service = LeagueStatisticsService(league, request)
+        team_form_data = stats_service.get_team_form()
         
         return Response(team_form_data)
     

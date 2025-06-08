@@ -35,6 +35,7 @@ from .filters import GameFilter
 from collections import defaultdict
 import time
 import logging
+import traceback
 from django.db import models
 
 
@@ -57,6 +58,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
     queryset = PlayerStat.objects.select_related("player__team", "game", "stat_type")
     serializer_class = PlayerStatSerializer
     pagination_class = PlayerStatPagination
+    permission_classes = [IsAuthenticated]
 
     @action(detail=False, methods=["get"])
     def recordable_stats(self, request):
@@ -137,8 +139,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
         data = service.get_comparison()
-        return Response(data)
-    
+        return Response(data)    
     @action(detail=False, methods=["get"])
     def boxscore(self, request):
         game_id = request.query_params.get("game_id")
@@ -150,6 +151,58 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
             return Response({"error": "Game not found"}, status=404)
         data = service.get_boxscore()
         return Response(data)
+    
+    @action(detail=False, methods=["delete"])
+    def undo_last_stat(self, request):
+        """
+        Undo the last recorded stat for a specific game.
+        Deletes the most recent PlayerStat record based on timestamp.
+        """
+        game_id = request.query_params.get("game_id")
+        
+        if not game_id:
+            return Response({"error": "game_id parameter required"}, status=400)
+        
+        try:
+            game = Game.objects.get(pk=game_id)
+            
+            # Get the most recent PlayerStat for this game
+            last_stat = PlayerStat.objects.filter(game=game).order_by('-timestamp').first()
+            
+            if not last_stat:
+                return Response(
+                    {"error": "No stats found for this game to undo"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+              # Store stat info for response before deletion
+            stat_info = {
+                "id": last_stat.id,
+                "player_name": f"{last_stat.player.user.first_name} {last_stat.player.user.last_name}",
+                "stat_type": last_stat.stat_type.name,
+                "period": last_stat.period,
+                "timestamp": last_stat.timestamp
+            }
+            
+            # Delete the stat using transaction to ensure consistency
+            with transaction.atomic():
+                last_stat.delete()
+                # Game scores will be updated automatically via signals
+            
+            return Response({
+                "message": "Last stat record successfully undone",
+                "undone_stat": stat_info
+            }, status=status.HTTP_200_OK)
+            
+        except Game.DoesNotExist:
+            return Response({"error": "Game not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            print(f"Exception occurred: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {"error": "An error occurred while undoing the last stat"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class GameViewSet(viewsets.ModelViewSet):
