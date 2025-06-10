@@ -20,7 +20,11 @@ from .serializers import (
     GameCurrentPlayersSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
-from sports_management.permissions import IsAdminOrCoachUser, CanManageGamePermission, CanCreateGamePermission
+from sports_management.permissions import (
+    IsAdminOrCoachUser,
+    CanManageGamePermission,
+    CanCreateGamePermission,
+)
 from rest_framework.exceptions import PermissionDenied
 from .services import (
     PlayerStatsSummaryService,
@@ -29,6 +33,8 @@ from .services import (
     TeamStatsComparisonService,
     BoxscoreService,
     GameLeaderService,
+    BulkRecordingService,
+    FastStatRecordingService,
 )
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
@@ -41,16 +47,18 @@ from django.db import models
 
 logger = logging.getLogger(__name__)
 
+
 # Custom pagination class specifically for games
 class GamePagination(PageNumberPagination):
     page_size = 10
-    page_size_query_param = 'page_size'
+    page_size_query_param = "page_size"
     max_page_size = 100
+
 
 # Custom pagination for player stats
 class PlayerStatPagination(PageNumberPagination):
     page_size = 50
-    page_size_query_param = 'page_size'
+    page_size_query_param = "page_size"
     max_page_size = 200
 
 
@@ -87,29 +95,235 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         stat = service.record()
         return Response(PlayerStatSerializer(stat).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=False, methods=["post"])
+    def bulk_record(self, request):
+        """
+        Record multiple stats in a single operation for improved performance.
+        Expected data format:
+        {
+            "stats": [
+                {
+                    "game": game_id,
+                    "player": player_id,
+                    "stat_type": stat_type_id,
+                    "period": period_number,
+                    "value": stat_value
+                },
+                ...
+            ]
+        }
+        """
+        start_time = time.time()
+
+        if not isinstance(request.data, dict) or "stats" not in request.data:
+            return Response(
+                {"error": "Invalid data format. Expected 'stats' array."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stats_data = request.data.get("stats", [])
+
+        if not stats_data:
+            return Response(
+                {"error": "No stats provided for recording."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(stats_data) > 100:
+            return Response(
+                {"error": "Cannot record more than 100 stats at once."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # Extract game_id from the first stat to initialize the service
+            game_id = stats_data[0].get("game")
+            if not game_id:
+                return Response(
+                    {"error": "Game ID is required in stat data."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            service = BulkRecordingService(game_id)
+
+            # Convert stats_data to the format expected by BulkRecordingService
+            bulk_stats_data = []
+            for stat_data in stats_data:
+                bulk_stat = {
+                    "player_id": stat_data.get("player"),
+                    "stat_type_id": stat_data.get("stat_type"),
+                }
+                bulk_stats_data.append(bulk_stat)
+
+            recorded_stats = service.bulk_record(bulk_stats_data)
+
+            processing_time = time.time() - start_time
+            logger.info(
+                f"Bulk recorded {len(recorded_stats)} stats in {processing_time:.2f}s"
+            )
+
+            return Response(
+                {
+                    "message": f"Successfully recorded {len(recorded_stats)} stats",
+                    "stats": [
+                        PlayerStatSerializer(stat).data for stat in recorded_stats
+                    ],
+                    "processing_time": f"{processing_time:.2f}s",
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error in bulk recording: {str(e)}")
+            logger.error(traceback.format_exc())
+            return Response(
+                {"error": "An error occurred while recording stats"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=["post"])
+    def record_fast(self, request):
+        """
+        Record a single stat with optimized performance for faster recording.
+        Uses the FastStatRecordingService for minimal database queries.
+        """
+        start_time = time.time()
+        serializer = PlayerStatRecordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            service = FastStatRecordingService(serializer.validated_data)
+            stat = service.record_fast()
+
+            processing_time = time.time() - start_time
+            logger.info(f"Fast recorded stat in {processing_time:.3f}s")
+
+            return Response(
+                {
+                    "stat": PlayerStatSerializer(stat).data,
+                    "processing_time": f"{processing_time:.3f}s",
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error in fast recording: {str(e)}")
+            logger.error(traceback.format_exc())
+            return Response(
+                {"error": "An error occurred while recording the stat"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=["post"])
+    def bulk_record_optimized(self, request):
+        """
+        Ultra-fast bulk recording using raw SQL for very large operations.
+        Use this for recording more than 20 stats when maximum performance is needed.
+        """
+        start_time = time.time()
+
+        if not isinstance(request.data, dict) or "stats" not in request.data:
+            return Response(
+                {"error": "Invalid data format. Expected 'stats' array."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stats_data = request.data.get("stats", [])
+
+        if not stats_data:
+            return Response(
+                {"error": "No stats provided for recording."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(stats_data) > 100:
+            return Response(
+                {"error": "Cannot record more than 100 stats at once."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(stats_data) < 20:
+            return Response(
+                {"error": "Use regular bulk_record for less than 20 stats."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            # Extract game_id from the first stat to initialize the service
+            game_id = stats_data[0].get("game")
+            if not game_id:
+                return Response(
+                    {"error": "Game ID is required in stat data."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            service = BulkRecordingService(game_id)
+
+            # Convert stats_data to the format expected by BulkRecordingService
+            bulk_stats_data = []
+            for stat_data in stats_data:
+                bulk_stat = {
+                    "player_id": stat_data.get("player"),
+                    "stat_type_id": stat_data.get("stat_type"),
+                }
+                bulk_stats_data.append(bulk_stat)
+
+            result = service.bulk_record_optimized(bulk_stats_data)
+
+            processing_time = time.time() - start_time
+            logger.info(
+                f"Optimized bulk recorded {result['count']} stats in {processing_time:.2f}s"
+            )
+
+            return Response(
+                {
+                    "message": f"Successfully recorded {result['count']} stats using optimized method",
+                    "count": result["count"],
+                    "processing_time": f"{processing_time:.2f}s",
+                    "stats_ids": result.get("stats_ids", []),
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error in optimized bulk recording: {str(e)}")
+            logger.error(traceback.format_exc())
+            return Response(
+                {"error": "An error occurred while recording stats"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=False, methods=["get"])
     def player_stats_summary(self, request):
         game_id = request.query_params.get("game_id")
         team = request.query_params.get("team")
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
-        
+
         # Add for_calculation flag to optimize query based on usage
         for_calculation = request.query_params.get("for_calculation") == "true"
         use_raw_sql = request.query_params.get("use_raw_sql") == "true"
-        
+
         # Log the start time for performance monitoring
         start_time = time.time()
-        
+
         try:
             # Pass additional flags for performance optimization
             service = PlayerStatsSummaryService(game_id=game_id, team_filter=team)
-            data = service.get_summary(for_calculation=for_calculation, use_raw_sql=use_raw_sql)
-            
+            data = service.get_summary(
+                for_calculation=for_calculation, use_raw_sql=use_raw_sql
+            )
+
             # Log the time taken to process the request
             processing_time = time.time() - start_time
-            logger.info(f"Stats summary processed in {processing_time:.2f}s for game {game_id}")
-            
+            logger.info(
+                f"Stats summary processed in {processing_time:.2f}s for game {game_id}"
+            )
+
             return Response(data)
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
@@ -128,7 +342,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
             return Response({"error": "Game not found"}, status=404)
         data = service.get_summary()
         return Response(data)
-    
+
     @action(detail=False, methods=["get"])
     def team_stats_comparison(self, request):
         game_id = request.query_params.get("game_id")
@@ -139,7 +353,8 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         except Game.DoesNotExist:
             return Response({"error": "Game not found"}, status=404)
         data = service.get_comparison()
-        return Response(data)    
+        return Response(data)
+
     @action(detail=False, methods=["get"])
     def boxscore(self, request):
         game_id = request.query_params.get("game_id")
@@ -151,7 +366,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
             return Response({"error": "Game not found"}, status=404)
         data = service.get_boxscore()
         return Response(data)
-    
+
     @action(detail=False, methods=["delete"])
     def undo_last_stat(self, request):
         """
@@ -159,49 +374,57 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         Deletes the most recent PlayerStat record based on timestamp.
         """
         game_id = request.query_params.get("game_id")
-        
+
         if not game_id:
             return Response({"error": "game_id parameter required"}, status=400)
-        
+
         try:
             game = Game.objects.get(pk=game_id)
-            
+
             # Get the most recent PlayerStat for this game
-            last_stat = PlayerStat.objects.filter(game=game).order_by('-timestamp').first()
-            
+            last_stat = (
+                PlayerStat.objects.filter(game=game).order_by("-timestamp").first()
+            )
+
             if not last_stat:
                 return Response(
-                    {"error": "No stats found for this game to undo"}, 
-                    status=status.HTTP_404_NOT_FOUND
+                    {"error": "No stats found for this game to undo"},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
-              # Store stat info for response before deletion
+            # Store stat info for response before deletion
             stat_info = {
                 "id": last_stat.id,
                 "player_name": f"{last_stat.player.user.first_name} {last_stat.player.user.last_name}",
                 "stat_type": last_stat.stat_type.name,
                 "period": last_stat.period,
-                "timestamp": last_stat.timestamp
+                "timestamp": last_stat.timestamp,
             }
-            
+
             # Delete the stat using transaction to ensure consistency
             with transaction.atomic():
                 last_stat.delete()
                 # Game scores will be updated automatically via signals
-            
-            return Response({
-                "message": "Last stat record successfully undone",
-                "undone_stat": stat_info
-            }, status=status.HTTP_200_OK)
-            
+
+            return Response(
+                {
+                    "message": "Last stat record successfully undone",
+                    "undone_stat": stat_info,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         except Game.DoesNotExist:
-            return Response({"error": "Game not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Game not found"}, status=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             print(f"Exception occurred: {str(e)}")
             import traceback
+
             traceback.print_exc()
             return Response(
-                {"error": "An error occurred while undoing the last stat"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "An error occurred while undoing the last stat"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
@@ -218,19 +441,26 @@ class GameViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_class = GameFilter
     pagination_class = GamePagination
-    
+
     def get_permissions(self):
         """
         Instantiate and return the list of permissions that this view requires.
         """
-        if self.action == 'create':
+        if self.action == "create":
             permission_classes = [CanCreateGamePermission]
-        elif self.action in ['manage', 'update_scores', 'partial_update', 'update', 'destroy']:        permission_classes = [CanManageGamePermission]
+        elif self.action in [
+            "manage",
+            "update_scores",
+            "partial_update",
+            "update",
+            "destroy",
+        ]:
+            permission_classes = [CanManageGamePermission]
         else:
             permission_classes = [IsAuthenticated]
-            
+
         return [permission() for permission in permission_classes]
-    
+
     def get_queryset(self):
         """
         Filter games based on game type and user role:
@@ -241,66 +471,83 @@ class GameViewSet(viewsets.ModelViewSet):
         """
         queryset = super().get_queryset()
         user = self.request.user
-        
+
         # If admin, return all games
         if user.is_admin:
             return queryset
-              
+
         # Filter normal games based on user role, but keep all league/tournament games
-        if hasattr(user, 'coach_profile'):
+        if hasattr(user, "coach_profile"):
             # For coaches: practice games only for teams they coach
             coach_teams = user.coach_profile.teams.all()
             return queryset.filter(
                 # Keep all league/tournament games
-                models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |                # Plus practice games only for their teams
-                (models.Q(type=Game.Type.PRACTICE) & 
-                 (models.Q(home_team__in=coach_teams) | models.Q(away_team__in=coach_teams)))
+                models.Q(
+                    type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
+                )  # Plus practice games only for their teams
+                | (
+                    models.Q(type=Game.Type.PRACTICE)
+                    & (
+                        models.Q(home_team__in=coach_teams)
+                        | models.Q(away_team__in=coach_teams)
+                    )
+                )
             )
-        elif hasattr(user, 'player_profile'):
+        elif hasattr(user, "player_profile"):
             # For players: practice games only for their team
             player_team = user.player_profile.team
             if player_team:
                 return queryset.filter(
                     # Keep all league/tournament games
-                    models.Q(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]) |                    # Plus practice games only for their team
-                    (models.Q(type=Game.Type.PRACTICE) & 
-                     (models.Q(home_team=player_team) | models.Q(away_team=player_team)))
+                    models.Q(
+                        type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
+                    )  # Plus practice games only for their team
+                    | (
+                        models.Q(type=Game.Type.PRACTICE)
+                        & (
+                            models.Q(home_team=player_team)
+                            | models.Q(away_team=player_team)
+                        )
+                    )
                 )
             else:
                 # Player has no team, only show league/tournament games
-                return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
-        
+                return queryset.filter(
+                    type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
+                )
+
         # Default: only show league and tournament games for other users
         return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
+
     def perform_create(self, serializer):
         user = self.request.user
-        game_type = serializer.validated_data.get('type', Game.Type.PRACTICE)
-        
+        game_type = serializer.validated_data.get("type", Game.Type.PRACTICE)
+
         # Admins can create any type of game
         if user.is_admin:
             serializer.save(creator=user)
             return
-        
+
         # Coaches can only create practice games for their teams
-        if user.is_coach and hasattr(user, 'coach_profile'):
+        if user.is_coach and hasattr(user, "coach_profile"):
             # Restrict to practice games only
             if game_type != Game.Type.PRACTICE:  # PRACTICE maps to practice games
                 raise PermissionDenied("Coaches can only create practice games")
-            
+
             # Check if coach owns either team in the game
-            home_team = serializer.validated_data.get('home_team')
-            away_team = serializer.validated_data.get('away_team')
+            home_team = serializer.validated_data.get("home_team")
+            away_team = serializer.validated_data.get("away_team")
             coach_teams = list(user.coach_profile.teams.all())
-            
+
             if home_team not in coach_teams and away_team not in coach_teams:
                 raise PermissionDenied("You can only create games for teams you coach")
-            
+
             serializer.save(creator=user)
             return
-        
+
         # Deny access for other users
         raise PermissionDenied("You don't have permission to create games")
-        
+
     @action(detail=True, methods=["get"])
     def game_leaders(self, request, pk=None):
         """Get the top players from each team for each leader category"""
@@ -313,7 +560,7 @@ class GameViewSet(viewsets.ModelViewSet):
             logger.error(f"Error getting game leaders: {str(e)}")
             return Response(
                 {"error": f"Failed to get game leaders: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     @action(detail=True, methods=["post"])
@@ -377,7 +624,7 @@ class GameViewSet(viewsets.ModelViewSet):
             return self._delete_starting_lineup(game)
 
     def _get_starting_lineup(self, game):
-        """Get the current starting lineup for a game""" 
+        """Get the current starting lineup for a game"""
         return Response(
             {
                 "home_team": StartingLineupSerializer(
@@ -403,21 +650,21 @@ class GameViewSet(viewsets.ModelViewSet):
 
         stats = (
             PlayerStat.objects.filter(
-                game=game, 
-                stat_type__is_points=True, 
-                stat_type__point_value__gt=0
+                game=game, stat_type__is_points=True, stat_type__point_value__gt=0
             )
             .select_related("player__user", "player__team", "stat_type")
             .order_by("timestamp")
         )
 
-        scoring_type = "sets" if game.sport.scoring_type == Sport.SCORING_TYPES.SETS else "points"
+        scoring_type = (
+            "sets" if game.sport.scoring_type == Sport.SCORING_TYPES.SETS else "points"
+        )
         periods = []
 
         def format_period_label(period_num, sport):
             if scoring_type == "sets":
                 return f"{ordinal(period_num)} Set"
-            
+
             if sport.has_period:
                 if sport.has_overtime and period_num > sport.max_period:
                     ot_num = period_num - sport.max_period
@@ -427,102 +674,130 @@ class GameViewSet(viewsets.ModelViewSet):
 
         def ordinal(n):
             if 11 <= (n % 100) <= 13:
-                suffix = 'th'
+                suffix = "th"
             else:
-                suffix = ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
+                suffix = ["th", "st", "nd", "rd", "th"][min(n % 10, 4)]
             return f"{n}{suffix}"
 
         # Get actual periods from stats        # Get all stats to determine periods, not just the scoring ones
-        all_stats = PlayerStat.objects.filter(game=game).values_list('period', flat=True).distinct()
+        all_stats = (
+            PlayerStat.objects.filter(game=game)
+            .values_list("period", flat=True)
+            .distinct()
+        )
         stat_periods = sorted(all_stats) if all_stats else [1]
         first_period = min(stat_periods) if stat_periods else 1
         last_period = max(stat_periods) if stat_periods else 1
 
         if scoring_type == "sets":
             sets = game.sets.all().order_by("period")
-            for s in sets:                periods.append({
-                    "number": s.period,
-                    "label": format_period_label(s.period, game.sport),
-                    "home_score": s.home_team_score,
-                    "away_score": s.away_team_score,
-                    "winner": s.winner_id,
-                    "completed": True,
-                    "events_count": PlayerStat.objects.filter(game=game, period=s.period).count(),
-                })
+            for s in sets:
+                periods.append(
+                    {
+                        "number": s.period,
+                        "label": format_period_label(s.period, game.sport),
+                        "home_score": s.home_team_score,
+                        "away_score": s.away_team_score,
+                        "winner": s.winner_id,
+                        "completed": True,
+                        "events_count": PlayerStat.objects.filter(
+                            game=game, period=s.period
+                        ).count(),
+                    }
+                )
             home_total = game.sets.filter(winner=game.home_team).count()
             away_total = game.sets.filter(winner=game.away_team).count()
         else:
             for period in range(1, game.current_period + 1):
                 period_stats = stats.filter(period=period)
-                home_score = sum(s.stat_type.point_value for s in period_stats 
-                            if s.player.team_id == game.home_team_id)
-                away_score = sum(s.stat_type.point_value for s in period_stats 
-                            if s.player.team_id == game.away_team_id)
-                
-                periods.append({
-                    "number": period,
-                    "label": format_period_label(period, game.sport),
-                    "home_score": home_score,
-                    "away_score": away_score,
-                    "winner": (
-                        game.home_team_id if home_score > away_score
-                        else game.away_team_id if away_score > home_score 
-                        else None
-                    ),
-                    "completed": True,
-                    "events_count": period_stats.count(),
-                })            
+                home_score = sum(
+                    s.stat_type.point_value
+                    for s in period_stats
+                    if s.player.team_id == game.home_team_id
+                )
+                away_score = sum(
+                    s.stat_type.point_value
+                    for s in period_stats
+                    if s.player.team_id == game.away_team_id
+                )
+
+                periods.append(
+                    {
+                        "number": period,
+                        "label": format_period_label(period, game.sport),
+                        "home_score": home_score,
+                        "away_score": away_score,
+                        "winner": (
+                            game.home_team_id
+                            if home_score > away_score
+                            else game.away_team_id if away_score > home_score else None
+                        ),
+                        "completed": True,
+                        "events_count": period_stats.count(),
+                    }
+                )
             home_total = game.home_team_score
             away_total = game.away_team_score
-            
+
         # Track live score per event
         if scoring_type == "sets":
             events_by_period = defaultdict(list)
-            
+
             # Create a tracking dictionary for scores by period
-            period_scores = {period["number"]: {"home": 0, "away": 0} for period in periods}
-            
+            period_scores = {
+                period["number"]: {"home": 0, "away": 0} for period in periods
+            }
+
             # Add starting event for each period with correct label
             for period in periods:
-                events_by_period[period["number"]].append({
-                    "id": None,
-                    "player": "",
-                    "stat_name": "Start of Set",
-                    "point_value": 0,
-                    "team": "",
-                    "team_side": "",
-                    "period": period["number"],
-                    "period_label": format_period_label(period["number"], game.sport),
-                    "timestamp": game.started_at.isoformat() if game.started_at else "",
-                    "current_score": {
-                        "home": 0,
-                        "away": 0
+                events_by_period[period["number"]].append(
+                    {
+                        "id": None,
+                        "player": "",
+                        "stat_name": "Start of Set",
+                        "point_value": 0,
+                        "team": "",
+                        "team_side": "",
+                        "period": period["number"],
+                        "period_label": format_period_label(
+                            period["number"], game.sport
+                        ),
+                        "timestamp": (
+                            game.started_at.isoformat() if game.started_at else ""
+                        ),
+                        "current_score": {"home": 0, "away": 0},
                     }
-                })
-                
+                )
+
             # Get ALL stats for the game, not just scoring stats
             set_stats = (
                 PlayerStat.objects.filter(game=game)
                 .select_related("player__user", "player__team", "stat_type")
                 .order_by("timestamp")
             )
-            
+
             # Process actual events for each set
             for stat in set_stats:
-                team_side = "home" if stat.player.team_id == game.home_team_id else "away"
-                
+                team_side = (
+                    "home" if stat.player.team_id == game.home_team_id else "away"
+                )
+
                 # Skip if this period doesn't exist in periods (safety check)
                 if stat.period not in period_scores:
-                    continue                # For volleyball/sets scoring, we need special logic to determine which team gets the point
+                    continue  # For volleyball/sets scoring, we need special logic to determine which team gets the point
                 # In volleyball, one team always gets a point after each rally
-                
+
                 # Get stat name and type info for determining point allocation
                 stat_name = stat.stat_type.name.upper() if stat.stat_type.name else ""
-                stat_display_name = stat.stat_type.display_name.upper() if stat.stat_type.display_name else ""
+                stat_display_name = (
+                    stat.stat_type.display_name.upper()
+                    if stat.stat_type.display_name
+                    else ""
+                )
                 is_point_stat = stat.stat_type.is_points
                 point_value = stat.stat_type.point_value
                 is_error = "ERROR" in stat_name or "ERROR" in stat_display_name
-                
+
                 # Determine which team gets the point in volleyball
                 # Rule 1: If it's an error, the OTHER team gets the point
                 # Rule 2: Otherwise, the team that made the play gets the point
@@ -540,104 +815,110 @@ class GameViewSet(viewsets.ModelViewSet):
                     else:
                         # Away team made a positive play, they get the point
                         period_scores[stat.period]["away"] += 1
-                
+
                 # Add the event with the current cumulative score for this period
-                events_by_period[stat.period].append({
-                    "id": stat.id,
-                    "player": stat.player.user.get_full_name(),
-                    "stat_name": stat.stat_type.display_name,
-                    "point_value": point_value,
-                    "team": stat.player.team.abbreviation,
-                    "team_side": team_side,
-                    "period": stat.period,
-                    "period_label": format_period_label(stat.period, game.sport),
-                    "timestamp": stat.timestamp.isoformat(),
-                    "current_score": {
-                        "home": period_scores[stat.period]["home"],
-                        "away": period_scores[stat.period]["away"]
+                events_by_period[stat.period].append(
+                    {
+                        "id": stat.id,
+                        "player": stat.player.user.get_full_name(),
+                        "stat_name": stat.stat_type.display_name,
+                        "point_value": point_value,
+                        "team": stat.player.team.abbreviation,
+                        "team_side": team_side,
+                        "period": stat.period,
+                        "period_label": format_period_label(stat.period, game.sport),
+                        "timestamp": stat.timestamp.isoformat(),
+                        "current_score": {
+                            "home": period_scores[stat.period]["home"],
+                            "away": period_scores[stat.period]["away"],
+                        },
                     }
-                })
-                
+                )
+
             # Add ending event for each period with correct label
             for period in periods:
                 period_num = period["number"]
-                
+
                 # Ensure the final score matches what's in the period data
                 # This handles cases where the DB might have a different final score than our calculated one
-                events_by_period[period_num].append({
-                    "id": None,
-                    "player": "",
-                    "stat_name": "End of Set",
-                    "point_value": 0,
-                    "team": "",
-                    "team_side": "",
-                    "period": period_num,
-                    "period_label": format_period_label(period_num, game.sport),
-                    "timestamp": game.ended_at.isoformat() if game.ended_at else "",
-                    "current_score": {
-                        "home": period["home_score"],
-                        "away": period["away_score"]
+                events_by_period[period_num].append(
+                    {
+                        "id": None,
+                        "player": "",
+                        "stat_name": "End of Set",
+                        "point_value": 0,
+                        "team": "",
+                        "team_side": "",
+                        "period": period_num,
+                        "period_label": format_period_label(period_num, game.sport),
+                        "timestamp": game.ended_at.isoformat() if game.ended_at else "",
+                        "current_score": {
+                            "home": period["home_score"],
+                            "away": period["away_score"],
+                        },
                     }
-                })
+                )
 
             events = dict(events_by_period)
         else:
             events = []
-            
+
             # Add starting event with first period's label
             first_period_label = format_period_label(first_period, game.sport)
-            events.append({
-                "id": None,
-                "player": "",
-                "stat_name": "Start of Game",
-                "point_value": 0,
-                "team": "",
-                "team_side": "",
-                "period": first_period,
-                "period_label": first_period_label,
-                "timestamp": game.started_at.isoformat() if game.started_at else "",
-                "current_score": {
-                    "home": 0,
-                    "away": 0
+            events.append(
+                {
+                    "id": None,
+                    "player": "",
+                    "stat_name": "Start of Game",
+                    "point_value": 0,
+                    "team": "",
+                    "team_side": "",
+                    "period": first_period,
+                    "period_label": first_period_label,
+                    "timestamp": game.started_at.isoformat() if game.started_at else "",
+                    "current_score": {"home": 0, "away": 0},
                 }
-            })
+            )
 
             # Process actual events
             current_score = {"home": 0, "away": 0}
             for stat in stats:
-                team_side = "home" if stat.player.team_id == game.home_team_id else "away"
+                team_side = (
+                    "home" if stat.player.team_id == game.home_team_id else "away"
+                )
                 current_score[team_side] += stat.stat_type.point_value
-                
-                events.append({
-                    "id": stat.id,
-                    "player": stat.player.user.get_full_name(),
-                    "stat_name": stat.stat_type.display_name,
-                    "point_value": stat.stat_type.point_value,
-                    "team": stat.player.team.abbreviation,
-                    "team_side": team_side,
-                    "period": stat.period,
-                    "period_label": format_period_label(stat.period, game.sport),
-                    "timestamp": stat.timestamp.isoformat(),
-                    "current_score": current_score.copy()
-                })
+
+                events.append(
+                    {
+                        "id": stat.id,
+                        "player": stat.player.user.get_full_name(),
+                        "stat_name": stat.stat_type.display_name,
+                        "point_value": stat.stat_type.point_value,
+                        "team": stat.player.team.abbreviation,
+                        "team_side": team_side,
+                        "period": stat.period,
+                        "period_label": format_period_label(stat.period, game.sport),
+                        "timestamp": stat.timestamp.isoformat(),
+                        "current_score": current_score.copy(),
+                    }
+                )
 
             # Add ending event with last period's label
             last_period_label = format_period_label(last_period, game.sport)
-            events.append({
-                "id": None,
-                "player": "",
-                "stat_name": "End of Game",
-                "point_value": 0,
-                "team": "",
-                "team_side": "",
-                "period": last_period,
-                "period_label": last_period_label,
-                "timestamp": game.ended_at.isoformat() if game.ended_at else "",
-                "current_score": {
-                    "home": home_total,
-                    "away": away_total
+            events.append(
+                {
+                    "id": None,
+                    "player": "",
+                    "stat_name": "End of Game",
+                    "point_value": 0,
+                    "team": "",
+                    "team_side": "",
+                    "period": last_period,
+                    "period_label": last_period_label,
+                    "timestamp": game.ended_at.isoformat() if game.ended_at else "",
+                    "current_score": {"home": home_total, "away": away_total},
                 }
-            })  
+            )
 
         response_data = {
             "game": {
@@ -654,7 +935,7 @@ class GameViewSet(viewsets.ModelViewSet):
                     "scoring_type": scoring_type,
                     "has_periods": game.sport.has_period,
                     "has_overtime": game.sport.has_overtime,
-                    "max_period": game.sport.max_period
+                    "max_period": game.sport.max_period,
                 },
                 "teams": {
                     "home": {
@@ -662,16 +943,16 @@ class GameViewSet(viewsets.ModelViewSet):
                         "name": game.home_team.name,
                         "abbreviation": game.home_team.abbreviation,
                         "score": home_total,
-                        "color": game.home_team.color or "#000000"
+                        "color": game.home_team.color or "#000000",
                     },
                     "away": {
                         "id": game.away_team.id,
                         "name": game.away_team.name,
                         "abbreviation": game.away_team.abbreviation,
                         "score": away_total,
-                        "color": game.away_team.color or "#900029"
-                    }
-                }
+                        "color": game.away_team.color or "#900029",
+                    },
+                },
             },
             "scoring": {
                 "type": scoring_type,
@@ -679,12 +960,10 @@ class GameViewSet(viewsets.ModelViewSet):
                 "home_total": home_total,
                 "away_total": away_total,
                 "win_threshold": (
-                    game.sport.win_threshold 
-                    if scoring_type == "sets" 
-                    else None
-                )
+                    game.sport.win_threshold if scoring_type == "sets" else None
+                ),
             },
-            "events": events
+            "events": events,
         }
 
         return Response(response_data)

@@ -367,11 +367,10 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         from .services import TrainingSessionService
         
         session = self.get_object()
-        
-        # Check if metrics can be configured for this session
+          # Check if metrics can be configured for this session
         if not session.can_configure_metrics():
             return Response({
-                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming sessions allow metrics configuration.",
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
                 "session_status": session.status,
                 "auto_status": session.get_auto_status()
             }, status=status.HTTP_400_BAD_REQUEST)
@@ -383,7 +382,6 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                 {"detail": "Metrics must be provided as a list of IDs"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
         service = TrainingSessionService()
         result = service.assign_metrics_to_session(session, metric_ids)
         return Response({
@@ -393,6 +391,54 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "created_records": result.get('total_created_records', 0),
             "updated_records": result.get('total_deleted_records', 0),
             "player_results": result.get('player_results', [])
+        })
+    
+    @action(detail=True, methods=['post'])
+    def assign_metrics_to_players(self, request, pk=None):
+        """Assign specific metrics to specific players in a training session"""
+        from .services import TrainingSessionService
+        
+        session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        player_ids = request.data.get('player_ids', [])
+        metric_ids = request.data.get('metric_ids', [])
+        
+        if not isinstance(player_ids, list) or not player_ids:
+            return Response(
+                {"detail": "Player IDs must be provided as a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not isinstance(metric_ids, list) or not metric_ids:
+            return Response(
+                {"detail": "Metric IDs must be provided as a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        service = TrainingSessionService()
+        result = service.assign_metrics_to_players_in_session(session, player_ids, metric_ids)
+        
+        # Build descriptive message
+        total_added = result.get('total_metrics_added', 0)
+        total_removed = result.get('total_metrics_removed', 0)
+        players_processed = result.get('total_players_processed', 0)
+        
+        return Response({
+            "detail": f"Processed {players_processed} players - {total_added} metrics added, {total_removed} metrics removed",
+            "total_players_processed": players_processed,
+            "total_metrics_added": total_added,
+            "total_metrics_removed": total_removed,
+            "assigned_players": len(player_ids),
+            "assigned_metrics": len(metric_ids),
+            "success": result.get('success', True),
+            "player_results": result.get('results', [])
         })
     
     @action(detail=True, methods=['post'])
@@ -456,6 +502,116 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "auto_status": session.get_auto_status(),
             "session_id": session.id,
             "session_title": session.title
+        })
+    
+    @action(detail=True, methods=['post'])
+    def assign_metrics_to_players(self, request, pk=None):
+        """Assign specific metrics to specific players in a training session"""
+        from .services import TrainingSessionService
+        
+        session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        player_ids = request.data.get('player_ids', [])
+        metric_ids = request.data.get('metric_ids', [])
+        if not isinstance(player_ids, list) or not isinstance(metric_ids, list):
+            return Response(
+                {"detail": "player_ids and metric_ids must be provided as lists"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not player_ids:
+            return Response(
+                {"detail": "player_ids must be a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        service = TrainingSessionService()
+        result = service.assign_metrics_to_players_in_session(session, player_ids, metric_ids)
+        
+        # Create appropriate response message based on operation
+        if len(metric_ids) == 0:
+            message = f"Removed all metrics from {len(player_ids)} players"
+        else:
+            message = f"Assigned {len(metric_ids)} metrics to {len(player_ids)} players"
+            
+        return Response({
+            "detail": message,
+            "player_count": len(player_ids),
+            "metric_count": len(metric_ids),
+            "assigned_records": result.get('total_assigned', 0),
+            "results": result.get('results', [])
+        })
+
+    @action(detail=True, methods=['post'])
+    def assign_metrics_to_single_player(self, request, pk=None):
+        """Assign specific metrics to a single player in a training session"""
+        from .services import TrainingSessionService
+        
+        session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        player_id = request.data.get('player_id')
+        metric_ids = request.data.get('metric_ids', [])
+        
+        if not player_id:
+            return Response(
+                {"detail": "player_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if not isinstance(metric_ids, list):
+            return Response(
+                {"detail": "metric_ids must be provided as a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not metric_ids:
+            return Response(
+                {"detail": "metric_ids must be a non-empty list for single player assignment"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        service = TrainingSessionService()
+        result = service.assign_metrics_to_single_player(session, player_id, metric_ids)
+        
+        if not result.get('success'):
+            return Response({
+                "detail": result.get('message', 'Failed to assign metrics'),
+                "success": False
+            }, status=status.HTTP_400_BAD_REQUEST)        # Create professional message based on operation results
+        metrics_added = result.get('metrics_added', 0)
+        metrics_removed = result.get('metrics_removed', 0)
+        
+        if metrics_added > 0 and metrics_removed > 0:
+            detail_message = f"Successfully updated player metrics: {metrics_added} metrics assigned and {metrics_removed} metrics removed."
+        elif metrics_added > 0:
+            detail_message = f"Successfully assigned {metrics_added} metric{'s' if metrics_added != 1 else ''} to player."
+        elif metrics_removed > 0:
+            detail_message = f"Successfully removed {metrics_removed} metric{'s' if metrics_removed != 1 else ''} from player."
+        else:
+            detail_message = "Player metrics configuration updated successfully."
+        
+        return Response({
+            "detail": detail_message,
+            "metrics_added": metrics_added,
+            "metrics_removed": metrics_removed,
+            "success": True,
+            "player_id": player_id,
+            "metric_count": len(metric_ids),
+            "result": result
         })
 
 class PlayerTrainingViewSet(viewsets.ModelViewSet):
@@ -1209,8 +1365,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
             user = request.user
-            
-            # Use service to get player detail analytics
+              # Use service to get player detail analytics
             data = AttendanceAnalyticsService.get_player_detail_analytics(
                 player_id, base_queryset, filters, user
             )
@@ -1222,9 +1377,55 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+            
     def _get_filters(self, request):
         """
         Extract filters from request parameters
         Note: Role-based filtering is handled separately in get_base_queryset()
         """
         return AttendanceAnalyticsService.get_filters(request)
+
+    @action(detail=True, methods=['post'])
+    def assign_metrics_to_players(self, request, pk=None):
+        """Assign specific metrics to specific players in a training session"""
+        from .services import TrainingSessionService
+        
+        session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        player_ids = request.data.get('player_ids', [])
+        metric_ids = request.data.get('metric_ids', [])
+        if not isinstance(player_ids, list) or not isinstance(metric_ids, list):
+            return Response(
+                {"detail": "player_ids and metric_ids must be provided as lists"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not player_ids:
+            return Response(
+                {"detail": "player_ids must be a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        service = TrainingSessionService()
+        result = service.assign_metrics_to_players_in_session(session, player_ids, metric_ids)
+        
+        # Calculate totals from the results
+        total_added = sum(player_result.get('created_records', 0) for player_result in result.get('results', []))
+        total_removed = sum(player_result.get('deleted_records', 0) for player_result in result.get('results', []))
+        players_processed = result.get('total_players_processed', 0)
+        return Response({
+            "detail": f"Processed {players_processed} players - {total_added} metrics added, {total_removed} metrics removed",
+            "total_players_processed": players_processed,
+            "total_metrics_added": total_added,
+            "total_metrics_removed": total_removed,            "player_count": len(player_ids),
+            "metric_count": len(metric_ids),
+            "success": result.get('success', True),
+            "results": result.get('results', [])
+        })

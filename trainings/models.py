@@ -130,9 +130,10 @@ class TrainingSession(models.Model):
             return hours_since_completion <= 24  # 24 hours grace period
         else:
             return False  # Upcoming sessions cannot have attendance managed
+    
     def can_configure_metrics(self):
         """Check if metrics can be configured for this session"""
-        return self.status == self.Status.UPCOMING
+        return self.status in [self.Status.UPCOMING, self.Status.ONGOING]
     
     def can_record_metrics(self):
         """Check if metrics can be recorded for this session"""
