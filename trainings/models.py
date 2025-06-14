@@ -44,11 +44,7 @@ class TrainingCategory(models.Model):
     class Meta:
         verbose_name_plural = "Training Categories"
 class TrainingSession(models.Model):
-    """Records a training session for a team or individual players"""
-    class TrainingType(models.TextChoices):
-        TEAM = "team", "Team Training"
-        INDIVIDUAL = "individual", "Individual Training"
-    
+    """Records a training session for a team"""
     class Status(models.TextChoices):
         UPCOMING = "upcoming", "Upcoming"
         ONGOING = "ongoing", "Ongoing"
@@ -61,9 +57,7 @@ class TrainingSession(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     location = models.CharField(max_length=200)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True, related_name='training_sessions')    
-    coach = models.ForeignKey(Coach, on_delete=models.SET_NULL, null=True, related_name='conducted_sessions')
-    training_type = models.CharField(max_length=20, choices=TrainingType.choices, default=TrainingType.TEAM)
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='training_sessions')    
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
     categories = models.ManyToManyField(TrainingCategory, related_name='sessions')
     metrics = models.ManyToManyField('TrainingMetric', related_name='sessions', blank=True)

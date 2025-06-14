@@ -28,16 +28,15 @@ class TrainingSessionService:
             attendance_status: Default attendance status for added players
             
         Returns:
-            dict: Result with added count and details
-        """
-        # If no player_ids provided and session is a team session, add all team players
-        if not player_ids and session.training_type == 'team' and session.team:
+            dict: Result with added count and details        """
+        # If no player_ids provided, add all team players since all sessions are team sessions
+        if not player_ids and session.team:
             player_ids = list(session.team.players.values_list('user_id', flat=True))
 
         if not player_ids:
             return {
                 'success': False,
-                'error': "No player IDs provided and session is not a team session or team has no players.",
+                'error': "No player IDs provided and session has no team or team has no players.",
                 'status_code': status.HTTP_400_BAD_REQUEST
             }
 
@@ -143,9 +142,8 @@ class TrainingSessionService:
         Automatically add all team players when a team session is created
         
         Args:
-            session: TrainingSession instance
-        """
-        if session.training_type == 'team' and session.team:
+            session: TrainingSession instance        """
+        if session.team:
             player_ids = list(session.team.players.values_list('user_id', flat=True))
             existing_players = set(
                 PlayerTraining.objects.filter(session=session).values_list('player_id', flat=True)

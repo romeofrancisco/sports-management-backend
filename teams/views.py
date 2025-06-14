@@ -336,14 +336,13 @@ class TeamViewSet(ModelViewSet):
         # No pagination - return all games
         serializer = GameSummarySerializer(games, many=True, context={'request': request, 'team': team})
         return Response(serializer.data)
-    
     @action(detail=True, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def training_sessions(self, request, **kwargs):
         team = self.get_object()
         
         # Get all training sessions for the team
         trainings = TrainingSession.objects.filter(team=team).select_related(
-            'coach', 'coach__user'
+            'team'
         ).prefetch_related('categories').order_by('-date')
         
         # Add pagination support
@@ -353,7 +352,7 @@ class TeamViewSet(ModelViewSet):
             return self.get_paginated_response(serializer.data)
             
         serializer = TrainingSessionListSerializer(trainings, many=True, context={'request': request})
-        return Response(serializer.data)    
+        return Response(serializer.data)
     
     @action(detail=True, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def statistics(self, request, **kwargs):
@@ -536,7 +535,6 @@ class TeamViewSet(ModelViewSet):
             'sport': game.sport.name if game.sport else None,
             'winner_team': game.winner_team.name if game.winner_team else None
         }
-    
     def _serialize_training(self, training):
         """Serialize a TrainingSession object for JSON response"""
         if not training:
@@ -549,8 +547,7 @@ class TeamViewSet(ModelViewSet):
             'start_time': training.start_time.isoformat() if training.start_time else None,
             'end_time': training.end_time.isoformat() if training.end_time else None,
             'status': training.status,
-            'team': training.team.name if training.team else None,
-            'coach': f"{training.coach.user.first_name} {training.coach.user.last_name}" if training.coach and training.coach.user else None
+            'team': training.team.name if training.team else None
         }
 
 class SportTeamsViewSet(ReadOnlyModelViewSet):

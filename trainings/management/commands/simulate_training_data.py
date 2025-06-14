@@ -13,11 +13,9 @@ from datetime import timedelta
 
 
 class Command(BaseCommand):
-    help = 'Simulate training sessions and player metrics to test data and UI'
-
+    help = 'Simulate training sessions and player metrics to test data and UI'    
     def add_arguments(self, parser):
         parser.add_argument('--team', type=int, help='Team ID to simulate trainings for')
-        parser.add_argument('--coach', type=int, help='Coach ID to use for the trainings')
         parser.add_argument('--count', type=int, default=5, help='Number of training sessions to simulate')
         parser.add_argument('--players', type=int, default=0, help='Number of players to generate metrics for (0 = all team players)')
         parser.add_argument('--days', type=int, default=30, help='Date range in days for training scheduling')
@@ -25,9 +23,8 @@ class Command(BaseCommand):
         parser.add_argument('--metrics-per-player', type=int, default=5, help='Average number of metrics to record per player')
         parser.add_argument('--progress', action='store_true', help='Show progress in player metrics over time')
 
-    def handle(self, *args, **options):
+    def handle(self, *args, **options):        
         team_id = options.get('team')
-        coach_id = options.get('coach')
         count = options.get('count')
         players_count = options.get('players')
         days_range = options.get('days')
@@ -50,26 +47,7 @@ class Command(BaseCommand):
             if not team:
                 self.stdout.write(self.style.ERROR('No teams with players found. Please create teams and players first.'))
                 return
-        
         self.stdout.write(f'Using team: {team.name}')
-        
-        # Get coach
-        if coach_id:
-            try:
-                coach = Coach.objects.get(id=coach_id)            
-            except Coach.DoesNotExist:
-                self.stdout.write(self.style.ERROR(f'Coach with ID {coach_id} not found'))
-                return
-        else:
-            # Find a coach for this team or any staff coach
-            coach = Coach.objects.filter(
-                Q(teams=team) | Q(user__is_staff=True)
-            ).first()
-        
-        if coach:
-            self.stdout.write(f'Using coach: {coach.user.get_full_name() or coach.user.username}')
-        else:
-            self.stdout.write(self.style.WARNING('No coach found. Training sessions will be created without a coach.'))
         
         # Get or create training categories
         categories = self._ensure_training_categories()
@@ -163,8 +141,7 @@ class Command(BaseCommand):
                     start_hour = random.choice([8, 9, 10, 14, 15, 16, 17, 18])
                     start_time = timezone.datetime.strptime(f"{start_hour}:00", "%H:%M").time()
                     end_time = timezone.datetime.strptime(f"{start_hour + 2}:00", "%H:%M").time()
-                    
-                    # Create the training session
+                      # Create the training session
                     session = TrainingSession.objects.create(
                         title=f"{team.name} Training {session_date.strftime('%m/%d')}",
                         description=f"Training session for {team.name}",
@@ -173,8 +150,6 @@ class Command(BaseCommand):
                         end_time=end_time,
                         location=f"Training Ground {random.randint(1, 5)}",
                         team=team,
-                        coach=coach,
-                        training_type=TrainingSession.TrainingType.TEAM,
                         notes=f"Simulated training session for {team.name}"
                     )
                     
@@ -406,13 +381,13 @@ class Command(BaseCommand):
         for metric in selected_metrics:
             # Generate realistic values based on metric type and previous value
             value = self._generate_metric_value(metric, prev_records.get(metric.id), show_progress)
-            
-            # Create the metric record
-            PlayerMetricRecord.objects.create(                player_training=player_training,
+              # Create the metric record
+            PlayerMetricRecord.objects.create(
+                player_training=player_training,
                 metric=metric,
                 value=value,
                 notes="",  # Optional notes
-                recorded_by=player_training.session.coach,
+                recorded_by=None,  # No coach assigned since we removed coach field
                 recorded_at=timezone.now()
             )
 

@@ -7,12 +7,9 @@ class TrainingSessionFilter(filters.FilterSet):
     end_date = filters.DateFilter(field_name="date", lookup_expr='lte')
     search = filters.CharFilter(method='filter_by_search', label="Search by title, description or location")
     team = filters.NumberFilter(field_name="team", method='filter_by_team')
-    
     class Meta:
         model = TrainingSession
         fields = {
-            'coach': ['exact'],
-            'training_type': ['exact'],
             'categories': ['exact'],
             'date': ['exact', 'lt', 'gt'],
         }

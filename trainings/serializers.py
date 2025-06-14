@@ -1,7 +1,7 @@
 # filepath: c:\Users\ASUS\Desktop\CAPSTONE\backend\sports_management\trainings\serializers.py
 from rest_framework import serializers
 from .models import MetricUnit, TrainingCategory, TrainingSession, PlayerTraining, TrainingMetric, PlayerMetricRecord
-from teams.models import Player, Team, Coach
+from teams.models import Player, Team
 from datetime import datetime
 from django.utils import timezone
 import statistics
@@ -82,7 +82,6 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
 
 class TrainingSessionListSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source="team.name", read_only=True)
-    coach_name = serializers.CharField(source="coach.user.get_full_name", read_only=True)
     categories_count = serializers.IntegerField(source="categories.count", read_only=True)
     players_count = serializers.SerializerMethodField()
     auto_status = serializers.CharField(source="get_auto_status", read_only=True)
@@ -93,10 +92,9 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
     class Meta:
         model = TrainingSession
         fields = ["id", "session_id", "title", "date", "start_time", "end_time", 
-                  "team", "team_name", "coach", "coach_name", "location",
-                  "training_type", "status", "auto_status", "duration_minutes", 
-                  "categories_count", "players_count", "can_manage_attendance", 
-                  "can_configure_metrics", "can_record_metrics"]
+                  "team", "team_name", "location", "status", "auto_status", 
+                  "duration_minutes", "categories_count", "players_count", 
+                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
     
     def get_players_count(self, obj):
         return obj.player_records.count()
@@ -104,7 +102,6 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
 
 class TrainingSessionDetailSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source="team.name", read_only=True)
-    coach_name = serializers.CharField(source="coach.user.get_full_name", read_only=True)
     categories = TrainingCategorySerializer(many=True, read_only=True)
     player_records = PlayerTrainingSerializer(many=True, read_only=True)
     auto_status = serializers.CharField(source="get_auto_status", read_only=True)
@@ -115,9 +112,8 @@ class TrainingSessionDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = TrainingSession
         fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
-                  "team", "team_name", "coach", "coach_name", "location",
-                  "training_type", "status", "auto_status", "categories", "notes", 
-                  "created_at", "updated_at", "duration_minutes", "player_records",
+                  "team", "team_name", "location", "status", "auto_status", "categories", 
+                  "notes", "created_at", "updated_at", "duration_minutes", "player_records",
                   "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
 
 
