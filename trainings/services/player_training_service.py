@@ -134,12 +134,12 @@ class PlayerTrainingService:
                 ).first()
                 
                 if not existing_record:
-                    # Create a placeholder record with value 0
+                    # Create a placeholder record with value None
                     record = PlayerMetricRecord.objects.create(
                         player_training=player_training,
                         metric_id=metric_id,
-                        value=0,  # Placeholder value
-                        notes="Metric assigned - awaiting value input"
+                        value=None,  # Placeholder value
+                        notes=""
                     )
                     created_records.append(record.id)
                     
@@ -311,4 +311,47 @@ class PlayerTrainingService:
         return {
             'success': True,
             'previous_records': previous_records
+        }
+
+    @staticmethod
+    def get_previous_record_for_metric(player_training, metric_id):
+        """
+        Get the previous record for a specific metric for this player
+        
+        Args:
+            player_training: PlayerTraining instance
+            metric_id: ID of the specific metric to look for
+            
+        Returns:
+            dict: Previous metric record with normalization weight info or None if not found
+        """
+        player = player_training.player
+        current_session = player_training.session
+        
+        # Find the most recent training session before this one that has this specific metric
+        previous_records = PlayerMetricRecord.objects.filter(
+            player_training__player=player,
+            player_training__session__date__lt=current_session.date,
+            metric_id=metric_id
+        ).select_related(
+            'metric', 
+            'metric__metric_unit',
+            'player_training__session'
+        ).order_by('-player_training__session__date')
+        
+        if not previous_records.exists():
+            return None
+            
+        previous_record = previous_records.first()
+        
+        return {
+            'metric_id': previous_record.metric.id,
+            'metric_name': previous_record.metric.name,
+            'value': previous_record.value,
+            'notes': previous_record.notes,
+            'session_date': previous_record.player_training.session.date,
+            'session_title': previous_record.player_training.session.title,
+            'unit': previous_record.metric.metric_unit.code if previous_record.metric.metric_unit else '-',
+            'is_lower_better': previous_record.metric.is_lower_better,
+            'normalization_weight': float(previous_record.metric.metric_unit.normalization_weight) if previous_record.metric.metric_unit else 1.0
         }

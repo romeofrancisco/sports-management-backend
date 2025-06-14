@@ -824,21 +824,88 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         
         service = PlayerTrainingService()
         result = service.update_attendance(player_training, new_status, notes)
-        
         return Response({
             "detail": "Attendance updated.",
             "attendance_status": result['attendance_status'],
-            "notes": result['notes']
-        })
+            "notes": result['notes']        })
         
     @action(detail=True, methods=['get'])
     def previous_records(self, request, pk=None):
-        """Get previous metric records for this player"""
+        """Get previous metric records for this player with optional improvement calculation"""
         player_training = self.get_object()
-        previous_records = self._get_previous_records(player_training)
-        return Response({
-            "previous_records": previous_records
-        })
+        
+        # Check if a specific metric is requested
+        metric_id = request.query_params.get('metric_id')
+        
+        if metric_id:
+            # Get specific metric record with improvement calculation
+            from .services import PlayerTrainingService
+            from .utils import calculate_normalized_improvement
+            
+            service = PlayerTrainingService()
+            metric_record = service.get_previous_record_for_metric(
+                player_training, 
+                metric_id
+            )
+            
+            if metric_record:
+                # Check if current_value is provided for real-time calculation
+                current_value_param = request.GET.get('current_value')
+                
+                if current_value_param:
+                    # Real-time improvement calculation with input value
+                    try:
+                        current_value = float(current_value_param)
+                        
+                        # Calculate improvement using the shared utility function
+                        improvement_data = calculate_normalized_improvement(
+                            current_value,
+                            metric_record['value'],
+                            metric_record['is_lower_better'],
+                            metric_record.get('normalization_weight', 1.0)
+                        )
+                        
+                        metric_record['improvement'] = improvement_data
+                        
+                    except (ValueError, TypeError):
+                        # Invalid current_value provided
+                        metric_record['improvement'] = None
+                else:
+                    # Check for existing saved record for comparison
+                    try:
+                        current_record = PlayerMetricRecord.objects.get(
+                            player_training=player_training,
+                            metric_id=metric_id
+                        )
+                        
+                        # Calculate improvement using the shared utility function
+                        improvement_data = calculate_normalized_improvement(
+                            current_record.value,
+                            metric_record['value'],
+                            metric_record['is_lower_better'],
+                            metric_record.get('normalization_weight', 1.0)
+                        )
+                        
+                        metric_record['improvement'] = improvement_data
+                        
+                    except PlayerMetricRecord.DoesNotExist:
+                        # No current record to compare against
+                        metric_record['improvement'] = None
+                    
+                return Response({
+                    "previous_record": metric_record
+                })
+            else:
+                return Response({
+                    "previous_record": None,
+                    "message": "No previous record found for this metric"
+                })
+        else:
+            # Get all previous records (existing behavior)
+            previous_records = self._get_previous_records(player_training)
+            return Response({
+                "previous_records": previous_records
+            })
     
     @action(detail=False, methods=['post'])
     def bulk_update_attendance(self, request):
