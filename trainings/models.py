@@ -44,11 +44,7 @@ class TrainingCategory(models.Model):
     class Meta:
         verbose_name_plural = "Training Categories"
 class TrainingSession(models.Model):
-    """Records a training session for a team or individual players"""
-    class TrainingType(models.TextChoices):
-        TEAM = "team", "Team Training"
-        INDIVIDUAL = "individual", "Individual Training"
-    
+    """Records a training session for a team"""
     class Status(models.TextChoices):
         UPCOMING = "upcoming", "Upcoming"
         ONGOING = "ongoing", "Ongoing"
@@ -61,9 +57,7 @@ class TrainingSession(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     location = models.CharField(max_length=200)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, null=True, blank=True, related_name='training_sessions')    
-    coach = models.ForeignKey(Coach, on_delete=models.SET_NULL, null=True, related_name='conducted_sessions')
-    training_type = models.CharField(max_length=20, choices=TrainingType.choices, default=TrainingType.TEAM)
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='training_sessions')    
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
     categories = models.ManyToManyField(TrainingCategory, related_name='sessions')
     metrics = models.ManyToManyField('TrainingMetric', related_name='sessions', blank=True)
@@ -213,7 +207,7 @@ class PlayerMetricRecord(models.Model):
     """Records a specific measurement for a player during a training session"""    
     player_training = models.ForeignKey(PlayerTraining, on_delete=models.CASCADE, related_name='metric_records')
     metric = models.ForeignKey(TrainingMetric, on_delete=models.CASCADE, related_name='records')
-    value = models.DecimalField(max_digits=10, decimal_places=2)
+    value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="The recorded value for this metric")
     notes = models.TextField(blank=True)
     recorded_by = models.ForeignKey(Coach, on_delete=models.SET_NULL, null=True, related_name='recorded_metrics')
     recorded_at = models.DateTimeField(auto_now_add=True)
@@ -234,38 +228,46 @@ class PlayerMetricRecord(models.Model):
             models.Index(fields=['metric'], name='metric_only_idx'),
             
             # For efficient player training lookup
-            models.Index(fields=['player_training'], name='player_training_idx'),
-        ]
-    
+            models.Index(fields=['player_training'], name='player_training_idx'),        ]
+
     @property
     def improvement_from_last(self):
         """Calculate improvement from last recorded value for this player and metric"""
+        # Return None if current value is not recorded
+        if self.value is None:
+            return None
+            
         prev_record = PlayerMetricRecord.objects.filter(
             player_training__player=self.player_training.player,
             metric=self.metric,
             player_training__session__date__lt=self.player_training.session.date
         ).order_by('-player_training__session__date').first()
         
-        if not prev_record:
+        if not prev_record or prev_record.value is None:
             return None
             
         raw_diff = self.value - prev_record.value
-          # For metrics where lower is better (like time), negate the difference
+        # For metrics where lower is better (like time), negate the difference
         if self.metric.is_lower_better:
             return -raw_diff
-        return raw_diff
+        return raw_diff    
+    
     @property
     def improvement_percentage(self):
         """Calculate percentage improvement from last recorded value with unit normalization"""
         from decimal import Decimal
         
+        # Return None if current value is not recorded
+        if self.value is None:
+            return None
+        
         prev_record = PlayerMetricRecord.objects.filter(
             player_training__player=self.player_training.player,
             metric=self.metric,
             player_training__session__date__lt=self.player_training.session.date
         ).order_by('-player_training__session__date').first()
         
-        if not prev_record or prev_record.value == 0:
+        if not prev_record or prev_record.value is None or prev_record.value == 0:
             return None
             
         # Convert values to Decimal for precise calculation

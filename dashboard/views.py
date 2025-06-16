@@ -645,11 +645,10 @@ class DashboardViewSet(viewsets.ViewSet):
             # Get recent training records
             recent_training_records = PlayerTraining.objects.filter(
                 player=player, session__date__gte=last_30_days.date()
-            )
-
-            # Get recent metric records
+            )            # Get recent metric records
             recent_metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player, recorded_at__gte=last_30_days
+                player_training__player=player, recorded_at__gte=last_30_days,
+                value__isnull=False  # Only include records with actual values
             ).order_by("-recorded_at")
 
             # Calculate attendance rate
@@ -708,21 +707,53 @@ class DashboardViewSet(viewsets.ViewSet):
 
         return ProgressService.calculate_recent_improvement(
             player, date_from=start_date
-        )
-
-    @action(detail=False, methods=["get"])
+        )    
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def player_overview(self, request):
-        """Personal dashboard for players"""
+        """Personal dashboard for players - also supports admin/coach access to specific player data"""
         user = request.user
+        player_id = request.query_params.get('player_id')
 
         try:
-            if not hasattr(user, "player_profile"):
-                return Response(
-                    {"error": "Player profile not found"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            player = user.player_profile
+            # Import Player model at the beginning
+            from teams.models import Player
+            
+            # If player_id is provided, check if user has permission to view other players
+            if player_id:
+                # Admin users can view any player
+                if user.role == 'Admin':
+                    try:
+                        player = Player.objects.get(user_id=player_id)
+                    except Player.DoesNotExist:
+                        return Response(
+                            {"error": "Player not found"},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+                # Coach users can only view players from their teams
+                elif user.role == 'Coach' and hasattr(user, "coach_profile"):
+                    try:
+                        player = Player.objects.get(
+                            user_id=player_id,
+                            team__in=user.coach_profile.teams.all()
+                        )
+                    except Player.DoesNotExist:
+                        return Response(
+                            {"error": "Player not found or not in your teams"},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+                else:
+                    return Response(
+                        {"error": "Permission denied"},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                # Default behavior - get current user's player profile
+                if not hasattr(user, "player_profile"):
+                    return Response(
+                        {"error": "Player profile not found"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                player = user.player_profile
 
             # Personal training statistics (last 30 days)
             last_30_days = timezone.now() - timedelta(days=30)
@@ -778,11 +809,10 @@ class DashboardViewSet(viewsets.ViewSet):
                     "is_home": game.home_team == player.team,
                 }
                 for game in upcoming_games
-            ]
-
-            # Recent performance metrics
+            ]            # Recent performance metrics
             recent_metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player
+                player_training__player=player,
+                value__isnull=False  # Only include records with actual values
             ).order_by("-recorded_at")[:10]
 
             recent_metrics_data = [
@@ -794,6 +824,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "session_date": record.player_training.session.date,
                 }
                 for record in recent_metrics
+                if record.value is not None  # Additional safety check
             ]
 
             # Team information
@@ -876,159 +907,200 @@ class DashboardViewSet(viewsets.ViewSet):
             return Response(
                 {"error": "An error occurred while fetching player overview data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-    @action(detail=False, methods=["get"])
-    def player_progress(self, request):        
-        """Personal progress tracking for players"""
+            )        
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def player_progress(self, request):
+        """Personal progress tracking for players - also supports admin/coach access to specific player data"""
         user = request.user
+        player_id = request.query_params.get('player_id')
 
-        if not hasattr(user, "player_profile"):
-            return Response({"error": "Player profile not found"}, status=400)
+        try:
+            # Import Player model at the beginning
+            from teams.models import Player
+            
+            # If player_id is provided, check if user has permission to view other players
+            if player_id:
+                # Admin users can view any player
+                if user.role == 'Admin':
+                    try:
+                        player = Player.objects.get(user_id=player_id)
+                    except Player.DoesNotExist:
+                        return Response(
+                            {"error": "Player not found"},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+                # Coach users can only view players from their teams
+                elif user.role == 'Coach' and hasattr(user, "coach_profile"):
+                    try:
+                        player = Player.objects.get(
+                            user_id=player_id,
+                            team__in=user.coach_profile.teams.all()
+                        )
+                    except Player.DoesNotExist:
+                        return Response(
+                            {"error": "Player not found or not in your teams"},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+                else:
+                    return Response(
+                        {"error": "Permission denied"},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )            
+            else:
+                # Default behavior - get current user's player profile
+                if not hasattr(user, "player_profile"):
+                    return Response({"error": "Player profile not found"}, status=400)
+                player = user.player_profile
 
-        player = user.player_profile
-
-        # Get progress data for different time periods
-        time_periods = {
-            "last_week": timezone.now() - timedelta(days=7),
-            "last_month": timezone.now() - timedelta(days=30),
-            "last_3_months": timezone.now() - timedelta(days=90),
-        }
-
-        progress_data = {}
-        for period_name, start_date in time_periods.items():
-            metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player, recorded_at__gte=start_date
-            ).order_by("metric__name", "recorded_at")
-
-            training_sessions = PlayerTraining.objects.filter(
-                player=player, session__date__gte=start_date.date()
-            )
-
-            progress_data[period_name] = {
-                "total_metrics_recorded": metrics.count(),
-                "unique_metrics": metrics.values("metric__name").distinct().count(),
-                "training_sessions_attended": training_sessions.filter(
-                    attendance_status="present"
-                ).count(),
-                "total_training_sessions": training_sessions.count(),
+            # Get progress data for different time periods
+            time_periods = {
+                "last_week": timezone.now() - timedelta(days=7),
+                "last_month": timezone.now() - timedelta(days=30),
+                "last_3_months": timezone.now() - timedelta(days=90),
             }
-        
-        # Get metric trends (last 3 months) with proper improvement calculations
-        from trainings.services.progress_service import ProgressService
-        from trainings.utils import calculate_normalized_improvement
-        
-        # Calculate 3-month date range for consistent timeframe
-        three_months_ago = timezone.now() - timedelta(days=90)
-        
-        metric_trends = {}
-        progress_metrics = []
-        unique_metrics = (
-            PlayerMetricRecord.objects.filter(
-                player_training__player=player,
-                recorded_at__gte=three_months_ago
+
+            progress_data = {}
+            for period_name, start_date in time_periods.items():                
+                metrics = PlayerMetricRecord.objects.filter(
+                    player_training__player=player, recorded_at__gte=start_date,
+                    value__isnull=False  # Only include records with actual values
+                ).order_by("metric__name", "recorded_at")
+
+                training_sessions = PlayerTraining.objects.filter(
+                    player=player, session__date__gte=start_date.date()
+                )
+
+                progress_data[period_name] = {
+                    "total_metrics_recorded": metrics.count(),
+                    "unique_metrics": metrics.values("metric__name").distinct().count(),
+                    "training_sessions_attended": training_sessions.filter(
+                        attendance_status="present"
+                    ).count(),
+                    "total_training_sessions": training_sessions.count(),
+                }
+            
+            # Get metric trends (last 3 months) with proper improvement calculations
+            from trainings.services.progress_service import ProgressService
+            from trainings.utils import calculate_normalized_improvement
+            
+            # Calculate 3-month date range for consistent timeframe
+            three_months_ago = timezone.now() - timedelta(days=90)
+            metric_trends = {}
+            progress_metrics = []
+            
+            unique_metrics = (
+                PlayerMetricRecord.objects.filter(
+                    player_training__player=player,
+                    recorded_at__gte=three_months_ago,
+                    value__isnull=False  # Only include records with actual values
+                )
+                .values_list("metric__name", flat=True)
+                .distinct()
             )
-            .values_list("metric__name", flat=True)
-            .distinct()
-        )
-        
-        for metric_name in unique_metrics:
-            recent_records = PlayerMetricRecord.objects.filter(
-                player_training__player=player, 
-                metric__name=metric_name,
-                recorded_at__gte=three_months_ago
-            ).order_by("recorded_at")
             
-            if not recent_records.exists():
-                continue
+            for metric_name in unique_metrics:
+                recent_records = PlayerMetricRecord.objects.filter(
+                    player_training__player=player, 
+                    metric__name=metric_name,
+                    recorded_at__gte=three_months_ago,
+                    value__isnull=False  # Only include records with actual values
+                ).order_by("recorded_at")
                 
-            # Get only the latest and first records for improvement calculation
-            first_record = recent_records.first()
-            latest_record = recent_records.last()
-            
-            # Calculate accurate improvement percentage using normalized improvement function with weights
-            improvement_percentage = 0
-            if first_record and latest_record and first_record != latest_record:
-                first_value = float(first_record.value)
-                last_value = float(latest_record.value)
-                
-                # Get the metric object to check if lower is better and get normalization weight
-                metric_obj = first_record.metric
-                if metric_obj:
-                    # Get the normalization weight from the metric unit
-                    normalization_weight = float(metric_obj.metric_unit.normalization_weight) if metric_obj.metric_unit and metric_obj.metric_unit.normalization_weight else 1.0
+                if not recent_records.exists():
+                    continue
                     
-                    # Use the normalized improvement calculation function with weight
-                    improvement_result = calculate_normalized_improvement(
-                        last_value, first_value, metric_obj.is_lower_better, normalization_weight
-                    )
-                    improvement_percentage = improvement_result['percentage']
+                # Get only the latest and first records for improvement calculation
+                first_record = recent_records.first()
+                latest_record = recent_records.last()
+                
+                # Calculate accurate improvement percentage using normalized improvement function with weights
+                improvement_percentage = 0
+                if first_record and latest_record and first_record != latest_record:
+                    first_value = float(first_record.value)
+                    last_value = float(latest_record.value)
+                    
+                    # Get the metric object to check if lower is better and get normalization weight
+                    metric_obj = first_record.metric
+                    if metric_obj:
+                        # Get the normalization weight from the metric unit
+                        normalization_weight = float(metric_obj.metric_unit.normalization_weight) if metric_obj.metric_unit and metric_obj.metric_unit.normalization_weight else 1.0
+                        
+                        # Use the normalized improvement calculation function with weight
+                        improvement_result = calculate_normalized_improvement(
+                            last_value, first_value, metric_obj.is_lower_better, normalization_weight
+                        )
+                        improvement_percentage = improvement_result['percentage']
 
-            # Only store the latest metric value with improvement percentage
-            metric_data = [{
-                "value": float(latest_record.value),
-                "date": latest_record.player_training.session.date,
-                "unit": latest_record.metric.metric_unit.code,
-                "improvement_percentage": improvement_percentage
-            }]
+                # Only store the latest metric value with improvement percentage
+                metric_data = [{
+                    "value": float(latest_record.value),
+                    "date": latest_record.player_training.session.date,
+                    "unit": latest_record.metric.metric_unit.code,
+                    "improvement_percentage": improvement_percentage
+                }]
+                
+                metric_trends[metric_name] = metric_data
+
+                # Create progress metrics format expected by frontend
+                if metric_data:
+                    latest_value = metric_data[-1]["value"] if metric_data else 0
+                    earliest_value = metric_data[0]["value"] if len(metric_data) > 1 else latest_value
+                    # Assume a target value (in real app, this would come from training goals)
+                    target_value = latest_value * 1.2  # 20% improvement target
+                    progress_percentage = min((latest_value / target_value) * 100, 100) if target_value > 0 else 0
+
+                    progress_metrics.append({
+                        "metric_name": metric_name,
+                        "current_value": latest_value,
+                        "target_value": target_value,
+                        "unit": metric_data[-1]["unit"],
+                        "progress_percentage": progress_percentage,
+                        "improvement_percentage": float(improvement_percentage)  # Ensure it's a number
+                    })        # Use ProgressService to calculate weighted overall improvement for consistent average
+            overall_improvement = ProgressService.calculate_overall_improvement(player, three_months_ago, timezone.now())
             
-            metric_trends[metric_name] = metric_data
+            # Calculate recent improvement for the last 90 days (consistent with dashboard data timeframe)
+            recent_improvement = ProgressService.calculate_recent_improvement(player, three_months_ago, timezone.now())
+            
+            # Calculate progress summary expected by frontend using weighted improvement calculations
+            total_metrics = len(progress_metrics)
+            # Use the weighted overall improvement if available, otherwise fall back to simple average
+            if overall_improvement:
+                average_improvement = overall_improvement['percentage']
+            else:
+                average_improvement = sum(metric.get("improvement_percentage", 0) for metric in progress_metrics) / total_metrics if total_metrics > 0 else 0
+            
+            # Use recent improvement if available, otherwise fallback to average improvement
+            if recent_improvement:
+                recent_improvement_percentage = recent_improvement['percentage']
+            else:
+                recent_improvement_percentage = average_improvement
+            
+            goals_achieved = sum(1 for metric in progress_metrics if metric.get("progress_percentage", 0) >= 100)
 
-            # Create progress metrics format expected by frontend
-            if metric_data:
-                latest_value = metric_data[-1]["value"] if metric_data else 0
-                earliest_value = metric_data[0]["value"] if len(metric_data) > 1 else latest_value
-                # Assume a target value (in real app, this would come from training goals)
-                target_value = latest_value * 1.2  # 20% improvement target
-                progress_percentage = min((latest_value / target_value) * 100, 100) if target_value > 0 else 0
+            frontend_progress_summary = {
+                "total_metrics": total_metrics,
+                "average_improvement": average_improvement,
+                "recent_improvement": recent_improvement_percentage,
+                "goals_achieved": goals_achieved
+            }        
+            data = {
+                # Frontend expected structure
+                "progress_metrics": progress_metrics,
+                "progress_summary": frontend_progress_summary,
+                # Keep original structure for backward compatibility
+                "progress_summary_detailed": progress_data, 
+                "metric_trends": metric_trends
+            }        
+            serializer = PlayerProgressDetailSerializer(data)
+            return Response(serializer.data)
 
-                progress_metrics.append({
-                    "metric_name": metric_name,
-                    "current_value": latest_value,
-                    "target_value": target_value,
-                    "unit": metric_data[-1]["unit"],
-                    "progress_percentage": progress_percentage,
-                    "improvement_percentage": float(improvement_percentage)  # Ensure it's a number
-                })        # Use ProgressService to calculate weighted overall improvement for consistent average
-        overall_improvement = ProgressService.calculate_overall_improvement(player, three_months_ago, timezone.now())
-        
-        # Calculate recent improvement for the last 90 days (consistent with dashboard data timeframe)
-        recent_improvement = ProgressService.calculate_recent_improvement(player, three_months_ago, timezone.now())
-        
-        # Calculate progress summary expected by frontend using weighted improvement calculations
-        total_metrics = len(progress_metrics)
-        # Use the weighted overall improvement if available, otherwise fall back to simple average
-        if overall_improvement:
-            average_improvement = overall_improvement['percentage']
-        else:
-            average_improvement = sum(metric.get("improvement_percentage", 0) for metric in progress_metrics) / total_metrics if total_metrics > 0 else 0
-        
-        # Use recent improvement if available, otherwise fallback to average improvement
-        if recent_improvement:
-            recent_improvement_percentage = recent_improvement['percentage']
-        else:
-            recent_improvement_percentage = average_improvement
-        
-        goals_achieved = sum(1 for metric in progress_metrics if metric.get("progress_percentage", 0) >= 100)
-
-        frontend_progress_summary = {
-            "total_metrics": total_metrics,
-            "average_improvement": average_improvement,
-            "recent_improvement": recent_improvement_percentage,
-            "goals_achieved": goals_achieved
-        }
-
-        data = {
-            # Frontend expected structure
-            "progress_metrics": progress_metrics,
-            "progress_summary": frontend_progress_summary,
-            # Keep original structure for backward compatibility
-            "progress_summary_detailed": progress_data, 
-            "metric_trends": metric_trends
-        }
-
-        serializer = PlayerProgressDetailSerializer(data)
-        return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error in player_progress: {str(e)}")
+            return Response(
+                {"error": "An error occurred while fetching player progress data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
     def admin_insights(self, request):

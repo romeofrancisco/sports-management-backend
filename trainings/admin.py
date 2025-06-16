@@ -21,22 +21,22 @@ class PlayerTrainingInline(admin.TabularInline):
 
 @admin.register(TrainingSession)
 class TrainingSessionAdmin(admin.ModelAdmin):
-    list_display = ('title', 'date', 'team', 'coach', 'training_type', 'location', 'duration_minutes')
-    list_filter = ('date', 'training_type', 'team', 'coach', 'categories')
+    list_display = ('title', 'date', 'team', 'location', 'duration_minutes')
+    list_filter = ('date', 'team', 'categories')
     search_fields = ('title', 'description', 'location')
     date_hierarchy = 'date'
     filter_horizontal = ('categories',)
-    # Removed autocomplete_fields for team and coach as they're external models
+    # Removed autocomplete_fields for team as it's an external model
     inlines = [PlayerTrainingInline]
     fieldsets = (
         (None, {
-            'fields': ('title', 'description', 'training_type')
+            'fields': ('title', 'description')
         }),
         ('Schedule', {
             'fields': ('date', 'start_time', 'end_time', 'location')
         }),
-        ('Team & Coach', {
-            'fields': ('team', 'coach')
+        ('Team', {
+            'fields': ('team',)
         }),
         ('Categories', {
             'fields': ('categories',)

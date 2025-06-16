@@ -110,8 +110,7 @@ class TrainingPermissionTestCase(APITestCase):
             start_time='10:00:00',
             end_time='12:00:00',
             location='Field 1',
-            team=self.team1,
-            training_type='team'
+            team=self.team1
         )
         self.session2 = TrainingSession.objects.create(
             title='Team Beta Training',
@@ -120,8 +119,7 @@ class TrainingPermissionTestCase(APITestCase):
             start_time='14:00:00',
             end_time='16:00:00',
             location='Field 2',
-            team=self.team2,
-            training_type='team'
+            team=self.team2
         )
         
         # Create player training records
@@ -206,8 +204,7 @@ class TrainingPermissionTestCase(APITestCase):
             'start_time': '10:00:00',
             'end_time': '12:00:00',
             'location': 'Field 1',
-            'team': self.team1.id,
-            'training_type': 'team'
+            'team': self.team1.id
         }
         response = self.client.post(url, data)
         
@@ -222,10 +219,8 @@ class TrainingPermissionTestCase(APITestCase):
             'description': 'Test session',
             'date': '2024-01-20',
             'start_time': '10:00:00',
-            'end_time': '12:00:00',
-            'location': 'Field 2',
-            'team': self.team2.id,  # Team 2 is not coached by coach1
-            'training_type': 'team'
+            'end_time': '12:00:00',            'location': 'Field 2',
+            'team': self.team2.id  # Team 2 is not coached by coach1
         }
         response = self.client.post(url, data)
         
@@ -242,8 +237,7 @@ class TrainingPermissionTestCase(APITestCase):
             'start_time': '10:00:00',
             'end_time': '12:00:00',
             'location': 'Field 1',
-            'team': self.team1.id,
-            'training_type': 'team'
+            'team': self.team1.id
         }
         response = self.client.post(url, data)
         
@@ -260,8 +254,7 @@ class TrainingPermissionTestCase(APITestCase):
             'start_time': '10:00:00',
             'end_time': '12:00:00',
             'location': 'Field 1',
-            'team': self.team1.id,
-            'training_type': 'team'
+            'team': self.team1.id
         }
         response = self.client.put(url, data)
         
@@ -279,8 +272,7 @@ class TrainingPermissionTestCase(APITestCase):
             'start_time': '14:00:00',
             'end_time': '16:00:00',
             'location': 'Field 2',
-            'team': self.team2.id,
-            'training_type': 'team'
+            'team': self.team2.id
         }
         response = self.client.put(url, data)
         

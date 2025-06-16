@@ -28,16 +28,15 @@ class TrainingSessionService:
             attendance_status: Default attendance status for added players
             
         Returns:
-            dict: Result with added count and details
-        """
-        # If no player_ids provided and session is a team session, add all team players
-        if not player_ids and session.training_type == 'team' and session.team:
+            dict: Result with added count and details        """
+        # If no player_ids provided, add all team players since all sessions are team sessions
+        if not player_ids and session.team:
             player_ids = list(session.team.players.values_list('user_id', flat=True))
 
         if not player_ids:
             return {
                 'success': False,
-                'error': "No player IDs provided and session is not a team session or team has no players.",
+                'error': "No player IDs provided and session has no team or team has no players.",
                 'status_code': status.HTTP_400_BAD_REQUEST
             }
 
@@ -120,10 +119,10 @@ class TrainingSessionService:
                 attendance_data_percentages[f'{status}_percentage'] = 0
         
         # Merge percentages into attendance data
-        attendance_data_with_percentages = {**attendance_data, **attendance_data_percentages}
-          # Get metrics recorded in this session
+        attendance_data_with_percentages = {**attendance_data, **attendance_data_percentages}        # Get metrics recorded in this session
         metrics_summary = PlayerMetricRecord.objects.filter(
-            player_training__session=session
+            player_training__session=session,
+            value__isnull=False  # Only include records with actual values
         ).values('metric__name', 'metric__metric_unit__code', 'metric__is_lower_better').annotate(
             avg_value=Avg('value'),
             min_value=Min('value'),
@@ -143,9 +142,8 @@ class TrainingSessionService:
         Automatically add all team players when a team session is created
         
         Args:
-            session: TrainingSession instance
-        """
-        if session.training_type == 'team' and session.team:
+            session: TrainingSession instance        """
+        if session.team:
             player_ids = list(session.team.players.values_list('user_id', flat=True))
             existing_players = set(
                 PlayerTraining.objects.filter(session=session).values_list('player_id', flat=True)

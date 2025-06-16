@@ -5,11 +5,13 @@ from .views import (
     PlayerStatViewSet, 
     SubstitutionViewSet,  # Import the new view
 )
+from .improvement_views import PlayerImprovementViewSet
 
 router = DefaultRouter()
 router.register(r'player-stats', PlayerStatViewSet, basename='player_stat')
 router.register(r'games', GameViewSet, basename='game')
 router.register(r'substitutions', SubstitutionViewSet, basename='substitution')
+router.register(r'player-improvements', PlayerImprovementViewSet, basename='player_improvement')
 
 urlpatterns = [
     path('', include(router.urls)),

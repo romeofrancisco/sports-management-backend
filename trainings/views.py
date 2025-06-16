@@ -272,8 +272,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         from .services import TrainingSessionService
-        
-        # For coaches, ensure they can only create sessions for their teams
+          # For coaches, ensure they can only create sessions for their teams
         if self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             team = serializer.validated_data.get('team')
             if team:
@@ -282,8 +281,8 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                     raise PermissionDenied("You can only create training sessions for your own teams")
         
         session = serializer.save()
-        # Automatically add all team players if session is a team session
-        if session.training_type == 'team' and session.team:
+        # Automatically add all team players since all sessions are now team sessions
+        if session.team:
             service = TrainingSessionService()
             service.auto_add_team_players(session)
     
@@ -354,10 +353,9 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         from .services import TrainingSessionService
-        
         session = serializer.save()
-        # Automatically add all team players if session is a team session
-        if session.training_type == 'team' and session.team:
+        # Automatically add all team players since all sessions are now team sessions
+        if session.team:
             service = TrainingSessionService()
             service.auto_add_team_players(session)
     
@@ -471,10 +469,11 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "session_id": session.id,
             "session_title": session.title
         })
-    
     @action(detail=True, methods=['post'])
     def end_training(self, request, pk=None):
         """Manually end a training session (change status from ONGOING to COMPLETED)"""
+        from .services.training_completion_service import TrainingCompletionService
+        
         session = self.get_object()
         
         # Check if session can be ended
@@ -496,12 +495,16 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         session.status = session.Status.COMPLETED
         session.save(update_fields=['status'])
         
+        # Generate training completion summary
+        training_summary = TrainingCompletionService.generate_training_summary(session, request)
+        
         return Response({
             "detail": "Training session ended successfully.",
             "session_status": session.status,
             "auto_status": session.get_auto_status(),
             "session_id": session.id,
-            "session_title": session.title
+            "session_title": session.title,
+            "training_summary": training_summary
         })
     
     @action(detail=True, methods=['post'])
@@ -548,72 +551,104 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "assigned_records": result.get('total_assigned', 0),
             "results": result.get('results', [])
         })
-
+    
     @action(detail=True, methods=['post'])
-    def assign_metrics_to_single_player(self, request, pk=None):
-        """Assign specific metrics to a single player in a training session"""
-        from .services import TrainingSessionService
-        
+    def start_training(self, request, pk=None):
+        """Manually start a training session (change status from UPCOMING to ONGOING)"""
         session = self.get_object()
         
-        # Check if metrics can be configured for this session
-        if not session.can_configure_metrics():
+        # Check if session can be started
+        if session.status != session.Status.UPCOMING:
             return Response({
-                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "detail": f"Training session cannot be started. Current status: {session.status}. Only upcoming sessions can be started.",
                 "session_status": session.status,
                 "auto_status": session.get_auto_status()
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        player_id = request.data.get('player_id')
-        metric_ids = request.data.get('metric_ids', [])
-        
-        if not player_id:
-            return Response(
-                {"detail": "player_id is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if not isinstance(metric_ids, list):
-            return Response(
-                {"detail": "metric_ids must be provided as a list"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if not metric_ids:
-            return Response(
-                {"detail": "metric_ids must be a non-empty list for single player assignment"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        service = TrainingSessionService()
-        result = service.assign_metrics_to_single_player(session, player_id, metric_ids)
-        
-        if not result.get('success'):
+        # Check if user has permission to start this session
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and session.team in user.coach_profile.teams.all())):
             return Response({
-                "detail": result.get('message', 'Failed to assign metrics'),
-                "success": False
-            }, status=status.HTTP_400_BAD_REQUEST)        # Create professional message based on operation results
-        metrics_added = result.get('metrics_added', 0)
-        metrics_removed = result.get('metrics_removed', 0)
+                "detail": "You don't have permission to start this training session."
+            }, status=status.HTTP_403_FORBIDDEN)
         
-        if metrics_added > 0 and metrics_removed > 0:
-            detail_message = f"Successfully updated player metrics: {metrics_added} metrics assigned and {metrics_removed} metrics removed."
-        elif metrics_added > 0:
-            detail_message = f"Successfully assigned {metrics_added} metric{'s' if metrics_added != 1 else ''} to player."
-        elif metrics_removed > 0:
-            detail_message = f"Successfully removed {metrics_removed} metric{'s' if metrics_removed != 1 else ''} from player."
-        else:
-            detail_message = "Player metrics configuration updated successfully."
+        # Update session status to ONGOING
+        session.status = session.Status.ONGOING
+        session.save(update_fields=['status'])
+        return Response({
+            "detail": "Training session started successfully.",
+            "session_status": session.status,
+            "auto_status": session.get_auto_status(),
+            "session_id": session.id,
+            "session_title": session.title
+        })
+    @action(detail=True, methods=['post'])
+    def end_training(self, request, pk=None):
+        """Manually end a training session (change status from ONGOING to COMPLETED)"""
+        from .services.training_completion_service import TrainingCompletionService
+        
+        session = self.get_object()
+        
+        # Check if session can be ended
+        if session.status != session.Status.ONGOING:
+            return Response({
+                "detail": f"Training session cannot be ended. Current status: {session.status}. Only ongoing sessions can be ended.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has permission to end this session
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and session.team in user.coach_profile.teams.all())):
+            return Response({
+                "detail": "You don't have permission to end this training session."
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update session status to COMPLETED
+        session.status = session.Status.COMPLETED
+        session.save(update_fields=['status'])
+        
+        # Generate training completion summary
+        training_summary = TrainingCompletionService.generate_training_summary(session, request)
         
         return Response({
-            "detail": detail_message,
-            "metrics_added": metrics_added,
-            "metrics_removed": metrics_removed,
-            "success": True,
-            "player_id": player_id,
-            "metric_count": len(metric_ids),
-            "result": result
+            "detail": "Training session ended successfully.",
+            "session_status": session.status,
+            "auto_status": session.get_auto_status(),
+            "session_id": session.id,
+            "session_title": session.title,
+            "training_summary": training_summary
         })
-
+    
+    @action(detail=True, methods=['get'])
+    def training_summary(self, request, pk=None):
+        """Get training summary for a completed session"""
+        from .services.training_completion_service import TrainingCompletionService
+        
+        session = self.get_object()
+        
+        # Check if session is completed
+        if session.status != session.Status.COMPLETED:
+            return Response({
+                "detail": f"Training summary is only available for completed sessions. Current status: {session.status}.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has permission to view this session summary
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and session.team in user.coach_profile.teams.all())):
+            return Response({
+                "detail": "You don't have permission to view this training session summary."
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Generate training summary
+        training_summary = TrainingCompletionService.generate_training_summary(session, request)
+        
+        return Response({
+            "training_summary": training_summary
+        })
+    
 class PlayerTrainingViewSet(viewsets.ModelViewSet):
     queryset = PlayerTraining.objects.all()
     serializer_class = PlayerTrainingSerializer
@@ -826,21 +861,88 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         
         service = PlayerTrainingService()
         result = service.update_attendance(player_training, new_status, notes)
-        
         return Response({
             "detail": "Attendance updated.",
             "attendance_status": result['attendance_status'],
-            "notes": result['notes']
-        })
+            "notes": result['notes']        })
         
     @action(detail=True, methods=['get'])
     def previous_records(self, request, pk=None):
-        """Get previous metric records for this player"""
+        """Get previous metric records for this player with optional improvement calculation"""
         player_training = self.get_object()
-        previous_records = self._get_previous_records(player_training)
-        return Response({
-            "previous_records": previous_records
-        })
+        
+        # Check if a specific metric is requested
+        metric_id = request.query_params.get('metric_id')
+        
+        if metric_id:
+            # Get specific metric record with improvement calculation
+            from .services import PlayerTrainingService
+            from .utils import calculate_normalized_improvement
+            
+            service = PlayerTrainingService()
+            metric_record = service.get_previous_record_for_metric(
+                player_training, 
+                metric_id
+            )
+            
+            if metric_record:
+                # Check if current_value is provided for real-time calculation
+                current_value_param = request.GET.get('current_value')
+                
+                if current_value_param:
+                    # Real-time improvement calculation with input value
+                    try:
+                        current_value = float(current_value_param)
+                        
+                        # Calculate improvement using the shared utility function
+                        improvement_data = calculate_normalized_improvement(
+                            current_value,
+                            metric_record['value'],
+                            metric_record['is_lower_better'],
+                            metric_record.get('normalization_weight', 1.0)
+                        )
+                        
+                        metric_record['improvement'] = improvement_data
+                        
+                    except (ValueError, TypeError):
+                        # Invalid current_value provided
+                        metric_record['improvement'] = None
+                else:
+                    # Check for existing saved record for comparison
+                    try:
+                        current_record = PlayerMetricRecord.objects.get(
+                            player_training=player_training,
+                            metric_id=metric_id
+                        )
+                        
+                        # Calculate improvement using the shared utility function
+                        improvement_data = calculate_normalized_improvement(
+                            current_record.value,
+                            metric_record['value'],
+                            metric_record['is_lower_better'],
+                            metric_record.get('normalization_weight', 1.0)
+                        )
+                        
+                        metric_record['improvement'] = improvement_data
+                        
+                    except PlayerMetricRecord.DoesNotExist:
+                        # No current record to compare against
+                        metric_record['improvement'] = None
+                    
+                return Response({
+                    "previous_record": metric_record
+                })
+            else:
+                return Response({
+                    "previous_record": None,
+                    "message": "No previous record found for this metric"
+                })
+        else:
+            # Get all previous records (existing behavior)
+            previous_records = self._get_previous_records(player_training)
+            return Response({
+                "previous_records": previous_records
+            })
     
     @action(detail=False, methods=['post'])
     def bulk_update_attendance(self, request):
@@ -1099,10 +1201,10 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
                     raise PermissionDenied("You can only access your own radar chart data")
             else:
                 raise PermissionDenied("You don't have permission to access radar chart data")
-        
-        # Build base query for player's metric records
+          # Build base query for player's metric records
         records_query = PlayerMetricRecord.objects.filter(
-            player_training__player=player
+            player_training__player=player,
+            value__isnull=False  # Only include records with actual values
         ).select_related(
             'metric__category',
             'metric__metric_unit',
@@ -1165,10 +1267,13 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
                 
                 if metric_records.count() < 2:
                     continue
-                
-                # Get first and latest records for improvement calculation
+                  # Get first and latest records for improvement calculation
                 first_record = metric_records.first()
                 latest_record = metric_records.last()
+                
+                # Check for null values
+                if first_record.value is None or latest_record.value is None:
+                    continue
                 
                 first_value = float(first_record.value)
                 latest_value = float(latest_record.value)

@@ -37,11 +37,11 @@ class ProgressService:
         for date in unique_dates:
             # Get all metrics recorded up to this date
             metrics_till_date = {}
-            
-            # Filter records up to current date
+              # Filter records up to current date, excluding null values
             records_till_date = PlayerMetricRecord.objects.filter(
                 player_training__player=player,
-                player_training__session__date__lte=date
+                player_training__session__date__lte=date,
+                value__isnull=False  # Only include records with actual values
             ).select_related('metric', 'metric__metric_unit')  # Add metric_unit to select_related
             
             # Apply the same date filters as the original query
@@ -124,10 +124,11 @@ class ProgressService:
         # Check if player has any training records at all
         if not hasattr(player, 'training_records') or not player.training_records.exists():
             return None
-            
-        # Fetch all metrics for this player with date range
+              # Fetch all metrics for this player with date range
+        # Exclude records with null values (newly assigned metrics)
         records_query = PlayerMetricRecord.objects.filter(
-            player_training__player=player
+            player_training__player=player,
+            value__isnull=False  # Only include records with actual values
         ).select_related(
             'player_training__session',
             'metric',
@@ -171,6 +172,10 @@ class ProgressService:
             # Calculate improvement between first and last record
             first_record = sorted_records[0]
             last_record = sorted_records[-1]
+            
+            # Additional safety check for null values (extra protection)
+            if first_record['value'] is None or last_record['value'] is None:
+                continue
             
             # Calculate raw improvement
             raw_improvement = last_record['value'] - first_record['value']
@@ -222,8 +227,7 @@ class ProgressService:
             
         # Get current date
         today = timezone.now().date()
-        
-        # If specific date range is provided, use that
+          # If specific date range is provided, use that
         if date_from and date_to:
             if isinstance(date_from, str):
                 start_date = datetime.strptime(date_from, '%Y-%m-%d').date()
@@ -238,7 +242,8 @@ class ProgressService:
             recent_records = PlayerMetricRecord.objects.filter(
                 player_training__player=player,
                 player_training__session__date__gte=start_date,
-                player_training__session__date__lte=end_date
+                player_training__session__date__lte=end_date,
+                value__isnull=False  # Only include records with actual values
             ).select_related(
                 'player_training__session',
                 'metric',
@@ -252,7 +257,8 @@ class ProgressService:
             recent_records = PlayerMetricRecord.objects.filter(
                 player_training__player=player,
                 player_training__session__date__gte=thirty_days_ago,
-                player_training__session__date__lte=today
+                player_training__session__date__lte=today,
+                value__isnull=False  # Only include records with actual values
             ).select_related(
                 'player_training__session',
                 'metric',
@@ -263,7 +269,8 @@ class ProgressService:
             if not recent_records.exists():
                 # Find the most recent training session for this player
                 most_recent_session = PlayerMetricRecord.objects.filter(
-                    player_training__player=player
+                    player_training__player=player,
+                    value__isnull=False  # Only consider records with actual values
                 ).order_by('-player_training__session__date').first()
                 
                 if not most_recent_session:
@@ -277,12 +284,14 @@ class ProgressService:
                 recent_records = PlayerMetricRecord.objects.filter(
                     player_training__player=player,
                     player_training__session__date__gte=start_date,
-                    player_training__session__date__lte=most_recent_date
+                    player_training__session__date__lte=most_recent_date,
+                    value__isnull=False  # Only include records with actual values
                 ).select_related(
                     'player_training__session',
-                    'metric',
-                    'metric__metric_unit'
+                        'metric',
+                        'metric__metric_unit'
                 )
+
 
         # Group records by metric
         metrics_data = {}
@@ -360,10 +369,10 @@ class ProgressService:
         # Check if player has any training records at all
         if not hasattr(player, 'training_records') or not player.training_records.exists():
             return None
-            
-        # Fetch all metrics for this player with date range
+              # Fetch all metrics for this player with date range
         records_query = PlayerMetricRecord.objects.filter(
-            player_training__player=player
+            player_training__player=player,
+            value__isnull=False  # Only include records with actual values
         ).select_related(
             'player_training__session',
             'metric',
