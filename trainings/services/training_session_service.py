@@ -119,10 +119,10 @@ class TrainingSessionService:
                 attendance_data_percentages[f'{status}_percentage'] = 0
         
         # Merge percentages into attendance data
-        attendance_data_with_percentages = {**attendance_data, **attendance_data_percentages}
-          # Get metrics recorded in this session
+        attendance_data_with_percentages = {**attendance_data, **attendance_data_percentages}        # Get metrics recorded in this session
         metrics_summary = PlayerMetricRecord.objects.filter(
-            player_training__session=session
+            player_training__session=session,
+            value__isnull=False  # Only include records with actual values
         ).values('metric__name', 'metric__metric_unit__code', 'metric__is_lower_better').annotate(
             avg_value=Avg('value'),
             min_value=Min('value'),

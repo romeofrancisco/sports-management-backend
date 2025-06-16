@@ -1,4 +1,3 @@
-# filepath: c:\Users\ASUS\Desktop\CAPSTONE\backend\sports_management\trainings\serializers.py
 from rest_framework import serializers
 from .models import MetricUnit, TrainingCategory, TrainingSession, PlayerTraining, TrainingMetric, PlayerMetricRecord
 from teams.models import Player, Team
@@ -59,19 +58,27 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
     session_title = serializers.CharField(source="session.title", read_only=True)
     session_date = serializers.DateField(source="session.date", read_only=True)
     metric_records = PlayerMetricRecordSerializer(many=True, read_only=True)
-    
     # Add nested player data for frontend compatibility
     player = serializers.SerializerMethodField()
-    
     def get_player(self, obj):
-        """Return player data with user information"""
-        player = obj.player
+        """Return enhanced player data with profile information"""
+        user = obj.player.user
+        
+        # Get profile URL with full absolute URI when request is available
+        profile_url = None
+        if user.profile:
+            request = self.context.get('request')
+            if request:
+                profile_url = request.build_absolute_uri(user.profile.url)
+            else:
+                profile_url = user.profile.url
+        
         return {
-            'id': player.user.id,
-            'first_name': player.user.first_name,
-            'last_name': player.user.last_name,
-            'full_name': player.user.get_full_name(),
-            'jersey_number': player.jersey_number,
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'full_name': user.get_full_name(),
+            'profile': profile_url,
         }
     
     class Meta:

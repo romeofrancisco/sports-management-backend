@@ -31,11 +31,14 @@ class PerformanceService:
         """
         if len(metric_data["data_points"]) < 2:
             return None
-            
-        # Get sorted records for analysis
+              # Get sorted records for analysis
         sorted_records = sorted(metric_data["data_points"], key=lambda x: x["date"])
         first_record = sorted_records[0]
         last_record = sorted_records[-1]
+        
+        # Check for null values in the records
+        if first_record["value"] is None or last_record["value"] is None:
+            return None
         
         # Handle case where is_lower_better might not be in the metric_data
         is_lower_better = metric_data.get("is_lower_better", False)  # Default to False if missing

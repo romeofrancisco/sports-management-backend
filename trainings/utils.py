@@ -113,10 +113,10 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
             # Get player object for ProgressService
             from teams.models import Player
             try:
-                player = Player.objects.get(user_id=player_id)
-                # Get necessary records for overall calculation
+                player = Player.objects.get(user_id=player_id)                # Get necessary records for overall calculation
                 records_query = PlayerMetricRecord.objects.filter(
-                    player_training__player=player
+                    player_training__player=player,
+                    value__isnull=False  # Only include records with actual values
                 ).select_related(
                     'player_training__session',
                     'metric'
@@ -151,11 +151,11 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
                 records_by_player[player_id] = []
                 
         return records_by_player
-      # Regular metrics processing
-    # Start with a base query for all specified players and the given metric
+      # Regular metrics processing    # Start with a base query for all specified players and the given metric
     base_query = PlayerMetricRecord.objects.filter(
         player_training__player__user_id__in=player_ids,
-        metric_id=metric_id
+        metric_id=metric_id,
+        value__isnull=False  # Only include records with actual values
     ).select_related(
         'player_training__player',
         'player_training__session',
@@ -250,10 +250,18 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
         
         # Sort chronologically
         sorted_records = sorted(records, key=lambda x: x['date'])
-        
-        # Calculate overall improvement (first to last)
+          # Calculate overall improvement (first to last)
         first_record = sorted_records[0]
         last_record = sorted_records[-1]
+        
+        # Check for null values
+        if first_record['value'] is None or last_record['value'] is None:
+            improvements[player_id] = {
+                'overall_improvement': None,
+                'recent_improvement': None,
+                'best_performance': None
+            }
+            continue
         
         first_value = float(first_record['value'])
         last_value = float(last_record['value'])
@@ -284,8 +292,7 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
             )
             overall_percentage = improvement_data['percentage']
             overall_improvement = improvement_data['raw_value']
-        
-        # Calculate recent improvement (using last 30% of records or at least 2)
+          # Calculate recent improvement (using last 30% of records or at least 2)
         recent_count = max(2, int(len(sorted_records) * 0.3))
         recent_records = sorted_records[-recent_count:]
         
@@ -293,41 +300,54 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
             recent_first = recent_records[0]
             recent_last = recent_records[-1]
             
-            recent_first_value = float(recent_first['value'])
-            recent_last_value = float(recent_last['value'])
-            
-            # Get normalization weight and is_lower_better from record
-            recent_record_is_lower_better = recent_first.get('is_lower_better', metric_is_lower_better)
-            recent_normalization_weight = recent_first.get('normalization_weight', 1.0)
-            
-            # For overall metric, special handling to be consistent with other views
-            if is_overall_metric:
-                # For the overall metric, recent improvement should simply be the difference of percentages
-                # And the is_positive flag should be directly based on the sign of that difference
-                recent_improvement = recent_last_value - recent_first_value
-                recent_percentage = recent_improvement  # Already a percentage for overall metric
-                recent_improvement = 1 if recent_percentage > 0 else -1
+            # Check for null values in recent records
+            if recent_first['value'] is None or recent_last['value'] is None:
+                recent_improvement = None
+                recent_percentage = None
             else:
-                # Use the shared calculation function with normalization weights
-                recent_improvement_data = calculate_normalized_improvement(
-                    recent_last_value,
-                    recent_first_value,
-                    recent_record_is_lower_better,
-                    recent_normalization_weight
-                )
-                recent_percentage = recent_improvement_data['percentage']
-                recent_improvement = recent_improvement_data['raw_value']
+                recent_first_value = float(recent_first['value'])
+                recent_last_value = float(recent_last['value'])
+                
+                # Get normalization weight and is_lower_better from record
+                recent_record_is_lower_better = recent_first.get('is_lower_better', metric_is_lower_better)
+                recent_normalization_weight = recent_first.get('normalization_weight', 1.0)
+                
+                # For overall metric, special handling to be consistent with other views
+                if is_overall_metric:
+                    # For the overall metric, recent improvement should simply be the difference of percentages
+                    # And the is_positive flag should be directly based on the sign of that difference
+                    recent_improvement = recent_last_value - recent_first_value
+                    recent_percentage = recent_improvement  # Already a percentage for overall metric
+                    recent_improvement = 1 if recent_percentage > 0 else -1
+                else:
+                    # Use the shared calculation function with normalization weights
+                    recent_improvement_data = calculate_normalized_improvement(
+                        recent_last_value,
+                        recent_first_value,
+                        recent_record_is_lower_better,
+                        recent_normalization_weight
+                    )
+                    recent_percentage = recent_improvement_data['percentage']
+                    recent_improvement = recent_improvement_data['raw_value']
         else:
             recent_improvement = None
             recent_percentage = None
-        
-        # Find best performance
-        if metric_is_lower_better:
-            # For metrics where lower is better (like time), find minimum
-            best_record = min(sorted_records, key=lambda x: float(x['value']))
+          # Find best performance (filter out null values first)
+        valid_records = [r for r in sorted_records if r['value'] is not None]
+        if valid_records:
+            if metric_is_lower_better:
+                # For metrics where lower is better (like time), find minimum
+                best_record = min(valid_records, key=lambda x: float(x['value']))
+            else:
+                # For metrics where higher is better, find maximum
+                best_record = max(valid_records, key=lambda x: float(x['value']))
+            
+            best_performance = {
+                'value': best_record['value'],
+                'date': best_record['date']
+            }
         else:
-            # For metrics where higher is better, find maximum
-            best_record = max(sorted_records, key=lambda x: float(x['value']))
+            best_performance = None
             
         improvements[player_id] = {
             'overall_improvement': {
@@ -339,11 +359,7 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better=False
                 'percentage': recent_percentage,
                 'raw_value': recent_improvement,
                 'is_positive': recent_percentage > 0 if is_overall_metric else (recent_improvement > 0 if recent_improvement is not None else None)
-            },
-            'best_performance': {
-                'value': best_record['value'],
-                'date': best_record['date']
-            }
+            },            'best_performance': best_performance
         }
     
     return improvements

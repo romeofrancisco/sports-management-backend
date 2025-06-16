@@ -645,11 +645,10 @@ class DashboardViewSet(viewsets.ViewSet):
             # Get recent training records
             recent_training_records = PlayerTraining.objects.filter(
                 player=player, session__date__gte=last_30_days.date()
-            )
-
-            # Get recent metric records
+            )            # Get recent metric records
             recent_metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player, recorded_at__gte=last_30_days
+                player_training__player=player, recorded_at__gte=last_30_days,
+                value__isnull=False  # Only include records with actual values
             ).order_by("-recorded_at")
 
             # Calculate attendance rate
@@ -810,11 +809,10 @@ class DashboardViewSet(viewsets.ViewSet):
                     "is_home": game.home_team == player.team,
                 }
                 for game in upcoming_games
-            ]
-
-            # Recent performance metrics
+            ]            # Recent performance metrics
             recent_metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player
+                player_training__player=player,
+                value__isnull=False  # Only include records with actual values
             ).order_by("-recorded_at")[:10]
 
             recent_metrics_data = [
@@ -826,6 +824,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "session_date": record.player_training.session.date,
                 }
                 for record in recent_metrics
+                if record.value is not None  # Additional safety check
             ]
 
             # Team information
@@ -961,9 +960,10 @@ class DashboardViewSet(viewsets.ViewSet):
             }
 
             progress_data = {}
-            for period_name, start_date in time_periods.items():
+            for period_name, start_date in time_periods.items():                
                 metrics = PlayerMetricRecord.objects.filter(
-                    player_training__player=player, recorded_at__gte=start_date
+                    player_training__player=player, recorded_at__gte=start_date,
+                    value__isnull=False  # Only include records with actual values
                 ).order_by("metric__name", "recorded_at")
 
                 training_sessions = PlayerTraining.objects.filter(
@@ -985,13 +985,14 @@ class DashboardViewSet(viewsets.ViewSet):
             
             # Calculate 3-month date range for consistent timeframe
             three_months_ago = timezone.now() - timedelta(days=90)
-            
             metric_trends = {}
             progress_metrics = []
+            
             unique_metrics = (
                 PlayerMetricRecord.objects.filter(
                     player_training__player=player,
-                    recorded_at__gte=three_months_ago
+                    recorded_at__gte=three_months_ago,
+                    value__isnull=False  # Only include records with actual values
                 )
                 .values_list("metric__name", flat=True)
                 .distinct()
@@ -1001,7 +1002,8 @@ class DashboardViewSet(viewsets.ViewSet):
                 recent_records = PlayerMetricRecord.objects.filter(
                     player_training__player=player, 
                     metric__name=metric_name,
-                    recorded_at__gte=three_months_ago
+                    recorded_at__gte=three_months_ago,
+                    value__isnull=False  # Only include records with actual values
                 ).order_by("recorded_at")
                 
                 if not recent_records.exists():
