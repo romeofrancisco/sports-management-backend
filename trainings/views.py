@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Avg, Max, Min
+from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.core.exceptions import PermissionDenied
@@ -607,8 +608,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         # Update session status to COMPLETED
         session.status = session.Status.COMPLETED
         session.save(update_fields=['status'])
-        
-        # Generate training completion summary
+          # Generate training completion summary
         training_summary = TrainingCompletionService.generate_training_summary(session, request)
         
         return Response({
@@ -620,6 +620,60 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             "training_summary": training_summary
         })
     
+    @action(detail=True, methods=['post'])
+    def assign_metrics_to_single_player(self, request, pk=None):
+        """Assign specific metrics to a single player in a training session"""
+        from .services.training_session_service import TrainingSessionService
+        
+        session = self.get_object()
+        
+        # Check if metrics can be configured for this session
+        if not session.can_configure_metrics():
+            return Response({
+                "detail": f"Metrics cannot be configured for {session.status} sessions. Only upcoming and ongoing sessions allow metrics configuration.",
+                "session_status": session.status,
+                "auto_status": session.get_auto_status()
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        player_id = request.data.get('player_id')
+        metric_ids = request.data.get('metric_ids', [])
+        
+        if not player_id:
+            return Response(
+                {"detail": "player_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not isinstance(metric_ids, list):
+            return Response(
+                {"detail": "metric_ids must be provided as a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            service = TrainingSessionService()
+            result = service.assign_metrics_to_single_player(session, player_id, metric_ids)
+            
+            return Response({
+                "detail": f"Successfully assigned {len(metric_ids)} metrics to player",
+                "player_id": player_id,
+                "metric_count": len(metric_ids),
+                "assigned_metrics": result.get('assigned_metrics', []),
+                "removed_metrics": result.get('removed_metrics', []),
+                "success": True
+            })
+            
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error assigning metrics: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=True, methods=['get'])
     def training_summary(self, request, pk=None):
         """Get training summary for a completed session"""
@@ -641,13 +695,121 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             return Response({
                 "detail": "You don't have permission to view this training session summary."
             }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Generate training summary
-        training_summary = TrainingCompletionService.generate_training_summary(session, request)
-        
+          # Generate training summary
+        training_summary = TrainingCompletionService.generate_training_summary(session, request)        
         return Response({
             "training_summary": training_summary
         })
+    
+    @action(detail=False, methods=['get'], url_path='teams/(?P<team_id>[^/.]+)/last-session-missed-metrics')
+    def last_session_missed_metrics(self, request, team_id=None):
+        """Get missed metrics from the last completed training session for a specific team.
+        Focuses on absent/excused players who had metrics assigned but didn't record them.
+        
+        Query parameters:
+        - current_session_id: If provided, get missed metrics from the session before this one
+        """
+        from teams.models import Team
+        
+        try:
+            team = Team.objects.get(id=team_id)
+        except Team.DoesNotExist:
+            return Response({
+                "detail": "Team not found"
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check permissions - user should have access to this team
+        user = request.user
+        if not (user.is_admin or (hasattr(user, 'coach_profile') and team in user.coach_profile.teams.all())):
+            return Response({
+                "detail": "You don't have permission to access this team's training data."
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get current session ID from query parameters
+        current_session_id = request.query_params.get('current_session_id')
+        
+        # Get the most recent completed training session for this team
+        # If current_session_id is provided, get the session before that one
+        sessions_query = TrainingSession.objects.filter(
+            team=team,
+            status=TrainingSession.Status.COMPLETED
+        )
+        
+        if current_session_id:
+            try:
+                current_session = TrainingSession.objects.get(id=current_session_id, team=team)
+                # Get sessions that were completed before the current session
+                sessions_query = sessions_query.filter(
+                    models.Q(date__lt=current_session.date) |
+                    (models.Q(date=current_session.date) & models.Q(start_time__lt=current_session.start_time))
+                )
+            except TrainingSession.DoesNotExist:
+                return Response({
+                    "detail": "Current session not found or doesn't belong to this team"
+                }, status=status.HTTP_404_NOT_FOUND)
+        
+        last_session = sessions_query.order_by('-date', '-start_time').first()
+        
+        if not last_session:
+            return Response({
+                "detail": "No completed training sessions found for this team",
+                "last_session_date": None,
+                "players_with_missed_metrics": [],
+                "total_missed_metrics": 0
+            })
+        
+        # Get all player training records from the last session
+        # Focus on absent/excused players with assigned metrics
+        player_trainings = PlayerTraining.objects.filter(
+            session=last_session,
+            attendance_status__in=['absent', 'excused']  # Only absent/excused players
+        ).select_related('player', 'player__user').prefetch_related('assigned_metrics')
+        
+        players_with_missed_metrics = []
+        total_missed_metrics = 0
+        
+        for player_training in player_trainings:
+            # Get metrics that were assigned to this player
+            assigned_metrics = player_training.assigned_metrics.all()
+            
+            if not assigned_metrics.exists():
+                continue  # Skip if no metrics were assigned
+            
+            # Get metrics recorded by this player (should be none or few for absent/excused)
+            recorded_metrics = PlayerMetricRecord.objects.filter(
+                player_training=player_training,
+                value__isnull=False
+            ).values_list('metric_id', flat=True)
+            
+            # Find missed metrics (assigned but not recorded)
+            missed_metrics = []
+            for metric in assigned_metrics:
+                if metric.id not in recorded_metrics:
+                    missed_metrics.append({
+                        "metric_id": metric.id,
+                        "metric_name": metric.name,
+                        "metric_unit": metric.metric_unit.code if metric.metric_unit else ""
+                    })
+            
+            if missed_metrics:  # Only include players who missed metrics
+                players_with_missed_metrics.append({
+                    "player_id": player_training.player.user.id,
+                    "player_name": f"{player_training.player.user.first_name} {player_training.player.user.last_name}",
+                    "attendance_status": player_training.attendance_status,
+                    "assigned_metrics_count": assigned_metrics.count(),
+                    "missed_metrics": missed_metrics
+                })
+                total_missed_metrics += len(missed_metrics)
+        
+        return Response({
+            "last_session_date": last_session.date.isoformat() if last_session.date else None,
+            "last_session_title": last_session.title,
+            "last_session_id": last_session.id,
+            "players_with_missed_metrics": players_with_missed_metrics,
+            "total_missed_metrics": total_missed_metrics,
+            "total_absent_excused_players": player_trainings.count()
+        })
+
     
 class PlayerTrainingViewSet(viewsets.ModelViewSet):
     queryset = PlayerTraining.objects.all()

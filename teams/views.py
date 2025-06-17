@@ -546,9 +546,10 @@ class TeamViewSet(ModelViewSet):
             'date': training.date.isoformat() if training.date else None,
             'start_time': training.start_time.isoformat() if training.start_time else None,
             'end_time': training.end_time.isoformat() if training.end_time else None,
-            'status': training.status,
+            'status': training.status,            
             'team': training.team.name if training.team else None
         }
+
 
 class SportTeamsViewSet(ReadOnlyModelViewSet):
     serializer_class = TeamSerializer

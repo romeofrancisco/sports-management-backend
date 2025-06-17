@@ -58,6 +58,7 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
     session_title = serializers.CharField(source="session.title", read_only=True)
     session_date = serializers.DateField(source="session.date", read_only=True)
     metric_records = PlayerMetricRecordSerializer(many=True, read_only=True)
+    assigned_metrics = TrainingMetricSerializer(many=True, read_only=True)
     # Add nested player data for frontend compatibility
     player = serializers.SerializerMethodField()
     def get_player(self, obj):
@@ -75,8 +76,7 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
         
         return {
             'id': user.id,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
+            'first_name': user.first_name,            'last_name': user.last_name,
             'full_name': user.get_full_name(),
             'profile': profile_url,
         }
@@ -84,7 +84,7 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlayerTraining
         fields = ["id", "player", "player_name", "session", "session_title", "session_date", 
-                  "attendance_status", "notes", "metric_records"]
+                  "attendance_status", "notes", "metric_records", "assigned_metrics"]
 
 
 class TrainingSessionListSerializer(serializers.ModelSerializer):
