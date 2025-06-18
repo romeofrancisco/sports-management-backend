@@ -57,13 +57,21 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
     player_name = serializers.CharField(source="player.user.get_full_name", read_only=True)
     session_title = serializers.CharField(source="session.title", read_only=True)
     session_date = serializers.DateField(source="session.date", read_only=True)
+    session_start_time = serializers.TimeField(source="session.start_time", read_only=True)
+    session_end_time = serializers.TimeField(source="session.end_time", read_only=True)
+    session_location = serializers.CharField(source="session.location", read_only=True)
+    session_status = serializers.CharField(source="session.status", read_only=True)
+    session_description = serializers.CharField(source="session.description", read_only=True)
     metric_records = PlayerMetricRecordSerializer(many=True, read_only=True)
+    assigned_metrics = TrainingMetricSerializer(many=True, read_only=True)
+    metrics_completion_status = serializers.SerializerMethodField()
+    can_record_metrics = serializers.SerializerMethodField()
     # Add nested player data for frontend compatibility
     player = serializers.SerializerMethodField()
+    
     def get_player(self, obj):
         """Return enhanced player data with profile information"""
-        user = obj.player.user
-        
+        user = obj.player.user        
         # Get profile URL with full absolute URI when request is available
         profile_url = None
         if user.profile:
@@ -81,10 +89,69 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
             'profile': profile_url,
         }
     
+    def get_metrics_completion_status(self, obj):
+        """Calculate completion status of assigned metrics"""
+        assigned_metrics = obj.assigned_metrics.all()
+        recorded_metrics = obj.metric_records.all()
+        
+        if not assigned_metrics.exists():
+            return {
+                'total_assigned': 0,
+                'total_recorded': 0,
+                'completion_percentage': 0,
+                'status': 'no_metrics'
+            }
+        
+        total_assigned = assigned_metrics.count()
+        # Count metrics that have been recorded (have a value)
+        recorded_metric_ids = set(
+            recorded_metrics.filter(value__isnull=False).values_list('metric_id', flat=True)
+        )
+        assigned_metric_ids = set(assigned_metrics.values_list('id', flat=True))
+        total_recorded = len(recorded_metric_ids.intersection(assigned_metric_ids))
+        
+        completion_percentage = (total_recorded / total_assigned * 100) if total_assigned > 0 else 0
+        
+        # Determine status based on session status and attendance
+        session_status = obj.session.status
+        attendance_status = obj.attendance_status
+        
+        # If session is completed and player was not present, mark as missed
+        if session_status == 'completed':
+            if attendance_status in ['absent', 'excused'] or (attendance_status == 'pending' and total_recorded == 0):
+                status = 'missed_training'
+            elif total_recorded == 0:
+                status = 'missed_training'  # Completed session but no metrics recorded
+            elif total_recorded == total_assigned:
+                status = 'completed'
+            else:
+                status = 'partially_completed'
+        else:
+            # For non-completed sessions, use the original logic
+            if total_recorded == 0:
+                status = 'not_started'
+            elif total_recorded == total_assigned:
+                status = 'completed'
+            else:
+                status = 'in_progress'
+            
+        return {
+            'total_assigned': total_assigned,
+            'total_recorded': total_recorded,
+            'completion_percentage': round(completion_percentage, 1),
+            'status': status
+        }
+    
+    def get_can_record_metrics(self, obj):
+        """Check if metrics can be recorded for this session"""
+        return obj.session.can_record_metrics()
+    
     class Meta:
         model = PlayerTraining
         fields = ["id", "player", "player_name", "session", "session_title", "session_date", 
-                  "attendance_status", "notes", "metric_records"]
+                  "session_start_time", "session_end_time", "session_location", "session_status",
+                  "session_description", "attendance_status", "notes", "metric_records", 
+                  "assigned_metrics", "metrics_completion_status", "can_record_metrics"]
 
 
 class TrainingSessionListSerializer(serializers.ModelSerializer):
@@ -95,16 +162,34 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
     can_manage_attendance = serializers.BooleanField(read_only=True)
     can_configure_metrics = serializers.BooleanField(read_only=True)
     can_record_metrics = serializers.BooleanField(read_only=True)
+    player_attendance_status = serializers.SerializerMethodField()
     
     class Meta:
         model = TrainingSession
         fields = ["id", "session_id", "title", "date", "start_time", "end_time", 
                   "team", "team_name", "location", "status", "auto_status", 
                   "duration_minutes", "categories_count", "players_count", 
-                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
+                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics",
+                  "player_attendance_status"]
     
     def get_players_count(self, obj):
         return obj.player_records.count()
+        
+    def get_player_attendance_status(self, obj):
+        """Get the current user's attendance status for this session"""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+            
+        # Only return attendance status for players
+        if not hasattr(request.user, 'player_profile'):
+            return None
+            
+        try:
+            player_training = obj.player_records.get(player=request.user.player_profile)
+            return player_training.attendance_status
+        except PlayerTraining.DoesNotExist:
+            return 'pending'  # Default status if no record exists
 
 
 class TrainingSessionDetailSerializer(serializers.ModelSerializer):
