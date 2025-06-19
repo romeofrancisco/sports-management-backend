@@ -619,18 +619,24 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             session, player_ids, metric_ids
         )
 
-        # Create appropriate response message based on operation
-        if len(metric_ids) == 0:
-            message = f"Removed all metrics from {len(player_ids)} players"
-        else:
-            message = f"Assigned {len(metric_ids)} metrics to {len(player_ids)} players"
-
+        # Calculate totals from the results
+        total_added = sum(
+            player_result.get("created_records", 0)
+            for player_result in result.get("results", [])
+        )
+        total_removed = sum(            player_result.get("deleted_records", 0)
+            for player_result in result.get("results", [])
+        )
+        players_processed = result.get("total_players_processed", 0)
         return Response(
             {
-                "detail": message,
+                "detail": f"Processed {players_processed} players - {total_added} metrics added, {total_removed} metrics removed",
+                "total_players_processed": players_processed,
+                "total_metrics_added": total_added,
+                "total_metrics_removed": total_removed,
                 "player_count": len(player_ids),
                 "metric_count": len(metric_ids),
-                "assigned_records": result.get("total_assigned", 0),
+                "success": result.get("success", True),
                 "results": result.get("results", []),
             }
         )
@@ -1411,9 +1417,9 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         
         # Get query parameters
         status_filter = request.query_params.get('status')
-        category_filter = request.query_params.get('category')
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
+        search = request.query_params.get('search')
         
         # Get PlayerTraining records with assigned metrics
         base_query = PlayerTraining.objects.filter(
@@ -1464,12 +1470,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             # Get assigned metrics for this session
             assigned_metrics = []
             metric_records_data = []
-            
             for metric in pt.assigned_metrics.all():
-                # Apply category filter at metric level
-                if category_filter and category_filter != 'all' and metric.category.name != category_filter:
-                    continue
-                
                 # Get metric record for this session
                 metric_record = pt.metric_records.filter(metric=metric).first()
                 
@@ -1535,6 +1536,10 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                     'improvement_percentage': self._calculate_improvement_percentage_for_metric(player, metric, metric_record)
                 })
             
+            # Add search filter for session title
+            if search and search.lower() not in pt.session.title.lower():
+                continue
+            
             # Only include sessions that have metrics after filtering
             if assigned_metrics:
                 session_data = {
@@ -1591,6 +1596,76 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                 'assigned': status_counts['assigned'],                'missed': status_counts['missed'],
                 'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
             }
+        })
+
+    @action(detail=False, methods=['get'])
+    def assigned_metrics_overview(self, request):
+        """Get overall assigned metrics summary for the current player (no filters applied)"""
+        user = request.user
+        
+        # Ensure only players can access this endpoint
+        if not hasattr(user, 'player_profile'):
+            raise PermissionDenied("Only players can access assigned metrics")
+        
+        player = user.player_profile
+        
+        # Get all PlayerTraining records with assigned metrics (no filters)
+        player_trainings = PlayerTraining.objects.filter(
+            player=player,
+            assigned_metrics__isnull=False
+        ).select_related(
+            'session',
+            'session__team'
+        ).prefetch_related(
+            'assigned_metrics',
+            'metric_records',
+            'metric_records__metric'
+        ).distinct()
+        
+        # Calculate overall summary statistics
+        total_metrics_count = 0
+        status_counts = {'completed': 0, 'in_progress': 0, 'assigned': 0, 'missed': 0}
+        
+        # Track processed metrics to avoid duplicates
+        processed_metrics = set()
+        
+        for pt in player_trainings:
+            for metric in pt.assigned_metrics.all():
+                # Create unique identifier for metric-session combination
+                metric_session_key = f"{metric.id}_{pt.session.id}"
+                if metric_session_key in processed_metrics:
+                    continue
+                
+                processed_metrics.add(metric_session_key)
+                total_metrics_count += 1
+                
+                # Get metric record for this session
+                metric_record = pt.metric_records.filter(metric=metric).first()
+                
+                # Determine individual metric status
+                if metric_record and metric_record.value is not None:
+                    metric_status = 'completed'
+                elif pt.session.status == 'completed':
+                    if pt.attendance_status in ['absent', 'excused']:
+                        metric_status = 'missed'
+                    else:
+                        metric_status = 'missed'
+                elif pt.session.status == 'ongoing':
+                    metric_status = 'in_progress'
+                elif pt.session.status == 'upcoming':
+                    metric_status = 'assigned'
+                else:
+                    metric_status = 'assigned'
+                
+                status_counts[metric_status] += 1
+        
+        return Response({
+            'total_metrics': total_metrics_count,
+            'completed': status_counts['completed'],
+            'in_progress': status_counts['in_progress'],
+            'assigned': status_counts['assigned'],
+            'missed': status_counts['missed'],
+            'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
         })
 
     def _calculate_improvement_for_metric(self, player, metric, current_record):
@@ -2096,6 +2171,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     """
     ViewSet for attendance analytics and reporting with role-based access control
+   
     """
 
     permission_classes = [IsAuthenticated]
@@ -2106,6 +2182,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         - Admin: All attendance records
         - Coach: Only records for their team's players
         - Player: Only their own attendance records
+
         - Others: Permission denied
         """
         user = request.user
