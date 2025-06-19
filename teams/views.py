@@ -243,6 +243,7 @@ class TeamViewSet(ModelViewSet):
             "time_range_days": days
         }
         return Response(analytics_data)    
+    
     @action(detail=True, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def performance(self, request, **kwargs):
         team = self.get_object()
@@ -431,6 +432,110 @@ class TeamViewSet(ModelViewSet):
         }
         return Response(statistics_data)
     
+    @action(detail=True, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def scoring_analytics(self, request, **kwargs):
+        """Get scoring performance analytics for the team"""
+        team = self.get_object()
+        
+        # Time range filter (default to last 30 days)
+        days = int(request.query_params.get('days', 30))
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Get completed games for the team
+        team_games = Game.objects.filter(
+            models.Q(home_team=team) | models.Q(away_team=team),
+            status=Game.Status.COMPLETED,
+            date__gte=start_date.date()
+        ).order_by('date')
+        
+        if not team_games.exists():
+            return Response({
+                "message": "No completed games found in the specified time range",
+                "scoring_data": [],
+                "summary": {
+                    "total_games": 0,
+                    "avg_points_scored": 0,
+                    "avg_points_conceded": 0,
+                    "avg_point_differential": 0
+                }
+            })
+        
+        # Group games by week and calculate scoring metrics
+        from collections import defaultdict
+        from datetime import datetime
+        
+        weekly_data = defaultdict(lambda: {
+            'total_scored': 0,
+            'total_conceded': 0,
+            'games_count': 0,
+            'wins': 0
+        })
+        
+        total_scored = 0
+        total_conceded = 0
+        total_games = 0
+        
+        for game in team_games:
+            # Determine team's score and opponent's score
+            if game.home_team == team:
+                team_score = game.home_team_score or 0
+                opponent_score = game.away_team_score or 0
+            else:
+                team_score = game.away_team_score or 0
+                opponent_score = game.home_team_score or 0
+            
+            # Get week start (Monday) for proper weekly grouping
+            game_date = game.date
+            week_start = game_date - timedelta(days=game_date.weekday())
+            week_key = f"Week of {week_start.strftime('%b %d')}"
+            
+            # Update weekly data
+            weekly_data[week_key]['total_scored'] += team_score
+            weekly_data[week_key]['total_conceded'] += opponent_score
+            weekly_data[week_key]['games_count'] += 1
+            
+            # Count wins
+            if team_score > opponent_score:
+                weekly_data[week_key]['wins'] += 1
+            
+            # Update totals
+            total_scored += team_score
+            total_conceded += opponent_score
+            total_games += 1
+        
+        # Convert to list format for frontend
+        scoring_data = []
+        for week, data in weekly_data.items():
+            if data['games_count'] > 0:
+                avg_scored = round(data['total_scored'] / data['games_count'], 1)
+                avg_conceded = round(data['total_conceded'] / data['games_count'], 1)
+                scoring_data.append({
+                    'period': week,
+                    'avg_points_scored': avg_scored,
+                    'avg_points_conceded': avg_conceded,
+                    'point_differential': round(avg_scored - avg_conceded, 1),
+                    'games_played': data['games_count'],
+                    'win_rate': round((data['wins'] / data['games_count']) * 100, 1)
+                })
+        
+        # Sort by date
+        scoring_data.sort(key=lambda x: datetime.strptime(x['period'].replace('Week of ', ''), '%b %d'))
+        
+        # Calculate summary statistics
+        summary = {
+            'total_games': total_games,
+            'avg_points_scored': round(total_scored / total_games, 1) if total_games > 0 else 0,
+            'avg_points_conceded': round(total_conceded / total_games, 1) if total_games > 0 else 0,
+            'avg_point_differential': round((total_scored - total_conceded) / total_games, 1) if total_games > 0 else 0,
+            'time_range_days': days
+        }
+        
+        return Response({
+            'scoring_data': scoring_data,
+            'summary': summary
+        })
+
     def _calculate_training_completion_rate(self, team):
         """Calculate the percentage of training sessions that were completed"""
         total_sessions = TrainingSession.objects.filter(team=team).count()
