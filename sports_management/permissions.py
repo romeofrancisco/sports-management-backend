@@ -23,8 +23,8 @@ class CanManageGamePermission(BasePermission):
     
     Rules:
     - Admins can manage any game (practice, league, tournament)
-    - Coaches can only manage practice games for their own teams
-    - Coaches cannot manage league or tournament games
+    - For league games: Only coaches explicitly assigned to the game can manage it
+    - For practice games: Coaches can manage games for their own teams
     """
     
     def has_permission(self, request, view):
@@ -36,22 +36,8 @@ class CanManageGamePermission(BasePermission):
     def has_object_permission(self, request, view, obj):
         user = request.user
         
-        # Admins can manage any game
-        if user.is_admin:
-            return True
-        
-        # For coaches, check game type and team ownership
-        if user.is_coach and hasattr(user, 'coach_profile'):
-            # Only allow practice games
-            if obj.type != 'normal':  # 'normal' maps to practice games in the model
-                return False
-            
-            # Check if coach owns either team in the game
-            coach_teams = list(user.coach_profile.teams.all())
-            return (obj.home_team in coach_teams or obj.away_team in coach_teams)
-        
-        # Deny access for other users
-        return False
+        # Use the game's has_coach_permission method which handles all permission logic
+        return obj.has_coach_permission(user)
 
 class CanCreateGamePermission(BasePermission):
     """

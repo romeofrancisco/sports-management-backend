@@ -6,6 +6,36 @@ from django.utils import timezone
 from leagues.models import League, Season
 
 
+class GameCoachPermission(models.Model):
+    """
+    Model to track which coaches have permission to manage specific games
+    """
+
+    game = models.ForeignKey(
+        "Game", on_delete=models.CASCADE, related_name="coach_permissions"
+    )
+    coach = models.ForeignKey(
+        "users.User", on_delete=models.CASCADE, related_name="game_permissions"
+    )
+    assigned_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="assigned_permissions",
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ["game", "coach"]
+        indexes = [
+            models.Index(fields=["game", "coach"]),
+            models.Index(fields=["coach"]),
+        ]
+
+    def __str__(self):
+        return f"{self.coach.get_full_name()} - {self.game}"
+
+
 class Game(models.Model):
     class Status(models.TextChoices):
         SCHEDULED = "scheduled", "Scheduled"
@@ -87,6 +117,50 @@ class Game(models.Model):
         if self.type == self.Type.PRACTICE:
             self.is_recorded = False
         super().save(*args, **kwargs)
+
+    def has_coach_permission(self, user):
+        """
+        Check if a coach has permission to manage this game
+        - Admin users always have permission
+        - For league games, check GameCoachPermission
+        - For non-league games, allow team coaches
+        """
+        if user.is_admin:
+            return True
+            
+        if not hasattr(user, 'coach_profile'):
+            return False
+            
+        # For league games, check explicit permissions
+        if self.type == self.Type.LEAGUE:
+            return self.coach_permissions.filter(coach=user).exists()
+            
+        # For non-league games, allow team coaches
+        coach_profile = user.coach_profile
+        return (
+            coach_profile.team == self.home_team or 
+            coach_profile.team == self.away_team
+        )
+
+    def get_assigned_coaches(self):
+        """Get all coaches assigned to manage this game"""
+        return self.coach_permissions.select_related('coach__coach_profile').all()
+
+    def assign_coach(self, coach, assigned_by):
+        """Assign a coach to manage this game"""
+        if self.type != self.Type.LEAGUE:
+            raise ValidationError("Can only assign coaches to league games")
+            
+        permission, created = GameCoachPermission.objects.get_or_create(
+            game=self,
+            coach=coach,
+            defaults={'assigned_by': assigned_by}
+        )
+        return permission, created
+
+    def remove_coach(self, coach):
+        """Remove coach permission for this game"""
+        return self.coach_permissions.filter(coach=coach).delete()
 
     def update_scores(self):
         scores = self._calculate_team_scores()
