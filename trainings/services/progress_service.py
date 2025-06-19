@@ -453,3 +453,101 @@ class ProgressService:
             sessions_query = sessions_query.filter(session__date__lte=date_to)
             
         return sessions_query.count()
+
+    @staticmethod
+    def calculate_baseline_improvement(player, days_back=90):
+        """
+        Calculate improvement comparing recent performance to a baseline from X days ago
+        
+        This method compares:
+        - Recent records (last 30 days or most recent available)
+        - vs Baseline records (from X days ago)
+        
+        Args:
+            player: Player instance
+            days_back: Number of days back to use as baseline (default: 90)
+            
+        Returns:
+            Dictionary with improvement metrics or None if not enough data
+        """
+        from decimal import Decimal
+        from datetime import timedelta
+        from trainings.utils import calculate_normalized_improvement
+        
+        if not hasattr(player, 'training_records') or not player.training_records.exists():
+            return None
+            
+        today = timezone.now().date()
+        baseline_date = today - timedelta(days=days_back)
+        recent_cutoff = today - timedelta(days=30)  # Look at last 30 days for "recent"
+        
+        # Get recent records (last 30 days)
+        recent_records = PlayerMetricRecord.objects.filter(
+            player_training__player=player,
+            player_training__session__date__gte=recent_cutoff,
+            player_training__session__date__lte=today,
+            value__isnull=False
+        ).select_related('metric', 'metric__metric_unit')
+        
+        # Group by metric
+        metrics_data = {}
+        for record in recent_records:
+            metric_id = record.metric.id
+            if metric_id not in metrics_data:
+                # Get baseline record for this metric (from before the baseline date)
+                baseline_record = PlayerMetricRecord.objects.filter(
+                    player_training__player=player,
+                    metric=record.metric,
+                    value__isnull=False,
+                    player_training__session__date__lt=baseline_date
+                ).order_by('-player_training__session__date').first()
+                
+                if not baseline_record:
+                    continue  # Skip metrics without baseline data
+                    
+                metrics_data[metric_id] = {
+                    'metric': record.metric,
+                    'baseline_value': baseline_record.value,
+                    'recent_records': [],
+                    'is_lower_better': record.metric.is_lower_better,
+                    'weight': Decimal(str(record.metric.metric_unit.normalization_weight if record.metric.metric_unit else 1.0))
+                }
+            
+            if metric_id in metrics_data:
+                metrics_data[metric_id]['recent_records'].append(record.value)
+        
+        # Calculate weighted improvements
+        weighted_improvements = []
+        total_weights = Decimal('0.0')
+        
+        for metric_id, data in metrics_data.items():
+            if not data['recent_records']:
+                continue
+                
+            # Use average of recent records as current performance
+            avg_recent = sum(data['recent_records']) / len(data['recent_records'])
+            baseline_value = data['baseline_value']
+            
+            # Calculate improvement using shared utility
+            improvement_data = calculate_normalized_improvement(
+                float(avg_recent),
+                float(baseline_value),
+                data['is_lower_better'],
+                float(data['weight'])
+            )
+            
+            if improvement_data['percentage'] is not None:
+                weighted_improvements.append(Decimal(str(improvement_data['percentage'])))
+                total_weights += data['weight']
+        
+        if weighted_improvements and total_weights:
+            avg_improvement = sum(weighted_improvements) / total_weights
+            return {
+                'percentage': float(avg_improvement),
+                'metric_count': len(weighted_improvements),
+                'is_positive': avg_improvement > 0,
+                'method': 'baseline_comparison',
+                'baseline_days': days_back
+            }
+        
+        return None

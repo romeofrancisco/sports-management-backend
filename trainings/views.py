@@ -1661,11 +1661,71 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         
         return Response({
             'total_metrics': total_metrics_count,
-            'completed': status_counts['completed'],
-            'in_progress': status_counts['in_progress'],
+            'completed': status_counts['completed'],            'in_progress': status_counts['in_progress'],
             'assigned': status_counts['assigned'],
             'missed': status_counts['missed'],
             'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
+        })
+
+    @action(detail=False, methods=['get'])
+    def training_overview(self, request):
+        """Get training overview statistics for the current player"""
+        user = request.user
+        
+        # Ensure only players can access this endpoint
+        if not hasattr(user, 'player_profile'):
+            raise PermissionDenied("Only players can access training overview")
+        
+        player = user.player_profile
+        
+        # Calculate date range for 90 days span (only for recent improvement)
+        from datetime import datetime, timedelta
+        ninety_days_ago = timezone.now().date() - timedelta(days=90)
+        
+        # Get all training sessions for this player (all time)
+        all_trainings = PlayerTraining.objects.filter(player=player)
+        
+        # 1. Total number of training sessions (all time)
+        total_sessions = all_trainings.count()
+        
+        # 2. Present attendance percentage (all time)
+        present_count = all_trainings.filter(
+            attendance_status__in=['present', 'late']
+        ).count()
+        
+        attendance_percentage = round((present_count / total_sessions * 100), 1) if total_sessions > 0 else 0
+        
+        # 3. Number of times late status (all time)
+        late_count = all_trainings.filter(attendance_status='late').count()
+        
+        # 4. Number of training sessions attended (present or late)
+        attended_count = present_count
+        
+        # 5. Recent improvement using same method as dashboard (90 days span only)
+        # Use ProgressService to ensure consistency with dashboard
+        from .services.progress_service import ProgressService
+        
+        recent_improvement_data = ProgressService.calculate_recent_improvement(
+            player, 
+            date_from=ninety_days_ago, 
+            date_to=timezone.now().date()
+        )
+        
+        if recent_improvement_data:
+            average_improvement = round(recent_improvement_data['percentage'], 1)
+            metrics_analyzed = recent_improvement_data['metric_count']
+        else:
+            average_improvement = 0
+            metrics_analyzed = 0
+        
+        return Response({
+            'total_sessions': total_sessions,
+            'attendance_percentage': attendance_percentage,
+            'late_count': late_count,
+            'attended_count': attended_count,  # renamed from absent_count
+            'recent_improvement': average_improvement,
+            'metrics_analyzed': metrics_analyzed,
+            'improvement_date_range_days': 90
         })
 
     def _calculate_improvement_for_metric(self, player, metric, current_record):
