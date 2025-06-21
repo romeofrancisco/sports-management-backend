@@ -34,13 +34,11 @@ class JWTAuthMiddleware:
     async def __call__(self, scope, receive, send):
         # Only apply to WebSocket connections
         if scope["type"] == "websocket":
-            # Try to get token from query parameters
+            # Try to get token from query parameters first
             query_string = scope.get("query_string", b"").decode()
             query_params = parse_qs(query_string)
             
-            token = None
-            
-            # Check for token in query parameters
+            token = None            # Check for token in query parameters
             if "token" in query_params:
                 token = query_params["token"][0]
             
@@ -51,17 +49,19 @@ class JWTAuthMiddleware:
                 if auth_header.startswith("Bearer "):
                     token = auth_header.split(" ")[1]
             
-            # Check for token in cookies
+            # Check for token in cookies (MOST IMPORTANT for our setup)
             if not token:
-                cookies = {}
+                headers = dict(scope.get("headers", []))
                 cookie_header = headers.get(b"cookie", b"").decode()
+                
                 if cookie_header:
+                    cookies = {}
                     for chunk in cookie_header.split(";"):
                         if "=" in chunk:
                             key, val = chunk.strip().split("=", 1)
                             cookies[key] = val
-                
-                token = cookies.get("access_token")
+                    
+                    token = cookies.get("access_token")
             
             if token:
                 user = await get_user_from_token(token)

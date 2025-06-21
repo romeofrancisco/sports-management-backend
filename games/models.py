@@ -154,8 +154,7 @@ class Game(models.Model):
         permission, created = GameCoachPermission.objects.get_or_create(
             game=self,
             coach=coach,
-            defaults={'assigned_by': assigned_by}
-        )
+            defaults={'assigned_by': assigned_by}        )
         return permission, created
 
     def remove_coach(self, coach):
@@ -164,8 +163,10 @@ class Game(models.Model):
 
     def update_scores(self):
         scores = self._calculate_team_scores()
-        Game.objects.filter(pk=self.pk).update(**scores)
-        self.refresh_from_db()
+        # Use save() instead of update() to trigger signals
+        for field, value in scores.items():
+            setattr(self, field, value)
+        self.save(update_fields=list(scores.keys()))
 
     def validate_game_state(self, action):
         """

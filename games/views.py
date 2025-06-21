@@ -38,6 +38,7 @@ from .services import (
     BulkRecordingService,
     FastStatRecordingService,
 )
+from .signals import send_score_update, send_game_status_update
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
 from collections import defaultdict
@@ -560,8 +561,7 @@ class GameViewSet(viewsets.ModelViewSet):
             return Response(data)
         except Exception as e:
             logger.error(f"Error getting game leaders: {str(e)}")
-            return Response(
-                {"error": f"Failed to get game leaders: {str(e)}"},
+            return Response(                {"error": f"Failed to get game leaders: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -572,6 +572,9 @@ class GameViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         action = serializer.validated_data["action"]
+        old_status = game.status
+        old_period = game.current_period
+        
         if action == "start":
             game.start_game()
         elif action == "complete":
@@ -579,12 +582,27 @@ class GameViewSet(viewsets.ModelViewSet):
         elif action == "next_period":
             game.next_period()
 
-        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
+        # Send WebSocket update if status or period changed
+        if game.status != old_status or game.current_period != old_period:
+            send_game_status_update(game)
 
+        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
+    
     @action(detail=True, methods=["post"])
     def update_scores(self, request, pk=None):
         game = self.get_object()
+        
+        # Store old scores for comparison
+        old_home_score = game.home_team_score
+        old_away_score = game.away_team_score
+        
+        # Update scores
         game.update_scores()
+        
+        # Send WebSocket update if scores changed
+        if game.home_team_score != old_home_score or game.away_team_score != old_away_score:
+            send_score_update(game)
+        
         return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])

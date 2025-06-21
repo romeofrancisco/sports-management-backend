@@ -17,8 +17,8 @@ from .serializers import (
 # Central cookie settings to avoid repetition.
 COOKIE_SETTINGS = {
     "httponly": True,
-    "secure": True,
-    "samesite": "None",
+    "secure": False,  # Set to False for development, True for production
+    "samesite": "Lax",  # Changed from "None" to "Lax" for development
 }
 
 def set_auth_cookies(response, access_token, refresh_token):
