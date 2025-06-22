@@ -5,13 +5,31 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Count, Avg, Max, Min
+from django.db.models import Count, Avg, Max, Min, Q
 from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.core.exceptions import PermissionDenied
 import logging
 import time
+
+
+def get_coach_teams(coach_profile):
+    """Helper function to get teams where coach is either head coach or assistant coach"""
+    from teams.models import Team
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
+    )
+
+
+def is_coach_team(team, coach_profile):
+    """Helper function to check if a team belongs to a coach"""
+    from teams.models import Team
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile),
+        id=team.id
+    ).exists()
+
 
 from .models import (
     MetricUnit,
@@ -199,11 +217,13 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
         # For admins, show all training sessions
         if user.is_admin:
-            return base_queryset
-
-        # For coaches, show only their team's training sessions
+            return base_queryset        # For coaches, show only their team's training sessions
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return base_queryset.filter(team__in=coach_teams)
 
         # For players, show only their team's training sessions
@@ -297,7 +317,11 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         if self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             team = serializer.validated_data.get("team")
             if team:
-                coach_teams = list(self.request.user.coach_profile.teams.all())
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+                )
                 if team not in coach_teams:
                     raise PermissionDenied(
                         "You can only create training sessions for your own teams"
@@ -311,12 +335,15 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """Only allow coaches to update training sessions for their own teams"""
-        if self.request.user.is_admin:
-            # Admins can update any training session
+        if self.request.user.is_admin:            # Admins can update any training session
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update training sessions for their teams
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+            )
             session = serializer.instance
 
             # Check if the session belongs to one of the coach's teams
@@ -339,12 +366,11 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Only allow coaches to delete training sessions for their own teams"""
-        if self.request.user.is_admin:
-            # Admins can delete any training session
+        if self.request.user.is_admin:            # Admins can delete any training session
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete training sessions for their teams
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the session belongs to one of the coach's teams
             if instance.team and instance.team in coach_teams:
@@ -510,7 +536,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -555,7 +581,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -663,7 +689,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -708,7 +734,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -816,7 +842,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -858,7 +884,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and team in user.coach_profile.teams.all()
+                and team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -1005,7 +1031,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
 
         # For coaches, show only player training records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(session__team__in=coach_teams)
 
         # For players, show only their own training records
@@ -1086,7 +1112,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update player training records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
             player_training = serializer.instance
 
             # Check if the player training record belongs to one of the coach's teams
@@ -1111,7 +1137,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete player training records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the player training record belongs to one of the coach's teams
             if instance.session.team and instance.session.team in coach_teams:
@@ -1825,7 +1851,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
 
         # For coaches, show only metric records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(player_training__session__team__in=coach_teams)
 
         # For players, show only their own metric records
@@ -1874,7 +1900,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             )
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only create metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the metric record belongs to one of the coach's teams
             if session.team and session.team in coach_teams:
@@ -1893,7 +1919,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
             metric_record = serializer.instance
 
             # Check if the metric record belongs to one of the coach's teams
@@ -1916,7 +1942,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the metric record belongs to one of the coach's teams
             if (
@@ -1963,7 +1989,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         # For coaches, show only players from their teams
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(
                 team__in=coach_teams
             )  # For players, show only their own data
@@ -2030,10 +2056,13 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Apply role-based access control
         user = request.user
-        if not user.is_admin:
-            # For coaches, check if player is in their teams
+        if not user.is_admin:            # For coaches, check if player is in their teams
             if hasattr(user, "coach_profile"):
-                coach_teams = user.coach_profile.teams.all()
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                )
                 if player.team not in coach_teams:
                     raise PermissionDenied(
                         "You can only access radar chart data for players in your teams"
@@ -2256,7 +2285,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
         # For coaches, show only records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(session__team__in=coach_teams)
 
         # For players, show only their own attendance records

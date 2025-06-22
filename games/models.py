@@ -134,12 +134,20 @@ class Game(models.Model):
         # For league games, check explicit permissions
         if self.type == self.Type.LEAGUE:
             return self.coach_permissions.filter(coach=user).exists()
-            
-        # For non-league games, allow team coaches
+              # For non-league games, allow team coaches
         coach_profile = user.coach_profile
+        from django.db.models import Q
+        coach_teams_ids = []
+        
+        # Check if coach is head coach or assistant coach of any team
+        if hasattr(coach_profile, 'head_coach_teams'):
+            coach_teams_ids.extend(coach_profile.head_coach_teams.values_list('id', flat=True))
+        if hasattr(coach_profile, 'assistant_coach_teams'):  
+            coach_teams_ids.extend(coach_profile.assistant_coach_teams.values_list('id', flat=True))
+            
         return (
-            coach_profile.team == self.home_team or 
-            coach_profile.team == self.away_team
+            self.home_team_id in coach_teams_ids or 
+            self.away_team_id in coach_teams_ids
         )
 
     def get_assigned_coaches(self):

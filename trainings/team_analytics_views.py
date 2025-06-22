@@ -30,6 +30,9 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
     
     def get_team_queryset(self, team_slug):
         """Get training sessions for a specific team with role-based filtering"""
+        from django.db.models import Q
+        from teams.models import Team
+        
         user = self.request.user
         
         try:
@@ -43,7 +46,10 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
             pass
         elif hasattr(user, 'coach_profile'):
             # Coach can only access their teams
-            if team not in user.coach_profile.teams.all():
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
+            if team not in coach_teams:
                 raise PermissionDenied("You can only access analytics for your own teams")
         elif hasattr(user, 'player_profile'):
             # Player can only access their team
@@ -64,20 +70,22 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
                     {'error': 'team_id parameter is required'}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
+              # Get base queryset with role-based filtering
+            self.get_team_queryset(team_slug)  # This validates permissions
             
-            # Get base queryset with role-based filtering
-            self.get_team_queryset(team_slug)  # This validates permissions            # Get attendance data using the attendance service
+            # Get attendance data using the attendance service
             base_queryset = AttendanceAnalyticsService.get_base_queryset(request.user)
             filters = AttendanceAnalyticsService.get_filters(request)
             filters['session__team__slug'] = team_slug
-              # Get attendance analytics
+            
+            # Get attendance analytics
             attendance_data = AttendanceAnalyticsService.calculate_attendance_overview(
                 base_queryset, filters
             )
-            
-            # Get training sessions for additional context
+              # Get training sessions for additional context
             training_sessions = self.get_team_queryset(team_slug)
-              # No need to calculate comprehensive team overview metrics anymore
+            
+            # No need to calculate comprehensive team overview metrics anymore
             # This data is now displayed as upcoming games and training sessions in the frontend
             
             return Response({
@@ -107,9 +115,10 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
                     {'error': 'team_id parameter is required'}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
+              # Get base queryset with role-based filtering
+            training_sessions = self.get_team_queryset(team_slug)
             
-            # Get base queryset with role-based filtering
-            training_sessions = self.get_team_queryset(team_slug)            # Get attendance data using the attendance service
+            # Get attendance data using the attendance service
             base_queryset = AttendanceAnalyticsService.get_base_queryset(request.user)
             filters = AttendanceAnalyticsService.get_filters(request)
             filters['session__team__slug'] = team_slug
@@ -152,9 +161,10 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
                     {'error': 'team_id parameter is required'}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
+              # Get base queryset with role-based filtering
+            training_sessions = self.get_team_queryset(team_slug)
             
-            # Get base queryset with role-based filtering
-            training_sessions = self.get_team_queryset(team_slug)            # Get attendance trends for weekly aggregation
+            # Get attendance trends for weekly aggregation
             base_queryset = AttendanceAnalyticsService.get_base_queryset(request.user)
             filters = AttendanceAnalyticsService.get_filters(request)
             filters['session__team__slug'] = team_slug
@@ -202,18 +212,20 @@ class TeamAnalyticsViewSet(viewsets.ViewSet):
             team_slug = request.query_params.get('team_id')
             if not team_slug:
                 return Response(
-                    {'error': 'team_id parameter is required'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )            # Get base data
+                    {'error': 'team_id parameter is required'},                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get base data
             training_sessions = self.get_team_queryset(team_slug)
             base_queryset = AttendanceAnalyticsService.get_base_queryset(request.user)
             filters = AttendanceAnalyticsService.get_filters(request)
             filters['session__team__slug'] = team_slug
-              # Get all analytics data
+            
+            # Get all analytics data
             attendance_data = AttendanceAnalyticsService.calculate_attendance_overview(
-                base_queryset, filters
-            )
-              # Team overview metrics calculation removed (replaced by upcoming events in frontend)
+                base_queryset, filters            )
+            
+            # Team overview metrics calculation removed (replaced by upcoming events in frontend)
             
             # Calculate training effectiveness score
             effectiveness_score = TrainingEfficiencyService.calculate_training_effectiveness_score(

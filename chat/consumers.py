@@ -123,12 +123,16 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
             # Admin can access all team chats
             if user.is_admin:
                 return True
-                
-            # Coach can access if they coach this team
+                  # Coach can access if they coach this team
             if user.role == 'Coach':
                 try:
                     coach = Coach.objects.get(user=user)
-                    return team in coach.teams.all()
+                    from django.db.models import Q
+                    from teams.models import Team
+                    return Team.objects.filter(
+                        Q(head_coach=coach) | Q(assistant_coach=coach),
+                        id=team.id
+                    ).exists()
                 except Coach.DoesNotExist:
                     return False
                     
@@ -239,7 +243,13 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
             elif user.role == 'Coach':
                 try:
                     coach = Coach.objects.get(user=user)
-                    team_ids = list(coach.teams.values_list('id', flat=True))
+                    # Get teams where this coach is either head coach or assistant coach
+                    from django.db.models import Q
+                    from teams.models import Team
+                    coach_teams = Team.objects.filter(
+                        Q(head_coach=coach) | Q(assistant_coach=coach)
+                    )
+                    team_ids = list(coach_teams.values_list('id', flat=True))
                 except Coach.DoesNotExist:
                     pass
             elif user.role == 'Player':

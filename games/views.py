@@ -3,8 +3,19 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction, models
 from rest_framework.exceptions import ValidationError
-from django.db.models import Value, IntegerField
+from django.db.models import Value, IntegerField, Q
 from rest_framework.pagination import PageNumberPagination
+
+
+def get_coach_teams(coach_profile):
+    """Helper function to get teams where coach is either head coach or assistant coach"""
+    from teams.models import Team
+
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
+    )
+
+
 from .models import Game, PlayerStat, Substitution, GameCoachPermission
 from teams.models import Player
 from sports.models import SportStatType, Sport
@@ -456,8 +467,7 @@ class GameViewSet(viewsets.ModelViewSet):
             "update_scores",
             "partial_update",
             "update",
-            "destroy",
-        ]:
+            "destroy",        ]:
             permission_classes = [CanManageGamePermission]
         else:
             permission_classes = [IsAuthenticated]
@@ -466,11 +476,11 @@ class GameViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filter games based on game type and user role:
-        - League and tournament games are visible to all users
-        - Normal games are visible to:
-          - Admin users: All normal games
-          - Coach/Player users: Only games for their teams
+        Filter games based on user role:
+        - Admin users: All games
+        - Coach users: Only games for teams they coach (any game type)
+        - Player users: Only games for their team (any game type)
+        - Other users: Only league and tournament games
         """
         queryset = super().get_queryset()
         user = self.request.user
@@ -479,39 +489,23 @@ class GameViewSet(viewsets.ModelViewSet):
         if user.is_admin:
             return queryset
 
-        # Filter normal games based on user role, but keep all league/tournament games
+        # Filter games based on user role - coaches and players only see their team's games
         if hasattr(user, "coach_profile"):
-            # For coaches: practice games only for teams they coach
-            coach_teams = user.coach_profile.teams.all()
+            # For coaches: only games for teams they coach (all game types)
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return queryset.filter(
-                # Keep all league/tournament games
-                models.Q(
-                    type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
-                )  # Plus practice games only for their teams
-                | (
-                    models.Q(type=Game.Type.PRACTICE)
-                    & (
-                        models.Q(home_team__in=coach_teams)
-                        | models.Q(away_team__in=coach_teams)
-                    )
-                )
+                models.Q(home_team__in=coach_teams) | models.Q(away_team__in=coach_teams)
             )
         elif hasattr(user, "player_profile"):
-            # For players: practice games only for their team
+            # For players: only games for their team (all game types)
             player_team = user.player_profile.team
             if player_team:
                 return queryset.filter(
-                    # Keep all league/tournament games
-                    models.Q(
-                        type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
-                    )  # Plus practice games only for their team
-                    | (
-                        models.Q(type=Game.Type.PRACTICE)
-                        & (
-                            models.Q(home_team=player_team)
-                            | models.Q(away_team=player_team)
-                        )
-                    )
+                    models.Q(home_team=player_team) | models.Q(away_team=player_team)
                 )
             else:
                 # Player has no team, only show league/tournament games
@@ -540,7 +534,7 @@ class GameViewSet(viewsets.ModelViewSet):
             # Check if coach owns either team in the game
             home_team = serializer.validated_data.get("home_team")
             away_team = serializer.validated_data.get("away_team")
-            coach_teams = list(user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(user.coach_profile)
 
             if home_team not in coach_teams and away_team not in coach_teams:
                 raise PermissionDenied("You can only create games for teams you coach")
@@ -1217,10 +1211,9 @@ class GameViewSet(viewsets.ModelViewSet):
         coaches = User.objects.filter(role=User.Role.COACH).select_related('coach_profile')
         coach_data = [
             {
-                'id': coach.id,
-                'name': coach.get_full_name(),
+                'id': coach.id,                'name': coach.get_full_name(),
                 'email': coach.email,
-                'team': coach.coach_profile.teams.name if hasattr(coach, 'coach_profile') and coach.coach_profile.teams else None
+                'team': ', '.join([team.name for team in get_coach_teams(coach.coach_profile)]) if hasattr(coach, 'coach_profile') else None
             }
             for coach in coaches
         ]

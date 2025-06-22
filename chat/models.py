@@ -38,13 +38,16 @@ class ChatMessage(models.Model):
         # Admin can access all messages
         if user.is_admin:
             return True
-            
-        # Coach can access if they coach this team
+              # Coach can access if they coach this team
         if user.role == 'Coach':
             try:
-                from teams.models import Coach
+                from teams.models import Coach, Team
+                from django.db.models import Q
                 coach = Coach.objects.get(user=user)
-                return self.team_chat.team in coach.teams.all()
+                return Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach),
+                    id=self.team_chat.team.id
+                ).exists()
             except Coach.DoesNotExist:
                 return False
                 

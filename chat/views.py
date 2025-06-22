@@ -23,12 +23,16 @@ class TeamChatListView(generics.ListAPIView):
         # Admin can see all team chats
         if user.is_admin:
             return TeamChat.objects.all()
-            
-        # Coach can see chats for teams they coach
+              # Coach can see chats for teams they coach
         if user.role == 'Coach':
             try:
                 coach = Coach.objects.get(user=user)
-                team_ids = coach.teams.values_list('id', flat=True)
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach)
+                )
+                team_ids = coach_teams.values_list('id', flat=True)
                 return TeamChat.objects.filter(team__id__in=team_ids)
             except Coach.DoesNotExist:
                 return TeamChat.objects.none()
@@ -83,12 +87,16 @@ class TeamChatMessagesView(generics.ListCreateAPIView):
         # Admin can access all team chats
         if user.is_admin:
             return True
-            
-        # Coach can access if they coach this team
+              # Coach can access if they coach this team
         if user.role == 'Coach':
             try:
                 coach = Coach.objects.get(user=user)
-                return team in coach.teams.all()
+                from django.db.models import Q
+                from teams.models import Team
+                return Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach),
+                    id=team.id
+                ).exists()
             except Coach.DoesNotExist:
                 return False
                 

@@ -23,9 +23,8 @@ class SeasonTeamsService:
             tuple: A tuple of (teams list, team_stats dict)
                 - teams: A list of team objects, optionally ordered by standings 
                 - team_stats: A dictionary of team stats by team ID
-        """
-        # Get teams for this season
-        teams = self.season.teams.prefetch_related('coach', 'players').all()
+        """        # Get teams for this season
+        teams = self.season.teams.prefetch_related('head_coach', 'assistant_coach', 'players').all()
         
         # Use the existing Season.standings() method to get all team statistics
         # This leverages the existing calculation logic and ensures consistency

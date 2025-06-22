@@ -334,10 +334,16 @@ def collect_system_data():
     
     low_engagement_coaches = Coach.objects.annotate(
         recent_sessions=Count(
-            'teams__training_sessions',
-            filter=Q(teams__training_sessions__date__gte=last_30_days.date())
+            'head_coached_teams__training_sessions',
+            filter=Q(head_coached_teams__training_sessions__date__gte=last_30_days.date())
+        ) + Count(
+            'assistant_coached_teams__training_sessions',
+            filter=Q(assistant_coached_teams__training_sessions__date__gte=last_30_days.date())
         )
-    ).filter(recent_sessions__lt=2, teams__isnull=False).count()
+    ).filter(
+        Q(head_coached_teams__isnull=False) | Q(assistant_coached_teams__isnull=False),
+        recent_sessions__lt=2
+    ).count()
     
     # Performance metrics
     avg_players_per_team = (Player.objects.filter(team__isnull=False).count() / total_teams) if total_teams > 0 else 0

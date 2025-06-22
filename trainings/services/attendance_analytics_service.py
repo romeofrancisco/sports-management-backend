@@ -32,19 +32,24 @@ class AttendanceAnalyticsService:
         
         queryset = PlayerTraining.objects.all()
         
-        if user.is_admin:
-            # Admins can see all training records
+        if user.is_admin:            # Admins can see all training records
             return queryset
         elif hasattr(user, 'coach_profile'):
             # Coaches can only see records from their teams
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return queryset.filter(session__team__in=coach_teams)
         elif hasattr(user, 'player_profile'):
             # Players can only see their own records
             return queryset.filter(player=user.player_profile)
         
         # Default: no access
-        return PlayerTraining.objects.none()    @staticmethod
+        return PlayerTraining.objects.none()
+    
+    @staticmethod
     def get_filters(request):
         """
         Extract filters from request parameters
@@ -301,12 +306,15 @@ class AttendanceAnalyticsService:
         # Permission checks
         if user and not user.is_admin:
             if hasattr(user, 'player_profile'):
-                # Players can only view their own data
-                if str(user.player_profile.user_id) != str(player_id):
+                # Players can only view their own data                if str(user.player_profile.user_id) != str(player_id):
                     raise PermissionDenied("You can only view your own attendance data")
             elif hasattr(user, 'coach_profile'):
                 # Coaches can only view data for players in their teams
-                coach_teams = user.coach_profile.teams.all()
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                )
                 player_accessible = attendance_qs.filter(session__team__in=coach_teams).exists()
                 if not player_accessible:
                     raise PermissionDenied("You can only view attendance data for players in your teams")

@@ -51,23 +51,24 @@ class TeamViewSet(ModelViewSet):
         - Player: Only their team
         - Others: Permission denied for all actions including list        """
         user = self.request.user
-        
-        # For admins, show all teams with optimized queries
+          # For admins, show all teams with optimized queries
         if user.is_authenticated and hasattr(user, 'is_admin') and user.is_admin:
-            return Team.objects.select_related('sport', 'coach__user').prefetch_related(
-                'players', 'coach__sports'
+            return Team.objects.select_related('sport', 'head_coach__user', 'assistant_coach__user').prefetch_related(
+                'players', 'head_coach__sports', 'assistant_coach__sports'
             )
-            
-        # For coaches, show only their teams with optimized queries
+              # For coaches, show only their teams with optimized queries
         if hasattr(user, 'coach_profile'):
-            return user.coach_profile.teams.select_related('sport', 'coach__user').prefetch_related(
-                'players', 'coach__sports'
+            # Get teams where this coach is either head coach or assistant coach
+            from django.db.models import Q
+            return Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            ).select_related('sport', 'head_coach__user', 'assistant_coach__user').prefetch_related(
+                'players', 'head_coach__sports', 'assistant_coach__sports'
             )
-            
-        # For players, show only their team with optimized queries
+              # For players, show only their team with optimized queries
         if hasattr(user, 'player_profile') and user.player_profile.team:
-            return Team.objects.select_related('sport', 'coach__user').prefetch_related(
-                'players', 'coach__sports'
+            return Team.objects.select_related('sport', 'head_coach__user', 'assistant_coach__user').prefetch_related(
+                'players', 'head_coach__sports', 'assistant_coach__sports'
             ).filter(id=user.player_profile.team.id)
             
         # User doesn't have appropriate role - deny access
@@ -136,10 +137,10 @@ class TeamViewSet(ModelViewSet):
         """
         When a coach creates a team, automatically assign the coach to the team
         """
-        # If the requesting user is a coach, set them as the team's coach
+        # If the requesting user is a coach, set them as the team's head coach
         if self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             coach = self.request.user.coach_profile
-            team = serializer.save(coach=coach)  # Direct assignment
+            team = serializer.save(head_coach=coach)  # Direct assignment as head coach
         else:
             team = serializer.save()
             
@@ -147,39 +148,47 @@ class TeamViewSet(ModelViewSet):
 
     def perform_update(self, serializer):
         """Only allow coaches to update their own teams"""
-        if self.request.user.is_admin:
-            # Admins can update any team
+        if self.request.user.is_admin:            # Admins can update any team
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             # Coaches can only update their own teams
-            coach_teams = self.request.user.coach_profile.teams.all()
-            if serializer.instance in coach_teams:
+            coach = self.request.user.coach_profile
+            # Get teams where this coach is either head coach or assistant coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
+            if serializer.instance in coached_teams:
                 serializer.save()
             else:
-                raise PermissionDenied("You can only update your own teams")    
+                raise PermissionDenied("You can only update your own teams")
     
     def perform_destroy(self, instance):
         """Only allow coaches to delete their own teams"""
-        if self.request.user.is_admin:
-            # Admins can delete any team
+        if self.request.user.is_admin:            # Admins can delete any team
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             # Coaches can only delete their own teams
             coach = self.request.user.coach_profile
-            coach_teams = list(coach.teams.all())
+            # Get teams where this coach is either head coach or assistant coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
             
             # Check if the team belongs to the coach
-            if instance in coach_teams:
+            if instance in coached_teams:
                 instance.delete()
-            else:
-                raise PermissionDenied("You can only delete your own teams")
+            else:                raise PermissionDenied("You can only delete your own teams")
     
     @action(detail=True, methods=["get"], permission_classes=[IsAdminUser])
     def coaches(self, request, **kwargs):
         team = self.get_object()
-        coaches = team.coach.all()
+        coaches = []
+        if team.head_coach:
+            coaches.append(team.head_coach)
+        if team.assistant_coach:
+            coaches.append(team.assistant_coach)
         serializer = CoachInfoSerializer(coaches, many=True, context={'request': request})
-        return Response(serializer.data)    
+        return Response(serializer.data)
     
     @action(detail=True, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def players(self, request, **kwargs):
@@ -710,11 +719,14 @@ class PlayerViews(ModelViewSet):
         # For admins, show all players
         if user.is_admin:
             return base_queryset
-            
-        # For coaches, show only players from their teams
+              # For coaches, show only players from their teams
         if hasattr(user, 'coach_profile'):
-            coach_teams = user.coach_profile.teams.all()
-            return base_queryset.filter(team__in=coach_teams)
+            coach = user.coach_profile
+            # Get teams where this coach is either head coach or assistant coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
+            return base_queryset.filter(team__in=coached_teams)
             
         # For players, show only teammates
         if hasattr(user, 'player_profile') and user.player_profile.team:
@@ -786,34 +798,38 @@ class PlayerViews(ModelViewSet):
     
     def perform_update(self, serializer):
         """Only allow coaches to update players in their own teams"""
-        if self.request.user.is_admin:
-            # Admins can update any player
+        if self.request.user.is_admin:            # Admins can update any player
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             # Coaches can only update players from their teams
             coach = self.request.user.coach_profile
-            coach_teams = list(coach.teams.all())
+            # Get teams where this coach is either head coach or assistant coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
             player = serializer.instance
             
             # Make sure player has a team and that team is in coach's teams
-            if player.team and any(team.id == player.team.id for team in coach_teams):
+            if player.team and player.team in coached_teams:
                 serializer.save()
             else:
                 raise PermissionDenied("You can only update players from your own teams")
     
     def perform_destroy(self, instance):
         """Only allow coaches to delete players in their own teams"""
-        if self.request.user.is_admin:
-            # Admins can delete any player
+        if self.request.user.is_admin:            # Admins can delete any player
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, 'coach_profile'):
             # Coaches can only delete players from their teams
             coach = self.request.user.coach_profile
-            coach_teams = list(coach.teams.all())
+            # Get teams where this coach is either head coach or assistant coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
             player = instance
             
             # Make sure player has a team and that team is in coach's teams
-            if player.team and any(team.id == player.team.id for team in coach_teams):
+            if player.team and player.team in coached_teams:
                 instance.delete()
             else:
                 raise PermissionDenied("You can only delete players from your own teams")
