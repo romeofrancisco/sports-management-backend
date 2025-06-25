@@ -27,8 +27,7 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
         # Join room group
         await self.channel_layer.group_add(
             self.room_group_name,
-            self.channel_name
-        )
+            self.channel_name        )
         
         await self.accept()
 
@@ -57,6 +56,7 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
             'away_team_name': event['away_team_name'],
             'status': event.get('status'),
             'current_period': event.get('current_period'),
+            'sport_scoring_type': event.get('sport_scoring_type'),
             'timestamp': event['timestamp']
         }))
 

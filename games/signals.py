@@ -26,6 +26,7 @@ def send_score_update(game):
                 'away_team_name': game.away_team.name,
                 'status': game.status,
                 'current_period': game.current_period,
+                'sport_scoring_type': game.sport.scoring_type,
                 'timestamp': datetime.now().isoformat()
             }
         )

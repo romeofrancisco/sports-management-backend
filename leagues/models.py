@@ -268,7 +268,6 @@ class Season(models.Model):
     name = models.CharField(max_length=255, blank=True)
     league = models.ForeignKey(League, on_delete=models.CASCADE, related_name="seasons")
     teams = models.ManyToManyField("teams.Team", related_name="leagues")
-    year = models.PositiveIntegerField()
     is_recorded = models.BooleanField(default=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.UPCOMING
@@ -277,19 +276,38 @@ class Season(models.Model):
     end_date = models.DateField(null=True)
 
     class Meta:
-        ordering = ["-year"]
-        unique_together = ["league", "year", "name"]
+        ordering = [
+            models.Case(
+                models.When(status='ongoing', then=0),
+                models.When(status='upcoming', then=1),
+                default=2,
+                output_field=models.IntegerField(),
+            ),
+            '-start_date',
+        ]
+        unique_together = ["league", "name"]
 
     def __str__(self):
-        return f"{self.league.name} Season {self.year}"
+        return f"{self.league.name} Season {self.start_date.year} - {self.end_date.year} ({self.status})"
 
     def clean(self):
-        if self.start_date >= self.end_date:
-            raise ValidationError("Season end date must be after start date")
-        if self.start_date < self.start_date:
-            raise ValidationError("Season cannot start before league start date")
-        if self.end_date > self.end_date:
-            raise ValidationError("Season cannot end after league end date")
+        # Only one ongoing season per league
+        if self.status == self.Status.ONGOING:
+            ongoing = Season.objects.filter(
+                league=self.league, status=self.Status.ONGOING
+            )
+            if self.pk:
+                ongoing = ongoing.exclude(pk=self.pk)
+            if ongoing.exists():
+                raise ValidationError(
+                    "A league can only have one ongoing season at a time."
+                )
+        # Only check start/end date if both are not None
+        if self.start_date and self.end_date:
+            if self.start_date >= self.end_date:
+                raise ValidationError("Season end date must be after start date")
+            if self.end_date > self.end_date:
+                raise ValidationError("Season cannot end after league end date")
 
     @property
     def get_bracket(self):
@@ -322,9 +340,21 @@ class Season(models.Model):
             if completed_games.count() > 0
             else 0
         )
+
     def start_season(self, current_date=None):
         if self.status != self.Status.UPCOMING and self.status != self.Status.PAUSED:
-            raise ValidationError("Season can only start from Upcoming or Paused status")
+            raise ValidationError(
+                "Season can only start from Upcoming or Paused status"
+            )
+
+            # Only one ongoing season per league
+        ongoing = Season.objects.filter(league=self.league, status=self.Status.ONGOING)
+        if self.pk:
+            ongoing = ongoing.exclude(pk=self.pk)
+        if ongoing.exists():
+            raise ValidationError(
+                "A league can only have one ongoing season at a time."
+            )
 
         # Use provided date for testing or date.today() by default
         today = current_date if current_date is not None else date.today()

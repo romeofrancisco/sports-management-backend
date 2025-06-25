@@ -130,7 +130,6 @@ class SeasonModelTest(TestCase):
         self.season = Season.objects.create(
             name="2025 Season",
             league=self.league,
-            year=2025,
             status=Season.Status.UPCOMING,
             start_date=self.start_date,
             end_date=self.end_date
@@ -141,7 +140,6 @@ class SeasonModelTest(TestCase):
         """Test that season objects are created correctly"""
         self.assertEqual(self.season.name, "2025 Season")
         self.assertEqual(self.season.league, self.league)
-        self.assertEqual(self.season.year, 2025)
         self.assertEqual(self.season.status, Season.Status.UPCOMING)
         self.assertEqual(self.season.start_date, self.start_date)
         self.assertEqual(self.season.end_date, self.end_date)
@@ -157,13 +155,12 @@ class SeasonModelTest(TestCase):
         self.assertEqual(str(self.season), "NBA Season 2025")
     
     def test_season_unique_constraint(self):
-        """Test that seasons with same league, year, and name cannot be created"""
-        # Try creating another season with same league, year and name
+        """Test that seasons with same league, and name cannot be created"""
+        # Try creating another season with same league and name
         with self.assertRaises(Exception):
             Season.objects.create(
                 name="2025 Season",
                 league=self.league,
-                year=2025,
                 status=Season.Status.UPCOMING,
                 start_date=self.start_date,
                 end_date=self.end_date
@@ -259,7 +256,6 @@ class SeasonStandingsTest(TestCase):
         self.season = Season.objects.create(
             name="2025 Season",
             league=self.league,
-            year=2025,
             status=Season.Status.ONGOING,
             start_date=self.start_date,
             end_date=self.end_date
@@ -452,7 +448,6 @@ class VolleyballStandingsTest(TestCase):
         self.season = Season.objects.create(
             name="NCAA Season 101",
             league=self.league,
-            year=2025,
             status=Season.Status.ONGOING,
             start_date=self.start_date,
             end_date=self.end_date

@@ -44,8 +44,8 @@ class SeasonGamesService:
             try:
                 # Parse the date and filter games on that specific date
                 parsed_date = datetime.strptime(date, '%Y-%m-%d').date()
-                games = games.filter(date__date=parsed_date)
+                games = games.filter(date=parsed_date)  # FIX: use date=parsed_date for DateField
             except ValueError:
                 pass
-        
+
         return games

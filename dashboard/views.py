@@ -614,7 +614,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     status="scheduled",
                 )
                 .filter(date__gte=timezone.now())
-                .order_by("date")[:4]
+                .order_by("date")[:6]
             )
 
             upcoming_games_data = [
@@ -631,8 +631,8 @@ class DashboardViewSet(viewsets.ViewSet):
 
             # Recent training sessions
             recent_sessions = TrainingSession.objects.filter(
-                status="completed", team__in=coach_teams, date__gte=last_30_days.date()
-            ).order_by("-date")[:4]
+                team__in=coach_teams, date__gte=last_30_days.date()
+            ).order_by("-date")[:6]
 
             recent_sessions_data = [
                 {

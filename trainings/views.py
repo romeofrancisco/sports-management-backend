@@ -2359,12 +2359,10 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         """Get individual player attendance analytics"""
         try:
             base_queryset = self.get_base_queryset(request)
-            filters = self._get_filters(request)
-
-            # Use service to calculate player analytics
+            filters = self._get_filters(request)            # Use service to calculate player analytics
             players_data = (
                 AttendanceAnalyticsService.calculate_player_attendance_analytics(
-                    base_queryset, filters
+                    base_queryset, filters, request
                 )
             )
 
@@ -2388,10 +2386,9 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            user = request.user
-            # Use service to get player detail analytics
+            user = request.user            # Use service to get player detail analytics
             data = AttendanceAnalyticsService.get_player_detail_analytics(
-                player_id, base_queryset, filters, user
+                player_id, base_queryset, filters, user, request
             )
 
             return Response(data)

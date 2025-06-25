@@ -77,7 +77,8 @@ class Game(models.Model):
         related_name="games_won",
     )
 
-    date = models.DateTimeField(null=True, blank=True)
+    date = models.DateField(null=True, blank=True, help_text="Game date")
+    time = models.TimeField(null=True, blank=True, help_text="Game time")
     location = models.CharField(max_length=255, blank=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.SCHEDULED, blank=True
@@ -127,42 +128,32 @@ class Game(models.Model):
         """
         if user.is_admin:
             return True
-            
-        if not hasattr(user, 'coach_profile'):
+
+        if not hasattr(user, "coach_profile"):
             return False
-            
+
         # For league games, check explicit permissions
         if self.type == self.Type.LEAGUE:
             return self.coach_permissions.filter(coach=user).exists()
-              # For non-league games, allow team coaches
+
+        # For non-league games, allow team coaches
         coach_profile = user.coach_profile
-        from django.db.models import Q
-        coach_teams_ids = []
-        
-        # Check if coach is head coach or assistant coach of any team
-        if hasattr(coach_profile, 'head_coach_teams'):
-            coach_teams_ids.extend(coach_profile.head_coach_teams.values_list('id', flat=True))
-        if hasattr(coach_profile, 'assistant_coach_teams'):  
-            coach_teams_ids.extend(coach_profile.assistant_coach_teams.values_list('id', flat=True))
-            
         return (
-            self.home_team_id in coach_teams_ids or 
-            self.away_team_id in coach_teams_ids
+            coach_profile.team == self.home_team or coach_profile.team == self.away_team
         )
 
     def get_assigned_coaches(self):
         """Get all coaches assigned to manage this game"""
-        return self.coach_permissions.select_related('coach__coach_profile').all()
+        return self.coach_permissions.select_related("coach__coach_profile").all()
 
     def assign_coach(self, coach, assigned_by):
         """Assign a coach to manage this game"""
         if self.type != self.Type.LEAGUE:
             raise ValidationError("Can only assign coaches to league games")
-            
+
         permission, created = GameCoachPermission.objects.get_or_create(
-            game=self,
-            coach=coach,
-            defaults={'assigned_by': assigned_by}        )
+            game=self, coach=coach, defaults={"assigned_by": assigned_by}
+        )
         return permission, created
 
     def remove_coach(self, coach):
@@ -744,14 +735,14 @@ class PlayerStat(models.Model):
     def clean(self):
         if self.game.status != Game.Status.IN_PROGRESS:
             raise ValidationError(
-                {"error": "Stats can only be recorded for in-progress games"}
+                "Stats can only be recorded for in-progress games"
             )
         if self.period > self.game.current_period:
-            raise ValidationError({"error": "Cannot record stats for future periods"})
+            raise ValidationError("Cannot record stats for future periods")
         if self.player.team not in [self.game.home_team, self.game.away_team]:
-            raise ValidationError({"error": "Player is not part of this game"})
+            raise ValidationError("Player is not part of this game")
         if self.stat_type.sport != self.game.sport:
-            raise ValidationError({"error": "Stat type doesn't match game sport"})
+            raise ValidationError("Stat type doesn't match game sport")
 
         # New validation: Check if win conditions are already met
         game = self.game
@@ -765,19 +756,14 @@ class PlayerStat(models.Model):
                     >= sport.win_margin
                 ):
                     raise ValidationError(
-                        {
-                            "error": "Home team has already won this set, Please advance to next the set"
-                        }
+                        "Home team has already won this set, Please advance to next the set"
                     )
                 if (
                     game.away_team_score >= sport.win_points_threshold
                     and (game.away_team_score - game.home_team_score)
                     >= sport.win_margin
-                ):
-                    raise ValidationError(
-                        {
-                            "error": "Away team has already won this set, Please advance to next the set"
-                        }
+                ):                    raise ValidationError(
+                        "Away team has already won this set, Please advance to next the set"
                     )
         else:
             # Point-based sports validation
@@ -786,17 +772,15 @@ class PlayerStat(models.Model):
                     game.home_team_score >= sport.win_points_threshold
                     and (game.home_team_score - game.away_team_score)
                     >= sport.win_margin
-                ):
-                    raise ValidationError(
-                        {"error": "Home team has already won the game"}
+                ):                    raise ValidationError(
+                        "Home team has already won the game"
                     )
                 if (
                     game.away_team_score >= sport.win_points_threshold
                     and (game.away_team_score - game.home_team_score)
                     >= sport.win_margin
-                ):
-                    raise ValidationError(
-                        {"error": "Away team has already won the game"}
+                ):                    raise ValidationError(
+                        "Away team has already won the game"
                     )
 
     def save(self, *args, **kwargs):
