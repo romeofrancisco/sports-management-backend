@@ -26,6 +26,26 @@ class BracketViewSet(viewsets.ModelViewSet):
             self._generate_round_robin(bracket)
         else:
             raise ValidationError("Invalid elimination type")
+        
+        # Update season end date after generating bracket
+        self._update_season_end_date(bracket)
+    
+    def _update_season_end_date(self, bracket):
+        """Update season end date to the latest game date if season end date is null"""
+        season = bracket.season
+        
+        # Only update if season end_date is null
+        if season.end_date is None:
+            # Get all games for this season, including bracket games
+            from games.models import Game
+            latest_game = Game.objects.filter(
+                season=season
+            ).order_by('-date').first()
+            
+            if latest_game and latest_game.date:
+                # Set season end_date to the date part of the latest game
+                season.end_date = latest_game.date.date()
+                season.save(update_fields=['end_date'])
                 
     def _generate_single_elimination(self, bracket):
         teams = list(bracket.season.teams.all())
@@ -94,6 +114,8 @@ class BracketViewSet(viewsets.ModelViewSet):
         if not teams:
             raise ValidationError("No teams found")
 
+        random.shuffle(teams)  # Shuffle to randomize the bracket
+
         num_teams = len(teams)
         is_odd = num_teams % 2 != 0
 
@@ -103,12 +125,6 @@ class BracketViewSet(viewsets.ModelViewSet):
             num_teams += 1
 
         total_rounds = num_teams - 1
-        half_size = num_teams // 2
-
-        # Generate initial team order (fixed first, rotating rest)
-        teams_fixed = teams[0]
-        rotating = teams[1:]
-
         for round_number in range(1, total_rounds + 1):
             round_obj = BracketRound.objects.create(
                 bracket=bracket,
@@ -116,22 +132,14 @@ class BracketViewSet(viewsets.ModelViewSet):
             )
 
             matchups = []
-
-            # Pair the fixed team
-            first = teams_fixed
-            second = rotating[-1]
-            matchups.append((first, second))
-
-            # Pair remaining teams
-            for i in range(half_size - 1):
-                home = rotating[i]
-                away = rotating[-i - 2]
-                matchups.append((home, away))
+            for i in range(num_teams // 2):
+                home = teams[i]
+                away = teams[num_teams - 1 - i]
+                if home is not None and away is not None:
+                    matchups.append((home, away))
 
             # Create matches
             for home, away in matchups:
-                if home is None or away is None:
-                    continue  # Skip matches involving "bye"
                 BracketMatch.objects.create(
                     bracket=bracket,
                     round=round_obj,
@@ -139,8 +147,8 @@ class BracketViewSet(viewsets.ModelViewSet):
                     away_team=away
                 )
 
-            # Rotate teams
-            rotating = [rotating[-1]] + rotating[:-1]
+            # Correct circle method rotation
+            teams = [teams[0]] + teams[-1:] + teams[1:-1]
 
         
     def _create_next_round(self, bracket):

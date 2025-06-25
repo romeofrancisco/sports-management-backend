@@ -56,7 +56,9 @@ class DashboardViewSet(viewsets.ViewSet):
             # Users without teams (important for admin to track)
             unassigned_players = Player.objects.filter(team__isnull=True).count()
             coaches_without_teams = (
-                Coach.objects.annotate(team_count=Count("teams"))
+                Coach.objects.annotate(
+                    team_count=Count("head_coached_teams") + Count("assistant_coached_teams")
+                )
                 .filter(team_count=0)
                 .count()
             )
@@ -87,8 +89,10 @@ class DashboardViewSet(viewsets.ViewSet):
             new_users_month = User.objects.filter(date_joined__gte=last_30_days).count()
             new_users_week = User.objects.filter(
                 date_joined__gte=last_7_days
-            ).count()  # System health metrics
-            teams_without_coaches = Team.objects.filter(coach__isnull=True).count()
+            ).count()
+            
+            # System health metrics
+            teams_without_coaches = Team.objects.filter(head_coach__isnull=True, assistant_coach__isnull=True).count()
             teams_with_few_players = (
                 Team.objects.annotate(player_count=Count("players"))
                 .filter(player_count__lt=5)
@@ -103,13 +107,15 @@ class DashboardViewSet(viewsets.ViewSet):
             upcoming_trainings = TrainingSession.objects.filter(
                 date__gte=timezone.now().date(),
                 date__lte=(timezone.now() + timedelta(days=7)).date(),
-            ).count()  # Distribution statistics with more detail
+            ).count()
+            
+            # Distribution statistics with more detail
             teams_by_sport = list(
-                Team.objects.values("sport__name", "sport__id")
+            Team.objects.values("sport__name", "sport__id")
                 .annotate(
                     team_count=Count("id", distinct=True),
                     active_players=Count("players", distinct=True),
-                    total_coaches=Count("coach", distinct=True),
+                    total_coaches=Count("head_coach", distinct=True) + Count("assistant_coach", distinct=True),
                 )
                 .order_by("-team_count")
             )
@@ -383,20 +389,35 @@ class DashboardViewSet(viewsets.ViewSet):
 
             top_performing_teams.sort(
                 key=lambda x: (x["win_rate"], x["games_played"]), reverse=True
-            )  # Coach effectiveness analytics
+            )
+
+            # Coach effectiveness analytics
             coach_analytics = []
-            active_coaches = Coach.objects.annotate(
-                team_count=Count("teams", distinct=True),
-                total_players=Count("teams__players", distinct=True),
-                recent_trainings=Count(
-                    "teams__training_sessions",
-                    filter=Q(teams__training_sessions__date__gte=last_30_days.date()),
-                ),
-            ).filter(team_count__gt=0)[:10]
+            # Get coaches that have teams (either as head coach or assistant coach)
+            active_coaches = Coach.objects.filter(
+                Q(head_coached_teams__isnull=False) | Q(assistant_coached_teams__isnull=False)
+            ).distinct()[:10]
             for coach in active_coaches:
+                # Get teams where this coach is either head coach or assistant coach
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach)
+                )
+                
+                # Calculate metrics manually
+                team_count = coach_teams.count()
+                total_players = Player.objects.filter(team__in=coach_teams).count()
+                recent_trainings = TrainingSession.objects.filter(
+                    team__in=coach_teams,
+                    date__gte=last_30_days.date()
+                ).count()
+                
+                # Skip coaches with no teams
+                if team_count == 0:
+                    continue
+                
                 # Calculate average attendance for coach's teams
                 coach_training_records = PlayerTraining.objects.filter(
-                    session__team__in=coach.teams.all(),
+                    session__team__in=coach_teams,
                     session__date__gte=last_30_days.date(),
                 )
                 total_records = coach_training_records.count()
@@ -411,12 +432,12 @@ class DashboardViewSet(viewsets.ViewSet):
                     {
                         "coach_id": coach.user.id,
                         "coach_name": coach.user.get_full_name(),
-                        "team_count": coach.team_count,
-                        "total_players": coach.total_players,
-                        "recent_trainings": coach.recent_trainings,
+                        "team_count": team_count,
+                        "total_players": total_players,
+                        "recent_trainings": recent_trainings,
                         "attendance_rate": round(attendance_rate, 2),
                         "effectiveness_score": round(
-                            (attendance_rate + (coach.recent_trainings * 10)) / 2, 2
+                            (attendance_rate + (recent_trainings * 10)) / 2, 2
                         ),
                     }
                 )
@@ -521,12 +542,34 @@ class DashboardViewSet(viewsets.ViewSet):
 
         try:
             if not hasattr(user, "coach_profile"):
+                logger.warning(f"Coach profile not found for user {user.id} ({user.username})")
                 return Response(
                     {"error": "Coach profile not found"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            coach_teams = user.coach_profile.teams.all()
+            # Get teams where this coach is either head coach or assistant coach
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
+            
+            logger.info(f"Coach {user.username} has {coach_teams.count()} teams assigned")
+            
+            # If coach has no teams, return empty data instead of error
+            if coach_teams.count() == 0:
+                logger.warning(f"Coach {user.username} has no teams assigned")
+                response_data = {
+                    "team_overview": {
+                        "total_teams": 0,
+                        "total_players": 0,
+                        "recent_training_sessions": 0,
+                    },
+                    "team_attendance": [],
+                    "upcoming_games": [],
+                    "recent_training_sessions": [],
+                }
+                serializer = CoachOverviewSerializer(response_data)
+                return Response(serializer.data)
 
             # Team statistics
             total_teams = coach_teams.count()
@@ -632,12 +675,26 @@ class DashboardViewSet(viewsets.ViewSet):
         user = request.user
 
         if not hasattr(user, "coach_profile"):
+            logger.warning(f"Coach profile not found for user {user.id} ({user.username}) in player_progress")
             return Response({"error": "Coach profile not found"}, status=400)
 
-        coach_teams = user.coach_profile.teams.all()
+        # Get teams where this coach is either head coach or assistant coach
+        coach_teams = Team.objects.filter(
+            Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+        )
+        logger.info(f"Coach {user.username} has {coach_teams.count()} teams in player_progress")
+        
+        # If coach has no teams, return empty data instead of error
+        if coach_teams.count() == 0:
+            logger.warning(f"Coach {user.username} has no teams assigned in player_progress")
+            data = {"player_progress": []}
+            serializer = CoachPlayerProgressSerializer(data)
+            return Response(serializer.data)
+            
         players = Player.objects.filter(
             team__in=coach_teams
-        )  # Get player progress data
+        )
+        # Get player progress data
         player_progress_data = []
         last_30_days = timezone.now() - timedelta(days=30)
 
@@ -645,7 +702,9 @@ class DashboardViewSet(viewsets.ViewSet):
             # Get recent training records
             recent_training_records = PlayerTraining.objects.filter(
                 player=player, session__date__gte=last_30_days.date()
-            )            # Get recent metric records
+            )
+
+            # Get recent metric records
             recent_metrics = PlayerMetricRecord.objects.filter(
                 player_training__player=player, recorded_at__gte=last_30_days,
                 value__isnull=False  # Only include records with actual values
@@ -656,9 +715,12 @@ class DashboardViewSet(viewsets.ViewSet):
             attended_sessions = recent_training_records.filter(
                 attendance_status="present"
             ).count()
+            
             attendance_rate = (
                 (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
-            )  # Calculate performance improvements
+            )
+
+            # Calculate performance improvements
             overall_improvement = self._calculate_overall_improvement(player)
             recent_improvement = self._calculate_recent_improvement(
                 player, last_30_days
@@ -698,16 +760,22 @@ class DashboardViewSet(viewsets.ViewSet):
 
     def _calculate_recent_improvement(self, player, last_30_days):
         """Calculate recent improvement for a player in the last 30 days"""
-        from trainings.services.progress_service import ProgressService
+        try:
+            from trainings.services.progress_service import ProgressService
 
-        # Convert last_30_days datetime to date if needed
-        start_date = (
-            last_30_days.date() if hasattr(last_30_days, "date") else last_30_days
-        )
+            # Convert last_30_days datetime to date if needed
+            start_date = (
+                last_30_days.date() if hasattr(last_30_days, "date") else last_30_days
+            )
 
-        return ProgressService.calculate_recent_improvement(
-            player, date_from=start_date
-        )    
+            return ProgressService.calculate_recent_improvement(
+                player, date_from=start_date
+            )
+        except Exception as e:
+            logger.warning(f"Error calculating recent improvement for player {player.id}: {e}")
+            # Return a safe default value
+            return {"percentage": 0.0, "metric_count": 0, "is_positive": False}
+
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def player_overview(self, request):
         """Personal dashboard for players - also supports admin/coach access to specific player data"""
@@ -732,9 +800,13 @@ class DashboardViewSet(viewsets.ViewSet):
                 # Coach users can only view players from their teams
                 elif user.role == 'Coach' and hasattr(user, "coach_profile"):
                     try:
+                        # Get teams where this coach is either head coach or assistant coach
+                        coach_teams = Team.objects.filter(
+                            Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                        )
                         player = Player.objects.get(
                             user_id=player_id,
-                            team__in=user.coach_profile.teams.all()
+                            team__in=coach_teams
                         )
                     except Player.DoesNotExist:
                         return Response(
@@ -825,20 +897,23 @@ class DashboardViewSet(viewsets.ViewSet):
                 }
                 for record in recent_metrics
                 if record.value is not None  # Additional safety check
-            ]
-
-            # Team information
+            ]            # Team information
             team_info = None
             if player.team:
+                # Get coach names (both head and assistant)
+                coaches = []
+                if player.team.head_coach:
+                    coaches.append(f"Head: {player.team.head_coach.user.get_full_name()}")
+                if player.team.assistant_coach:
+                    coaches.append(f"Assistant: {player.team.assistant_coach.user.get_full_name()}")
+                
+                coach_info = "; ".join(coaches) if coaches else "No Coaches"
+                
                 team_info = {
                     "name": player.team.name,
                     "sport": player.team.sport.name,
                     "total_players": player.team.players.count(),
-                    "coach": (
-                        player.team.coach.user.get_full_name()
-                        if player.team.coach
-                        else "No Coach"
-                    ),
+                    "coach": coach_info,
                 }
             # Player positions
             positions = list(player.position.values_list("name", flat=True))            # Player info structure expected by frontend
@@ -907,7 +982,8 @@ class DashboardViewSet(viewsets.ViewSet):
             return Response(
                 {"error": "An error occurred while fetching player overview data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )        
+            )          
+    
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def player_progress(self, request):
         """Personal progress tracking for players - also supports admin/coach access to specific player data"""
@@ -932,9 +1008,13 @@ class DashboardViewSet(viewsets.ViewSet):
                 # Coach users can only view players from their teams
                 elif user.role == 'Coach' and hasattr(user, "coach_profile"):
                     try:
+                        # Get teams where this coach is either head coach or assistant coach
+                        coach_teams = Team.objects.filter(
+                            Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                        )
                         player = Player.objects.get(
                             user_id=player_id,
-                            team__in=user.coach_profile.teams.all()
+                            team__in=coach_teams
                         )
                     except Player.DoesNotExist:
                         return Response(
@@ -1259,19 +1339,24 @@ class DashboardViewSet(viewsets.ViewSet):
                         "message": f"{teams_without_recent_activity} teams have had no activity in the last 30 days",
                         "action": "Review team status and contact coaches",
                     }
-                )
-
-            # Check for coaches with low engagement
+                )            # Check for coaches with low engagement
             low_engagement_coaches = (
                 Coach.objects.annotate(
                     recent_sessions=Count(
-                        "teams__training_sessions",
+                        "head_coached_teams__training_sessions",
                         filter=Q(
-                            teams__training_sessions__date__gte=last_30_days.date()
+                            head_coached_teams__training_sessions__date__gte=last_30_days.date()
+                        ),
+                    ) + Count(
+                        "assistant_coached_teams__training_sessions", 
+                        filter=Q(
+                            assistant_coached_teams__training_sessions__date__gte=last_30_days.date()
                         ),
                     )
+                )                .filter(
+                    Q(head_coached_teams__isnull=False) | Q(assistant_coached_teams__isnull=False),
+                    recent_sessions__lt=2
                 )
-                .filter(recent_sessions__lt=2, teams__isnull=False)
                 .count()
             )
 
@@ -1455,7 +1540,7 @@ class DashboardViewSet(viewsets.ViewSet):
             # Deduct points for system issues
             total_teams = Team.objects.count()
             if total_teams > 0:  # Teams without coaches
-                teams_without_coaches = Team.objects.filter(coach__isnull=True).count()
+                teams_without_coaches = Team.objects.filter(head_coach__isnull=True, assistant_coach__isnull=True).count()
                 score -= (teams_without_coaches / total_teams) * 20
 
                 # Teams with too few players
@@ -1751,9 +1836,8 @@ class DashboardViewSet(viewsets.ViewSet):
             },
             "health_indicators": {
                 "system_health_score": self._calculate_system_health_score(),
-                "unassigned_players": Player.objects.filter(team__isnull=True).count(),
-                "teams_without_coaches": Team.objects.filter(
-                    coach__isnull=True
+                "unassigned_players": Player.objects.filter(team__isnull=True).count(),                "teams_without_coaches": Team.objects.filter(
+                    head_coach__isnull=True, assistant_coach__isnull=True
                 ).count(),
                 "inactive_teams": Team.objects.exclude(
                     Q(training_sessions__date__gte=date_from)

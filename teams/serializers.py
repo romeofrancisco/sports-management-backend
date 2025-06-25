@@ -73,33 +73,41 @@ class SimpleTeamSerializer(ModelSerializer):
 
 class TeamSerializer(ModelSerializer):
     logo = serializers.ImageField(use_url=True, required=False)
-    coach_name = serializers.SerializerMethodField()
-    coach_id = serializers.IntegerField(source="coach.user.id", read_only=True, allow_null=True)
+    head_coach_name = serializers.SerializerMethodField()
+    assistant_coach_name = serializers.SerializerMethodField()
+    head_coach_id = serializers.IntegerField(source="head_coach.user.id", read_only=True, allow_null=True)
+    assistant_coach_id = serializers.IntegerField(source="assistant_coach.user.id", read_only=True, allow_null=True)
     sport_name = serializers.CharField(source="sport.name", read_only=True)
     player_count = serializers.SerializerMethodField()
     
     # Enhanced coach information
-    coach_info = serializers.SerializerMethodField()
+    head_coach_info = serializers.SerializerMethodField()
+    assistant_coach_info = serializers.SerializerMethodField()
 
     class Meta:
         model = Team
         fields = "__all__"
         read_only_fields = ("created_at", "slug")
 
-    def get_coach_name(self, obj):
-        if obj.coach and obj.coach.user:
-            return f"{obj.coach.user.first_name} {obj.coach.user.last_name}"
+    def get_head_coach_name(self, obj):
+        if obj.head_coach and obj.head_coach.user:
+            return f"{obj.head_coach.user.first_name} {obj.head_coach.user.last_name}"
+        return None
+
+    def get_assistant_coach_name(self, obj):
+        if obj.assistant_coach and obj.assistant_coach.user:
+            return f"{obj.assistant_coach.user.first_name} {obj.assistant_coach.user.last_name}"
         return None
 
     def get_player_count(self, obj):
         return obj.players.count()
     
-    def get_coach_info(self, obj):
-        """Return comprehensive coach information"""
-        if not obj.coach:
+    def get_head_coach_info(self, obj):
+        """Return comprehensive head coach information"""
+        if not obj.head_coach:
             return None
             
-        coach = obj.coach
+        coach = obj.head_coach
         user = coach.user
         
         return {
@@ -111,22 +119,51 @@ class TeamSerializer(ModelSerializer):
             'sex': user.sex,
             'profile': user.profile.url if user.profile else None,
             'sports': [{'id': sport.id, 'name': sport.name, 'slug': sport.slug} for sport in coach.sports.all()],
-            'teams_count': coach.teams.count(),
+            'head_coached_teams_count': coach.head_coached_teams.count(),
+            'assistant_coached_teams_count': coach.assistant_coached_teams.count(),
+        }
+    
+    def get_assistant_coach_info(self, obj):
+        """Return comprehensive assistant coach information"""
+        if not obj.assistant_coach:
+            return None
+            
+        coach = obj.assistant_coach
+        user = coach.user
+        
+        return {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'full_name': f"{user.first_name} {user.last_name}",
+            'email': user.email,
+            'sex': user.sex,
+            'profile': user.profile.url if user.profile else None,
+            'sports': [{'id': sport.id, 'name': sport.name, 'slug': sport.slug} for sport in coach.sports.all()],
+            'head_coached_teams_count': coach.head_coached_teams.count(),
+            'assistant_coached_teams_count': coach.assistant_coached_teams.count(),
         }
     
     def validate(self, data):
-        """Validate that coach can handle the sport for this team"""
-        coach = data.get('coach')
+        """Validate that coaches can handle the sport for this team"""
+        head_coach = data.get('head_coach')
+        assistant_coach = data.get('assistant_coach')
         sport = data.get('sport')
         
         # If we're updating, get current values if not provided
         if self.instance:
-            coach = coach or self.instance.coach
+            head_coach = head_coach or self.instance.head_coach
+            assistant_coach = assistant_coach or self.instance.assistant_coach
             sport = sport or self.instance.sport
         
-        if coach and sport and not coach.can_coach_team(type('Team', (), {'sport': sport})()):
+        if head_coach and sport and not head_coach.can_coach_team(type('Team', (), {'sport': sport})()):
             raise serializers.ValidationError({
-                'coach': f"Selected coach cannot coach {sport.name} teams. Please assign a coach who handles this sport."
+                'head_coach': f"Selected head coach cannot coach {sport.name} teams. Please assign a coach who handles this sport."
+            })
+            
+        if assistant_coach and sport and not assistant_coach.can_coach_team(type('Team', (), {'sport': sport})()):
+            raise serializers.ValidationError({
+                'assistant_coach': f"Selected assistant coach cannot coach {sport.name} teams. Please assign a coach who handles this sport."
             })
         
         return data
@@ -248,7 +285,10 @@ class CoachInfoSerializer(ModelSerializer):
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex")
     password = serializers.CharField(source="user.password", required=True, write_only=True)
-    teams = SimpleTeamSerializer(many=True, read_only=True)  # Use SimpleTeamSerializer to avoid circular imports
+    
+    # Teams where this coach is either head coach or assistant coach
+    head_coached_teams = SimpleTeamSerializer(many=True, read_only=True)
+    assistant_coached_teams = SimpleTeamSerializer(many=True, read_only=True)
     
     # Sports handling
     sport_ids = serializers.PrimaryKeyRelatedField(
@@ -264,7 +304,8 @@ class CoachInfoSerializer(ModelSerializer):
     
     class Meta:
         model = Coach
-        fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", "teams", "sport_ids", "sports"]
+        fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", 
+                 "head_coached_teams", "assistant_coached_teams", "sport_ids", "sports"]
         
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"

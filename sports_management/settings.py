@@ -39,12 +39,14 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS_LIST", default=["localhost", "127.0.0.1"
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",  # Add daphne at the top for ASGI support
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",  # Add channels here
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
@@ -58,6 +60,7 @@ INSTALLED_APPS = [
     "brackets",
     "trainings",
     "dashboard",
+    "chat",
 ]
 
 MIDDLEWARE = [
@@ -90,6 +93,24 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "sports_management.wsgi.application"
+ASGI_APPLICATION = "sports_management.asgi.application"
+
+# Channel Layers Configuration
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    },
+}
+
+# Uncomment below and comment above when Redis is installed
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [("127.0.0.1", 6379)],
+#         },
+#     },
+# }
 
 # Rest framework Config
 REST_FRAMEWORK = {

@@ -17,9 +17,10 @@ class Team(models.Model):
     color = models.CharField(max_length=20, default="#000000")
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
     division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
-    coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='teams')
+    head_coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='head_coached_teams')
+    assistant_coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='assistant_coached_teams')
     logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
-    slug = models.SlugField(unique=True, blank=True)  
+    slug = models.SlugField(unique=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -32,10 +33,14 @@ class Team(models.Model):
         if not self.slug:
             self.slug = slugify(self.name)  # Auto-generate slug from name
         
-        # Validate coach can handle this sport
-        if self.coach and not self.coach.can_coach_team(self):
+        # Validate coaches can handle this sport
+        if self.head_coach and not self.head_coach.can_coach_team(self):
             from django.core.exceptions import ValidationError
-            raise ValidationError(f"Coach {self.coach} cannot coach {self.sport.name} teams.")
+            raise ValidationError(f"Head coach {self.head_coach} cannot coach {self.sport.name} teams.")
+        
+        if self.assistant_coach and not self.assistant_coach.can_coach_team(self):
+            from django.core.exceptions import ValidationError
+            raise ValidationError(f"Assistant coach {self.assistant_coach} cannot coach {self.sport.name} teams.")
             
         super().save(*args, **kwargs)
         

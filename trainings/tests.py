@@ -399,11 +399,12 @@ class TrainingViewSetMethodTestCase(TestCase):
         
         self.coach_user = User.objects.create_user(
             email='coach@test.com', 
-            password='testpass123',
-            role='coach'
+            password='testpass123',            role='coach'
         )
         self.coach = Coach.objects.create(user=self.coach_user)
-        self.coach.teams.add(self.team)
+        # Assign coach as head coach of the team
+        self.team.head_coach = self.coach
+        self.team.save()
         
         self.player_user = User.objects.create_user(
             email='player@test.com',

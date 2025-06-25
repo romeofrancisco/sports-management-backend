@@ -132,7 +132,7 @@ class LeagueStatisticsService:
         champions = Bracket.objects.filter(
             season__league=self.league,
             winner__isnull=False
-        ).values('season__year', 'winner__name', 'winner__id').order_by('-season__year')
+        ).values('season__start_date', 'winner__name', 'winner__id').order_by('-season__start_date')
           # Get set-based highlights
         highest_scoring_sets = self._get_highest_scoring_sets()
         biggest_margin_sets = self._get_biggest_margin_sets()
@@ -256,7 +256,7 @@ class LeagueStatisticsService:
         champions = Bracket.objects.filter(
             season__league=self.league,
             winner__isnull=False
-        ).values('season__year', 'winner__name', 'winner__id').order_by('-season__year')
+        ).values('season__start_date', 'winner__name', 'winner__id').order_by('-season__start_date')
         
         # Prepare highest scoring games data
         high_scoring_games = []
@@ -270,7 +270,8 @@ class LeagueStatisticsService:
                 'away_score': game.away_team_score,
                 'total_score': game.home_team_score + game.away_team_score,
                 'season': game.season.name,
-                'season_year': game.season.year
+                'start_date': game.season.start_date,
+                'end_date': game.season.end_date,
             })
         
         # Prepare biggest margin games data
@@ -286,7 +287,8 @@ class LeagueStatisticsService:
                 'margin': abs(game.home_team_score - game.away_team_score),
                 'winner': game.winner_team.name if game.winner_team else None,
                 'season': game.season.name,
-                'season_year': game.season.year
+                'start_date': game.season.start_date,
+                'end_date': game.season.end_date
             })
         
         # Compile response
@@ -476,7 +478,8 @@ class LeagueStatisticsService:
                 'set_number': game_set.period,
                 'winner': game_set.winner.name if game_set.winner else None,
                 'season': game_set.game.season.name,
-                'season_year': game_set.game.season.year
+                'start_date': game_set.game.season.start_date,
+                'end_date': game_set.game.season.end_date
             })
         
         return highlights
@@ -505,7 +508,8 @@ class LeagueStatisticsService:
                 'set_number': game_set.period,
                 'winner': game_set.winner.name if game_set.winner else None,
                 'season': game_set.game.season.name,
-                'season_year': game_set.game.season.year
+                'start_date': game_set.game.season.start_date,
+                'end_date': game_set.game.season.end_date
             })
         
         return highlights

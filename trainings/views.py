@@ -5,13 +5,31 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Count, Avg, Max, Min
+from django.db.models import Count, Avg, Max, Min, Q
 from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.core.exceptions import PermissionDenied
 import logging
 import time
+
+
+def get_coach_teams(coach_profile):
+    """Helper function to get teams where coach is either head coach or assistant coach"""
+    from teams.models import Team
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
+    )
+
+
+def is_coach_team(team, coach_profile):
+    """Helper function to check if a team belongs to a coach"""
+    from teams.models import Team
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile),
+        id=team.id
+    ).exists()
+
 
 from .models import (
     MetricUnit,
@@ -199,11 +217,13 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
         # For admins, show all training sessions
         if user.is_admin:
-            return base_queryset
-
-        # For coaches, show only their team's training sessions
+            return base_queryset        # For coaches, show only their team's training sessions
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return base_queryset.filter(team__in=coach_teams)
 
         # For players, show only their team's training sessions
@@ -297,7 +317,11 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         if self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             team = serializer.validated_data.get("team")
             if team:
-                coach_teams = list(self.request.user.coach_profile.teams.all())
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+                )
                 if team not in coach_teams:
                     raise PermissionDenied(
                         "You can only create training sessions for your own teams"
@@ -311,12 +335,15 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """Only allow coaches to update training sessions for their own teams"""
-        if self.request.user.is_admin:
-            # Admins can update any training session
+        if self.request.user.is_admin:            # Admins can update any training session
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update training sessions for their teams
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+            )
             session = serializer.instance
 
             # Check if the session belongs to one of the coach's teams
@@ -339,12 +366,11 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Only allow coaches to delete training sessions for their own teams"""
-        if self.request.user.is_admin:
-            # Admins can delete any training session
+        if self.request.user.is_admin:            # Admins can delete any training session
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete training sessions for their teams
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the session belongs to one of the coach's teams
             if instance.team and instance.team in coach_teams:
@@ -510,7 +536,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -555,7 +581,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -619,18 +645,24 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             session, player_ids, metric_ids
         )
 
-        # Create appropriate response message based on operation
-        if len(metric_ids) == 0:
-            message = f"Removed all metrics from {len(player_ids)} players"
-        else:
-            message = f"Assigned {len(metric_ids)} metrics to {len(player_ids)} players"
-
+        # Calculate totals from the results
+        total_added = sum(
+            player_result.get("created_records", 0)
+            for player_result in result.get("results", [])
+        )
+        total_removed = sum(            player_result.get("deleted_records", 0)
+            for player_result in result.get("results", [])
+        )
+        players_processed = result.get("total_players_processed", 0)
         return Response(
             {
-                "detail": message,
+                "detail": f"Processed {players_processed} players - {total_added} metrics added, {total_removed} metrics removed",
+                "total_players_processed": players_processed,
+                "total_metrics_added": total_added,
+                "total_metrics_removed": total_removed,
                 "player_count": len(player_ids),
                 "metric_count": len(metric_ids),
-                "assigned_records": result.get("total_assigned", 0),
+                "success": result.get("success", True),
                 "results": result.get("results", []),
             }
         )
@@ -657,7 +689,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -702,7 +734,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -810,7 +842,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and session.team in user.coach_profile.teams.all()
+                and session.team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -852,7 +884,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             user.is_admin
             or (
                 hasattr(user, "coach_profile")
-                and team in user.coach_profile.teams.all()
+                and team in get_coach_teams(user.coach_profile)
             )
         ):
             return Response(
@@ -999,7 +1031,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
 
         # For coaches, show only player training records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(session__team__in=coach_teams)
 
         # For players, show only their own training records
@@ -1080,7 +1112,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update player training records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
             player_training = serializer.instance
 
             # Check if the player training record belongs to one of the coach's teams
@@ -1105,7 +1137,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete player training records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the player training record belongs to one of the coach's teams
             if instance.session.team and instance.session.team in coach_teams:
@@ -1411,9 +1443,9 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
         
         # Get query parameters
         status_filter = request.query_params.get('status')
-        category_filter = request.query_params.get('category')
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
+        search = request.query_params.get('search')
         
         # Get PlayerTraining records with assigned metrics
         base_query = PlayerTraining.objects.filter(
@@ -1464,12 +1496,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             # Get assigned metrics for this session
             assigned_metrics = []
             metric_records_data = []
-            
             for metric in pt.assigned_metrics.all():
-                # Apply category filter at metric level
-                if category_filter and category_filter != 'all' and metric.category.name != category_filter:
-                    continue
-                
                 # Get metric record for this session
                 metric_record = pt.metric_records.filter(metric=metric).first()
                 
@@ -1535,6 +1562,10 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                     'improvement_percentage': self._calculate_improvement_percentage_for_metric(player, metric, metric_record)
                 })
             
+            # Add search filter for session title
+            if search and search.lower() not in pt.session.title.lower():
+                continue
+            
             # Only include sessions that have metrics after filtering
             if assigned_metrics:
                 session_data = {
@@ -1591,6 +1622,136 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                 'assigned': status_counts['assigned'],                'missed': status_counts['missed'],
                 'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
             }
+        })
+
+    @action(detail=False, methods=['get'])
+    def assigned_metrics_overview(self, request):
+        """Get overall assigned metrics summary for the current player (no filters applied)"""
+        user = request.user
+        
+        # Ensure only players can access this endpoint
+        if not hasattr(user, 'player_profile'):
+            raise PermissionDenied("Only players can access assigned metrics")
+        
+        player = user.player_profile
+        
+        # Get all PlayerTraining records with assigned metrics (no filters)
+        player_trainings = PlayerTraining.objects.filter(
+            player=player,
+            assigned_metrics__isnull=False
+        ).select_related(
+            'session',
+            'session__team'
+        ).prefetch_related(
+            'assigned_metrics',
+            'metric_records',
+            'metric_records__metric'
+        ).distinct()
+        
+        # Calculate overall summary statistics
+        total_metrics_count = 0
+        status_counts = {'completed': 0, 'in_progress': 0, 'assigned': 0, 'missed': 0}
+        
+        # Track processed metrics to avoid duplicates
+        processed_metrics = set()
+        
+        for pt in player_trainings:
+            for metric in pt.assigned_metrics.all():
+                # Create unique identifier for metric-session combination
+                metric_session_key = f"{metric.id}_{pt.session.id}"
+                if metric_session_key in processed_metrics:
+                    continue
+                
+                processed_metrics.add(metric_session_key)
+                total_metrics_count += 1
+                
+                # Get metric record for this session
+                metric_record = pt.metric_records.filter(metric=metric).first()
+                
+                # Determine individual metric status
+                if metric_record and metric_record.value is not None:
+                    metric_status = 'completed'
+                elif pt.session.status == 'completed':
+                    if pt.attendance_status in ['absent', 'excused']:
+                        metric_status = 'missed'
+                    else:
+                        metric_status = 'missed'
+                elif pt.session.status == 'ongoing':
+                    metric_status = 'in_progress'
+                elif pt.session.status == 'upcoming':
+                    metric_status = 'assigned'
+                else:
+                    metric_status = 'assigned'
+                
+                status_counts[metric_status] += 1
+        
+        return Response({
+            'total_metrics': total_metrics_count,
+            'completed': status_counts['completed'],            'in_progress': status_counts['in_progress'],
+            'assigned': status_counts['assigned'],
+            'missed': status_counts['missed'],
+            'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
+        })
+
+    @action(detail=False, methods=['get'])
+    def training_overview(self, request):
+        """Get training overview statistics for the current player"""
+        user = request.user
+        
+        # Ensure only players can access this endpoint
+        if not hasattr(user, 'player_profile'):
+            raise PermissionDenied("Only players can access training overview")
+        
+        player = user.player_profile
+        
+        # Calculate date range for 90 days span (only for recent improvement)
+        from datetime import datetime, timedelta
+        ninety_days_ago = timezone.now().date() - timedelta(days=90)
+        
+        # Get all training sessions for this player (all time)
+        all_trainings = PlayerTraining.objects.filter(player=player)
+        
+        # 1. Total number of training sessions (all time)
+        total_sessions = all_trainings.count()
+        
+        # 2. Present attendance percentage (all time)
+        present_count = all_trainings.filter(
+            attendance_status__in=['present', 'late']
+        ).count()
+        
+        attendance_percentage = round((present_count / total_sessions * 100), 1) if total_sessions > 0 else 0
+        
+        # 3. Number of times late status (all time)
+        late_count = all_trainings.filter(attendance_status='late').count()
+        
+        # 4. Number of training sessions attended (present or late)
+        attended_count = present_count
+        
+        # 5. Recent improvement using same method as dashboard (90 days span only)
+        # Use ProgressService to ensure consistency with dashboard
+        from .services.progress_service import ProgressService
+        
+        recent_improvement_data = ProgressService.calculate_recent_improvement(
+            player, 
+            date_from=ninety_days_ago, 
+            date_to=timezone.now().date()
+        )
+        
+        if recent_improvement_data:
+            average_improvement = round(recent_improvement_data['percentage'], 1)
+            metrics_analyzed = recent_improvement_data['metric_count']
+        else:
+            average_improvement = 0
+            metrics_analyzed = 0
+        
+        return Response({
+            'total_sessions': total_sessions,
+            'attendance_percentage': attendance_percentage,
+            'late_count': late_count,
+            'attended_count': attended_count,  # renamed from absent_count
+            'recent_improvement': average_improvement,
+            'metrics_analyzed': metrics_analyzed,
+            'improvement_date_range_days': 90
         })
 
     def _calculate_improvement_for_metric(self, player, metric, current_record):
@@ -1690,7 +1851,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
 
         # For coaches, show only metric records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(player_training__session__team__in=coach_teams)
 
         # For players, show only their own metric records
@@ -1739,7 +1900,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             )
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only create metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the metric record belongs to one of the coach's teams
             if session.team and session.team in coach_teams:
@@ -1758,7 +1919,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
             metric_record = serializer.instance
 
             # Check if the metric record belongs to one of the coach's teams
@@ -1781,7 +1942,7 @@ class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete metric records for their team's players
-            coach_teams = list(self.request.user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(self.request.user.coach_profile)
 
             # Check if the metric record belongs to one of the coach's teams
             if (
@@ -1828,7 +1989,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         # For coaches, show only players from their teams
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(
                 team__in=coach_teams
             )  # For players, show only their own data
@@ -1895,10 +2056,13 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Apply role-based access control
         user = request.user
-        if not user.is_admin:
-            # For coaches, check if player is in their teams
+        if not user.is_admin:            # For coaches, check if player is in their teams
             if hasattr(user, "coach_profile"):
-                coach_teams = user.coach_profile.teams.all()
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                )
                 if player.team not in coach_teams:
                     raise PermissionDenied(
                         "You can only access radar chart data for players in your teams"
@@ -2096,6 +2260,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     """
     ViewSet for attendance analytics and reporting with role-based access control
+   
     """
 
     permission_classes = [IsAuthenticated]
@@ -2106,6 +2271,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         - Admin: All attendance records
         - Coach: Only records for their team's players
         - Player: Only their own attendance records
+
         - Others: Permission denied
         """
         user = request.user
@@ -2119,7 +2285,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
         # For coaches, show only records for their team's players
         if hasattr(user, "coach_profile"):
-            coach_teams = user.coach_profile.teams.all()
+            coach_teams = get_coach_teams(user.coach_profile)
             return base_queryset.filter(session__team__in=coach_teams)
 
         # For players, show only their own attendance records
@@ -2193,12 +2359,10 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         """Get individual player attendance analytics"""
         try:
             base_queryset = self.get_base_queryset(request)
-            filters = self._get_filters(request)
-
-            # Use service to calculate player analytics
+            filters = self._get_filters(request)            # Use service to calculate player analytics
             players_data = (
                 AttendanceAnalyticsService.calculate_player_attendance_analytics(
-                    base_queryset, filters
+                    base_queryset, filters, request
                 )
             )
 
@@ -2222,10 +2386,9 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            user = request.user
-            # Use service to get player detail analytics
+            user = request.user            # Use service to get player detail analytics
             data = AttendanceAnalyticsService.get_player_detail_analytics(
-                player_id, base_queryset, filters, user
+                player_id, base_queryset, filters, user, request
             )
 
             return Response(data)

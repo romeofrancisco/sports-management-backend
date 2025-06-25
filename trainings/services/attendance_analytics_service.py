@@ -32,19 +32,24 @@ class AttendanceAnalyticsService:
         
         queryset = PlayerTraining.objects.all()
         
-        if user.is_admin:
-            # Admins can see all training records
+        if user.is_admin:            # Admins can see all training records
             return queryset
         elif hasattr(user, 'coach_profile'):
             # Coaches can only see records from their teams
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return queryset.filter(session__team__in=coach_teams)
         elif hasattr(user, 'player_profile'):
             # Players can only see their own records
             return queryset.filter(player=user.player_profile)
         
         # Default: no access
-        return PlayerTraining.objects.none()    @staticmethod
+        return PlayerTraining.objects.none()
+    
+    @staticmethod
     def get_filters(request):
         """
         Extract filters from request parameters
@@ -170,14 +175,18 @@ class AttendanceAnalyticsService:
             day_records = attendance_qs.filter(session__date=date)
             total = day_records.count()
             present = day_records.filter(attendance_status='present').count()
+            late = day_records.filter(attendance_status='late').count()
+            attended = present + late
             
-            attendance_rate = (present / total * 100) if total > 0 else 0
+            attendance_rate = (attended / total * 100) if total > 0 else 0
             
             trends_data.append({
                 'date': date.isoformat(),
                 'attendance_rate': round(attendance_rate, 2),
                 'total_records': total,
-                'present_count': present
+                'present_count': present,
+                'late_count': late,
+                'attended_count': attended
             })
         
         return trends_data
@@ -206,26 +215,30 @@ class AttendanceAnalyticsService:
             day_records = attendance_qs.filter(session__date=date)
             total = day_records.count()
             present = day_records.filter(attendance_status='present').count()
+            late = day_records.filter(attendance_status='late').count()
+            attended = present + late
             
-            attendance_rate = (present / total * 100) if total > 0 else 0
+            attendance_rate = (attended / total * 100) if total > 0 else 0
             
             heatmap_data.append({
                 'date': date.isoformat(),
                 'total_players': total,
                 'present_count': present,
-                'attendance_rate': round(attendance_rate, 2)
-            })
+                'late_count': late,
+                'attended_count': attended,
+                'attendance_rate': round(attendance_rate, 2)            })
         
         return heatmap_data
 
     @staticmethod
-    def calculate_player_attendance_analytics(base_queryset, filters):
+    def calculate_player_attendance_analytics(base_queryset, filters, request=None):
         """
         Calculate individual player attendance analytics
         
         Args:
             base_queryset: Base PlayerTraining queryset
             filters: Dictionary of filters to apply
+            request: Django request object for building absolute URLs
             
         Returns:
             list: Player attendance statistics
@@ -233,15 +246,13 @@ class AttendanceAnalyticsService:
         attendance_qs = base_queryset.filter(**filters).select_related(
             'player__user', 'session'
         )
-        
-        # Group by player
+          # Group by player
         player_stats = {}
         for record in attendance_qs:
             player_id = record.player.user_id
-            if player_id not in player_stats:
-                player_stats[player_id] = {
+            if player_id not in player_stats:                player_stats[player_id] = {
                     'player_id': player_id,
-                    'player_name': record.player.user.get_full_name(),
+                    'player_name': record.player.user.get_full_name(),                    'player_profile': request.build_absolute_uri(record.player.user.profile.url) if record.player.user.profile and request else None,
                     'total_sessions': 0,
                     'present_count': 0,
                     'absent_count': 0,
@@ -262,23 +273,23 @@ class AttendanceAnalyticsService:
                 stats['late_count'] += 1
             elif record.attendance_status == 'excused':
                 stats['excused_count'] += 1
-        
-        # Calculate attendance rates and sort
+          # Calculate attendance rates and sort
         players_data = []
         for stats in player_stats.values():
             total = stats['total_sessions']
             present = stats['present_count']
-            attendance_rate = (present / total * 100) if total > 0 else 0
+            late = stats['late_count']
+            attended = present + late
+            attendance_rate = (attended / total * 100) if total > 0 else 0
             
             stats['attendance_rate'] = round(attendance_rate, 2)
             players_data.append(stats)
-        
-        # Sort by attendance rate
+          # Sort by attendance rate
         players_data.sort(key=lambda x: x['attendance_rate'], reverse=True)
         return players_data
 
     @staticmethod
-    def get_player_detail_analytics(player_id, base_queryset, filters, user=None):
+    def get_player_detail_analytics(player_id, base_queryset, filters, user=None, request=None):
         """
         Get detailed attendance analytics for a specific player
         
@@ -287,6 +298,7 @@ class AttendanceAnalyticsService:
             base_queryset: Base PlayerTraining queryset
             filters: Dictionary of filters to apply
             user: Requesting user for permission checks
+            request: Django request object for building absolute URLs
             
         Returns:
             dict: Detailed player analytics
@@ -301,12 +313,16 @@ class AttendanceAnalyticsService:
         # Permission checks
         if user and not user.is_admin:
             if hasattr(user, 'player_profile'):
-                # Players can only view their own data
+                # Players can only view their own data                
                 if str(user.player_profile.user_id) != str(player_id):
                     raise PermissionDenied("You can only view your own attendance data")
             elif hasattr(user, 'coach_profile'):
                 # Coaches can only view data for players in their teams
-                coach_teams = user.coach_profile.teams.all()
+                from django.db.models import Q
+                from teams.models import Team
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                )
                 player_accessible = attendance_qs.filter(session__team__in=coach_teams).exists()
                 if not player_accessible:
                     raise PermissionDenied("You can only view attendance data for players in your teams")
@@ -321,10 +337,10 @@ class AttendanceAnalyticsService:
                 'trends': [],
                 'recent_sessions': []
             }
-        
-        # Get player info from first record
+          # Get player info from first record
         first_record = attendance_qs.first()
         player_name = first_record.player.user.get_full_name()
+        player_profile = first_record.player  # Get the full player profile
         
         # Calculate overall stats
         total_sessions = attendance_qs.count()
@@ -333,9 +349,11 @@ class AttendanceAnalyticsService:
         late_count = attendance_qs.filter(attendance_status='late').count()
         excused_count = attendance_qs.filter(attendance_status='excused').count()
         
-        attendance_rate = (present_count / total_sessions * 100) if total_sessions > 0 else 0
+        # Count both present and late as attended for attendance rate
+        attended_count = present_count + late_count
+        attendance_rate = (attended_count / total_sessions * 100) if total_sessions > 0 else 0
         
-        # Attendance distribution
+        # Attendance distribution - keep original counts separate
         attendance_distribution = {
             'present': present_count,
             'absent': absent_count,
@@ -357,15 +375,15 @@ class AttendanceAnalyticsService:
         recent_sessions = []
         for record in attendance_qs.order_by('-session__date')[:10]:
             recent_sessions.append({
+                'session_id': record.session.id,
                 'date': record.session.date.isoformat(),
                 'session_title': record.session.title,
                 'status': record.attendance_status or 'pending',
-                'team': record.session.team.name if record.session.team else 'Individual'
-            })
-        
+                'team': record.session.team.name if record.session.team else 'Individual'            })        
         return {
             'player_id': player_id,
             'player_name': player_name,
+            'player_profile': request.build_absolute_uri(player_profile.user.profile.url) if player_profile.user.profile and request else None,
             'total_sessions': total_sessions,
             'attendance_rate': round(attendance_rate, 2),
             'attendance_distribution': attendance_distribution,

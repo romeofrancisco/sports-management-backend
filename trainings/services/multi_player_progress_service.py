@@ -268,7 +268,9 @@ class MultiPlayerProgressService:
                             training_records_query = training_records_query.filter(session__date__lte=self.date_to)
                         
                         total_sessions = training_records_query.count()
-                        attended_sessions = training_records_query.filter(attendance_status="present").count()
+                        present_sessions = training_records_query.filter(attendance_status="present").count()
+                        late_sessions = training_records_query.filter(attendance_status="late").count()
+                        attended_sessions = present_sessions + late_sessions
                         attendance_rate = (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
                         
                         # Get recent metrics count

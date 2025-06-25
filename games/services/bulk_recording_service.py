@@ -13,6 +13,7 @@ class BulkRecordingService:
     Reduces database round trips and improves recording performance
     """
     
+    
     def __init__(self, game_id):
         try:
             self.game = Game.objects.select_related('sport').get(pk=game_id)

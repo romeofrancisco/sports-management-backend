@@ -27,7 +27,11 @@ class PlayerImprovementViewSet(viewsets.ReadOnlyModelViewSet):
             return base_queryset
         elif user.is_coach and hasattr(user, 'coach_profile'):
             # Coaches can see stats for their teams' players
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return base_queryset.filter(player__team__in=coach_teams)
         elif user.is_player and hasattr(user, 'player_profile'):
             # Players can only see their own stats

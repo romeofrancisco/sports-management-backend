@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Test</h1>
+    <div id="messages"></div>
+    <input type="text" id="messageInput" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+    
+    <script>        // Replace with a valid team ID
+        const teamId = 1;
+        const wsUrl = `ws://localhost:8000/ws/chat/team/${teamId}/`;
+        
+        console.log('Connecting to:', wsUrl);
+        const socket = new WebSocket(wsUrl);
+        
+        socket.onopen = function(e) {
+            console.log('✅ WebSocket connected');
+            document.getElementById('messages').innerHTML += '<p>✅ Connected</p>';
+        };
+        
+        socket.onmessage = function(event) {
+            console.log('📨 Message received:', event.data);
+            const data = JSON.parse(event.data);
+            document.getElementById('messages').innerHTML += `<p>📨 ${data.sender_name}: ${data.message}</p>`;
+        };
+        
+        socket.onclose = function(event) {
+            console.log('❌ WebSocket closed:', event.code, event.reason);
+            document.getElementById('messages').innerHTML += '<p>❌ Disconnected</p>';
+        };
+        
+        socket.onerror = function(error) {
+            console.error('🚨 WebSocket error:', error);
+            document.getElementById('messages').innerHTML += '<p>🚨 Error</p>';
+        };
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (message && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ message }));
+                input.value = '';
+            }
+        }
+        
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

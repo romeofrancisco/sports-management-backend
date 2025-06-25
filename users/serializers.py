@@ -2,10 +2,12 @@ from rest_framework.serializers import ModelSerializer, Serializer
 from .models import User
 from rest_framework import serializers
 from django.contrib.auth import authenticate
+from teams.models import Player, Team
 
 
 class UserSerializer(ModelSerializer):
     profile = serializers.SerializerMethodField()
+    team_slug = serializers.SerializerMethodField()
     
     class Meta:
         model = User
@@ -18,6 +20,7 @@ class UserSerializer(ModelSerializer):
             "email",
             "role",
             "date_of_birth",
+            "team_slug",
         )
     
     def get_profile(self, obj):
@@ -26,6 +29,15 @@ class UserSerializer(ModelSerializer):
             if request:
                 return request.build_absolute_uri(obj.profile.url)
             return obj.profile.url
+        return None
+
+    def get_team_slug(self, obj):
+        try:
+            player = Player.objects.get(user=obj)
+            if player.team:
+                return player.team.slug
+        except Player.DoesNotExist:
+            return None
         return None
 
 

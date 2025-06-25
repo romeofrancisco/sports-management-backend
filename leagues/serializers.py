@@ -31,14 +31,14 @@ class LeagueSerializer(serializers.ModelSerializer):
         return total_games
     
     def get_season(self, obj):
-        """Get current season name/year"""
+        """Get current season name"""
         # Try to get the most recent ongoing season, otherwise the most recent season
         current_season = obj.seasons.filter(status='ongoing').first()
         if not current_season:
-            current_season = obj.seasons.order_by('-year').first()
-        
+            current_season = obj.seasons.order_by('-start_date').first()
+
         if current_season:
-            return current_season.name or str(current_season.year)
+            return current_season.name
         return None
     
     def get_seasons_count(self, obj):
@@ -77,7 +77,7 @@ class SeasonSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Season
-        fields = ['id', 'name', 'league', 'year', 'status', 'start_date', 'end_date', 
+        fields = ['id', 'name', 'league', 'status', 'start_date', 'end_date', 
                  'has_bracket', 'games_count', 'games_played', 'avg_points_per_game', 'teams', 'is_recorded', 'league_name', 'teams_list']
         read_only_fields = ['league', 'team_lists']
         extra_kwargs = {"teams":{"write_only": True}}
@@ -85,8 +85,14 @@ class SeasonSerializer(serializers.ModelSerializer):
     def validate(self, data):
         start = data.get('start_date')
         end = data.get('end_date')
-        if start and end and start >= end:
-            raise serializers.ValidationError("End date must be after start date")
+        print("Start", start)
+        print("End", end)
+        # Allow end_date to be None or missing
+        if start and end:
+            if start >= end:
+                raise serializers.ValidationError({
+                    'end_date': 'End date must be after start date.'
+                })
         return data
     
     def get_has_bracket(self, obj):
@@ -147,7 +153,6 @@ class SeasonComparisonSerializer(serializers.Serializer):
     """Serializer for season comparison data"""
     id = serializers.IntegerField()
     name = serializers.CharField()
-    year = serializers.IntegerField()
     champion = serializers.CharField(allow_null=True)
     teams_count = serializers.IntegerField()
     games_count = serializers.IntegerField()

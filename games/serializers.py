@@ -1,11 +1,33 @@
 from rest_framework import serializers
-from .models import Game, PlayerStat, StartingLineup, Substitution
+from .models import Game, PlayerStat, StartingLineup, Substitution, GameCoachPermission
 from teams.serializers import TeamSerializer
 from teams.models import Team, Player
 from sports.models import SportStatType, Position, Sport
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
 from leagues.models import League, Season
+
+
+class GameCoachPermissionSerializer(serializers.ModelSerializer):
+    coach_name = serializers.CharField(source="coach.get_full_name", read_only=True)
+    coach_email = serializers.CharField(source="coach.email", read_only=True)
+    assigned_by_name = serializers.CharField(
+        source="assigned_by.get_full_name", read_only=True
+    )
+
+    class Meta:
+        model = GameCoachPermission
+        fields = [
+            "id",
+            "game",
+            "coach",
+            "coach_name",
+            "coach_email",
+            "assigned_by",
+            "assigned_by_name",
+            "assigned_at",
+        ]
+        read_only_fields = ["assigned_by", "assigned_at"]
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -90,10 +112,16 @@ class GameSerializer(serializers.ModelSerializer):
     lineup_status = serializers.SerializerMethodField()
     score_summary = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
-    sport = serializers.PrimaryKeyRelatedField(queryset=Sport.objects.all(), read_only=False)
-      # Nested league and season data for frontend display
+    sport_scoring_type = serializers.CharField(
+        source="sport.scoring_type", read_only=True
+    )
+    sport = serializers.PrimaryKeyRelatedField(
+        queryset=Sport.objects.all(), read_only=False
+    )
+    # Nested league and season data for frontend display
     league = serializers.SerializerMethodField()
     season = serializers.SerializerMethodField()
+    assigned_coaches = serializers.SerializerMethodField()
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -115,6 +143,7 @@ class GameSerializer(serializers.ModelSerializer):
             "id",
             "sport",
             "sport_slug",
+            "sport_scoring_type",
             "league",
             "season",
             "is_recorded",
@@ -132,10 +161,12 @@ class GameSerializer(serializers.ModelSerializer):
             "status",
             "started_at",
             "ended_at",
-            "duration",            "home_team_score",
+            "duration",
+            "home_team_score",
             "away_team_score",
             "current_period",
             "winner",
+            "assigned_coaches",
             "created_at",
         ]
         read_only_fields = [
@@ -149,26 +180,39 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
-    
+
     def get_league(self, obj):
         """Return league data with name only for frontend display"""
         if obj.league:
-            return {
-                "id": obj.league.id,
-                "name": obj.league.name
-            }
+            return {"id": obj.league.id, "name": obj.league.name}
         return None
-    
+
     def get_season(self, obj):
         """Return season data with name and year only for frontend display"""
         if obj.season:
             return {
                 "id": obj.season.id,
                 "name": obj.season.name,
-                "year": obj.season.year
+                "start_date": obj.season.start_date,
+                "end_date": obj.season.end_date,
             }
         return None
-    
+
+    def get_assigned_coaches(self, obj):
+        """Return list of coaches assigned to manage this game"""
+        if obj.type == Game.Type.LEAGUE:
+            permissions = obj.coach_permissions.select_related("coach").all()
+            return [
+                {
+                    "id": perm.coach.id,
+                    "name": perm.coach.get_full_name(),
+                    "email": perm.coach.email,
+                    "assigned_at": perm.assigned_at,
+                }
+                for perm in permissions
+            ]
+        return []
+
     def get_score_summary(self, obj):
         return obj.score_summary
 
@@ -188,7 +232,9 @@ class GameSerializer(serializers.ModelSerializer):
         if "sport" in data:
             sport = data["sport"]
             if home_team.sport != sport or away_team.sport != sport:
-                raise serializers.ValidationError("Teams must belong to the game's sport")
+                raise serializers.ValidationError(
+                    "Teams must belong to the game's sport"
+                )
 
         return data
 
@@ -413,23 +459,24 @@ class GameSummarySerializer(serializers.ModelSerializer):
     Simplified serializer for game analytics and summaries.
     Only includes essential data for charts and performance visualization.
     """
+
     home_team_name = serializers.CharField(source="home_team.name", read_only=True)
     away_team_name = serializers.CharField(source="away_team.name", read_only=True)
     winner_team_name = serializers.CharField(source="winner_team.name", read_only=True)
     sport_name = serializers.CharField(source="sport.name", read_only=True)
-    
+
     class Meta:
         model = Game
         fields = [
             "id",
-            "date", 
+            "date",
             "home_team_name",
             "away_team_name",
             "home_team_score",
-            "away_team_score", 
+            "away_team_score",
             "status",
             "winner_team_name",
             "sport_name",
-            "location"
+            "location",
         ]
         read_only_fields = fields

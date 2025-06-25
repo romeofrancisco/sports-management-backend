@@ -3,11 +3,23 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction, models
 from rest_framework.exceptions import ValidationError
-from django.db.models import Value, IntegerField
+from django.db.models import Value, IntegerField, Q
 from rest_framework.pagination import PageNumberPagination
-from .models import Game, PlayerStat, Substitution
+
+
+def get_coach_teams(coach_profile):
+    """Helper function to get teams where coach is either head coach or assistant coach"""
+    from teams.models import Team
+
+    return Team.objects.filter(
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
+    )
+
+
+from .models import Game, PlayerStat, Substitution, GameCoachPermission
 from teams.models import Player
 from sports.models import SportStatType, Sport
+from users.models import User
 from .serializers import (
     GameSerializer,
     GameActionSerializer,
@@ -18,6 +30,7 @@ from .serializers import (
     StartingLineupSerializer,
     SubstitutionSerializer,
     GameCurrentPlayersSerializer,
+    GameCoachPermissionSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from sports_management.permissions import (
@@ -36,6 +49,7 @@ from .services import (
     BulkRecordingService,
     FastStatRecordingService,
 )
+from .signals import send_score_update, send_game_status_update
 from django_filters.rest_framework import DjangoFilterBackend
 from .filters import GameFilter
 from collections import defaultdict
@@ -476,10 +490,13 @@ class GameViewSet(viewsets.ModelViewSet):
         if user.is_admin:
             return queryset
 
-        # Filter normal games based on user role, but keep all league/tournament games
-        if hasattr(user, "coach_profile"):
+        # Filter normal games based on user role, but keep all league/tournament games        if hasattr(user, "coach_profile"):
             # For coaches: practice games only for teams they coach
-            coach_teams = user.coach_profile.teams.all()
+            from django.db.models import Q
+            from teams.models import Team
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
             return queryset.filter(
                 # Keep all league/tournament games
                 models.Q(
@@ -537,7 +554,7 @@ class GameViewSet(viewsets.ModelViewSet):
             # Check if coach owns either team in the game
             home_team = serializer.validated_data.get("home_team")
             away_team = serializer.validated_data.get("away_team")
-            coach_teams = list(user.coach_profile.teams.all())
+            coach_teams = get_coach_teams(user.coach_profile)
 
             if home_team not in coach_teams and away_team not in coach_teams:
                 raise PermissionDenied("You can only create games for teams you coach")
@@ -558,8 +575,7 @@ class GameViewSet(viewsets.ModelViewSet):
             return Response(data)
         except Exception as e:
             logger.error(f"Error getting game leaders: {str(e)}")
-            return Response(
-                {"error": f"Failed to get game leaders: {str(e)}"},
+            return Response(                {"error": f"Failed to get game leaders: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -570,6 +586,9 @@ class GameViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         action = serializer.validated_data["action"]
+        old_status = game.status
+        old_period = game.current_period
+        
         if action == "start":
             game.start_game()
         elif action == "complete":
@@ -577,12 +596,27 @@ class GameViewSet(viewsets.ModelViewSet):
         elif action == "next_period":
             game.next_period()
 
-        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
+        # Send WebSocket update if status or period changed
+        if game.status != old_status or game.current_period != old_period:
+            send_game_status_update(game)
 
+        return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
+    
     @action(detail=True, methods=["post"])
     def update_scores(self, request, pk=None):
         game = self.get_object()
+        
+        # Store old scores for comparison
+        old_home_score = game.home_team_score
+        old_away_score = game.away_team_score
+        
+        # Update scores
         game.update_scores()
+        
+        # Send WebSocket update if scores changed
+        if game.home_team_score != old_home_score or game.away_team_score != old_away_score:
+            send_score_update(game)
+        
         return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -1085,6 +1119,126 @@ class GameViewSet(viewsets.ModelViewSet):
             )
         count, _ = game.starting_lineup.all().delete()
         return Response({"deleted": count}, status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["get", "post", "delete"])
+    def coach_assignments(self, request, pk=None):
+        """
+        Manage coach assignments for league games
+        GET: List assigned coaches
+        POST: Assign a coach to the game
+        DELETE: Remove coach assignment
+        """
+        game = self.get_object()
+        
+        # Only allow coach assignments for league games
+        if game.type != Game.Type.LEAGUE:
+            return Response(
+                {"error": "Coach assignments are only allowed for league games"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Only admins can manage coach assignments
+        if not request.user.is_admin:
+            return Response(
+                {"error": "Only administrators can manage coach assignments"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if request.method == "GET":
+            return self._get_coach_assignments(game)
+        elif request.method == "POST":
+            return self._assign_coach(game, request)
+        elif request.method == "DELETE":
+            return self._remove_coach_assignment(game, request)
+
+    def _get_coach_assignments(self, game):
+        """Get all coaches assigned to a game"""
+        serializer = GameCoachPermissionSerializer(game.coach_permissions.all(), many=True)
+        return Response(serializer.data)
+
+    def _assign_coach(self, game, request):
+        """Assign a coach to manage a game"""
+        coach_id = request.data.get('coach_id')
+        if not coach_id:
+            return Response(
+                {"error": "coach_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            coach = User.objects.get(id=coach_id, role=User.Role.COACH)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Coach not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            permission, created = game.assign_coach(coach, request.user)
+            serializer = GameCoachPermissionSerializer(permission)
+            
+            response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            message = "Coach assigned successfully" if created else "Coach already assigned"
+            
+            return Response({
+                "message": message,
+                "assignment": serializer.data
+            }, status=response_status)            
+        except ValidationError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    def _remove_coach_assignment(self, game, request):
+        """Remove a coach assignment from a game"""
+        coach_id = request.data.get('coach_id')
+        if not coach_id:
+            return Response(
+                {"error": "coach_id is required"},
+                status=status.HTTP_400_BAD_REQUEST            )
+
+        try:
+            coach = User.objects.get(id=coach_id, role=User.Role.COACH)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Coach not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        deleted_count, _ = game.remove_coach(coach)
+        
+        if deleted_count > 0:
+            return Response(
+                {"message": "Coach assignment removed successfully"},
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(
+                {"error": "Coach assignment not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=False, methods=["get"])
+    def available_coaches(self, request):
+        """Get list of all coaches available for assignment"""
+        if not request.user.is_admin:
+            return Response(
+                {"error": "Only administrators can view available coaches"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        coaches = User.objects.filter(role=User.Role.COACH).select_related('coach_profile')
+        coach_data = [
+            {
+                'id': coach.id,                'name': coach.get_full_name(),
+                'email': coach.email,
+                'team': ', '.join([team.name for team in get_coach_teams(coach.coach_profile)]) if hasattr(coach, 'coach_profile') else None
+            }
+            for coach in coaches
+        ]
+        
+        return Response(coach_data)
 
 
 class SubstitutionViewSet(viewsets.ModelViewSet):
