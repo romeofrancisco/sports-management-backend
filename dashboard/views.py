@@ -608,13 +608,21 @@ class DashboardViewSet(viewsets.ViewSet):
                 )
 
             # Upcoming games for coach's teams
+            now = timezone.now()
+            today = now.date()
+            now_time = now.time()
             upcoming_games = (
                 Game.objects.filter(
                     Q(home_team__in=coach_teams) | Q(away_team__in=coach_teams),
                     status="scheduled",
                 )
-                .filter(date__gte=timezone.now())
-                .order_by("date")[:6]
+                .exclude(date__isnull=True)
+                .exclude(time__isnull=True)
+                .filter(
+                    Q(date__gt=today) |
+                    (Q(date=today) & Q(time__gte=now_time))
+                )
+                .order_by("date", "time")[:6]
             )
 
             upcoming_games_data = [
@@ -623,6 +631,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "home_team": game.home_team.name,
                     "away_team": game.away_team.name,
                     "date": game.date,
+                    "time": game.time,
                     "location": game.location,
                     "is_home": game.home_team in coach_teams,
                 }
@@ -862,13 +871,22 @@ class DashboardViewSet(viewsets.ViewSet):
             # Upcoming games for player's team
             upcoming_games = []
             if player.team:
+                # Use date and time fields for filtering upcoming games
+                now = timezone.now()
+                today = now.date()
+                now_time = now.time()
                 upcoming_games = (
                     Game.objects.filter(
                         Q(home_team=player.team) | Q(away_team=player.team),
                         status="scheduled",
                     )
-                    .filter(date__gte=timezone.now())
-                    .order_by("date")[:6]
+                    .exclude(date__isnull=True)
+                    .exclude(time__isnull=True)
+                    .filter(
+                        Q(date__gt=today) |
+                        (Q(date=today) & Q(time__gte=now_time))
+                    )
+                    .order_by("date", "time")[:6]
                 )
 
             upcoming_games_data = [
@@ -877,6 +895,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "home_team": game.home_team.name,
                     "away_team": game.away_team.name,
                     "date": game.date,
+                    "time": game.time,
                     "location": game.location,
                     "is_home": game.home_team == player.team,
                 }
@@ -1063,7 +1082,7 @@ class DashboardViewSet(viewsets.ViewSet):
             from trainings.services.progress_service import ProgressService
             from trainings.utils import calculate_normalized_improvement
             
-            # Calculate 3-month date range for consistent timeframe
+            # Calculate 3-months date range for consistent timeframe
             three_months_ago = timezone.now() - timedelta(days=90)
             metric_trends = {}
             progress_metrics = []
