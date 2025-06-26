@@ -110,7 +110,7 @@ class MultiPlayerProgressService:
             
         # Optimize player query to fetch only needed fields 
         return players_query.select_related('team', 'user').only(
-            'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name'
+            'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name', 'user__profile'
         )
     def _paginate_players(self, players_query):
         """
@@ -146,9 +146,17 @@ class MultiPlayerProgressService:
         player_info = {}
         for player in paginated_players:
             player_id = player.user_id
+            
+            # Get profile picture URL with request context
+            profile_url = None
+            if player.user.profile:
+                if hasattr(player.user.profile, 'url'):
+                    profile_url = self.request.build_absolute_uri(player.user.profile.url)
+            
             player_info[player_id] = {
                 'user_id': player_id,
                 'player_name': player.user.get_full_name(),
+                'profile': profile_url,
                 'team': player.team_id,
                 'team_slug': player.team.slug if player.team else None,
                 'team_name': player.team.name if player.team else None,
