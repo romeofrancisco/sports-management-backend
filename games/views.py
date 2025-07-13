@@ -490,10 +490,11 @@ class GameViewSet(viewsets.ModelViewSet):
         if user.is_admin:
             return queryset
 
-        # Filter normal games based on user role, but keep all league/tournament games        if hasattr(user, "coach_profile"):
+            # Filter normal games based on user role, but keep all league/tournament games        if hasattr(user, "coach_profile"):
             # For coaches: practice games only for teams they coach
             from django.db.models import Q
             from teams.models import Team
+
             coach_teams = Team.objects.filter(
                 Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
             )
@@ -575,7 +576,8 @@ class GameViewSet(viewsets.ModelViewSet):
             return Response(data)
         except Exception as e:
             logger.error(f"Error getting game leaders: {str(e)}")
-            return Response(                {"error": f"Failed to get game leaders: {str(e)}"},
+            return Response(
+                {"error": f"Failed to get game leaders: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -588,7 +590,7 @@ class GameViewSet(viewsets.ModelViewSet):
         action = serializer.validated_data["action"]
         old_status = game.status
         old_period = game.current_period
-        
+
         if action == "start":
             game.start_game()
         elif action == "complete":
@@ -601,22 +603,25 @@ class GameViewSet(viewsets.ModelViewSet):
             send_game_status_update(game)
 
         return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
-    
+
     @action(detail=True, methods=["post"])
     def update_scores(self, request, pk=None):
         game = self.get_object()
-        
+
         # Store old scores for comparison
         old_home_score = game.home_team_score
         old_away_score = game.away_team_score
-        
+
         # Update scores
         game.update_scores()
-        
+
         # Send WebSocket update if scores changed
-        if game.home_team_score != old_home_score or game.away_team_score != old_away_score:
+        if (
+            game.home_team_score != old_home_score
+            or game.away_team_score != old_away_score
+        ):
             send_score_update(game)
-        
+
         return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -1129,19 +1134,19 @@ class GameViewSet(viewsets.ModelViewSet):
         DELETE: Remove coach assignment
         """
         game = self.get_object()
-        
+
         # Only allow coach assignments for league games
         if game.type != Game.Type.LEAGUE:
             return Response(
                 {"error": "Coach assignments are only allowed for league games"},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Only admins can manage coach assignments
         if not request.user.is_admin:
             return Response(
                 {"error": "Only administrators can manage coach assignments"},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if request.method == "GET":
@@ -1153,91 +1158,106 @@ class GameViewSet(viewsets.ModelViewSet):
 
     def _get_coach_assignments(self, game):
         """Get all coaches assigned to a game"""
-        serializer = GameCoachPermissionSerializer(game.coach_permissions.all(), many=True)
+        serializer = GameCoachPermissionSerializer(
+            game.coach_permissions.all(), many=True, context={"request": self.request}
+        )
         return Response(serializer.data)
 
     def _assign_coach(self, game, request):
         """Assign a coach to manage a game"""
-        coach_id = request.data.get('coach_id')
+        coach_id = request.data.get("coach_id")
         if not coach_id:
             return Response(
-                {"error": "coach_id is required"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "coach_id is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
             coach = User.objects.get(id=coach_id, role=User.Role.COACH)
         except User.DoesNotExist:
             return Response(
-                {"error": "Coach not found"},
-                status=status.HTTP_404_NOT_FOUND
+                {"error": "Coach not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
         try:
             permission, created = game.assign_coach(coach, request.user)
-            serializer = GameCoachPermissionSerializer(permission)
-            
+            serializer = GameCoachPermissionSerializer(permission, context={"request": self.request})
+
             response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-            message = "Coach assigned successfully" if created else "Coach already assigned"
-            
-            return Response({
-                "message": message,
-                "assignment": serializer.data
-            }, status=response_status)            
-        except ValidationError as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
+            message = (
+                "Coach assigned successfully" if created else "Coach already assigned"
             )
+
+            return Response(
+                {"message": message, "assignment": serializer.data},
+                status=response_status,
+            )
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def _remove_coach_assignment(self, game, request):
         """Remove a coach assignment from a game"""
-        coach_id = request.data.get('coach_id')
+        coach_id = request.data.get("coach_id")
         if not coach_id:
             return Response(
-                {"error": "coach_id is required"},
-                status=status.HTTP_400_BAD_REQUEST            )
+                {"error": "coach_id is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             coach = User.objects.get(id=coach_id, role=User.Role.COACH)
         except User.DoesNotExist:
             return Response(
-                {"error": "Coach not found"},
-                status=status.HTTP_404_NOT_FOUND
+                {"error": "Coach not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
         deleted_count, _ = game.remove_coach(coach)
-        
+
         if deleted_count > 0:
             return Response(
                 {"message": "Coach assignment removed successfully"},
-                status=status.HTTP_200_OK
+                status=status.HTTP_200_OK,
             )
         else:
             return Response(
                 {"error": "Coach assignment not found"},
-                status=status.HTTP_404_NOT_FOUND
+                status=status.HTTP_404_NOT_FOUND,
             )
 
     @action(detail=False, methods=["get"])
     def available_coaches(self, request):
+        from rest_framework.reverse import reverse
+
         """Get list of all coaches available for assignment"""
         if not request.user.is_admin:
             return Response(
                 {"error": "Only administrators can view available coaches"},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
-            
-        coaches = User.objects.filter(role=User.Role.COACH).select_related('coach_profile')
+
+        coaches = User.objects.filter(role=User.Role.COACH).select_related(
+            "coach_profile"
+        )
         coach_data = [
             {
-                'id': coach.id,                'name': coach.get_full_name(),
-                'email': coach.email,
-                'team': ', '.join([team.name for team in get_coach_teams(coach.coach_profile)]) if hasattr(coach, 'coach_profile') else None
+                "id": coach.id,
+                "name": coach.get_full_name(),
+                "email": coach.email,
+                "teams": [
+                    {
+                        "name": team.name,
+                        "abbreviation": team.abbreviation,
+                        "logo": request.build_absolute_uri(team.logo.url) if hasattr(team, "logo") and team.logo else None
+                    }
+                    for team in get_coach_teams(coach.coach_profile)
+                ] if hasattr(coach, "coach_profile") else [],
+                "profile": (
+                    request.build_absolute_uri(coach.profile.url)
+                    if hasattr(coach, "profile") and coach.profile
+                    else None
+                ),
             }
             for coach in coaches
         ]
-        
+
         return Response(coach_data)
 
 
