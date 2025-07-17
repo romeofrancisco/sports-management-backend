@@ -125,7 +125,7 @@ class RecordableStatSerializer(serializers.ModelSerializer):
 class GameSerializer(serializers.ModelSerializer):
     home_team = TeamSerializer(read_only=True)
     away_team = TeamSerializer(read_only=True)
-    status = serializers.ChoiceField(choices=Game.Status.choices)
+    status = serializers.ChoiceField(choices=Game.Status.choices, required=False)
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
     score_summary = serializers.SerializerMethodField()
@@ -175,6 +175,7 @@ class GameSerializer(serializers.ModelSerializer):
             "season_id",
             "lineup_status",
             "date",
+            "time",
             "location",
             "status",
             "started_at",

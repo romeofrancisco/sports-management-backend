@@ -122,10 +122,10 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
                     'metric'
                 )
                 
-                # Apply date filters if provided
-                if date_from:
+                # Apply date filters if provided (filter out 'undefined' values)
+                if date_from and date_from not in ['undefined', 'null', '']:
                     records_query = records_query.filter(player_training__session__date__gte=date_from)                
-                if date_to:
+                if date_to and date_to not in ['undefined', 'null', '']:
                     records_query = records_query.filter(player_training__session__date__lte=date_to)
                 
                 # Create overall metric data structure using ProgressService
@@ -163,10 +163,10 @@ def batch_fetch_record_data(player_ids, metric_id, date_from=None, date_to=None)
         'metric__metric_unit'  # Add metric_unit to get normalization weights
     )
     
-    # Apply date filters if provided
-    if date_from:
+    # Apply date filters if provided (filter out 'undefined' values)
+    if date_from and date_from not in ['undefined', 'null', '']:
         base_query = base_query.filter(player_training__session__date__gte=date_from)
-    if date_to:
+    if date_to and date_to not in ['undefined', 'null', '']:
         base_query = base_query.filter(player_training__session__date__lte=date_to)
     
     # Organize the records by player for efficient processing
@@ -453,8 +453,8 @@ def calculate_best_category_for_player(player_id, date_from=None, date_to=None):
         'player_training__session'
     )
     
-    # Apply date filters if provided
-    if date_from:
+    # Apply date filters if provided (filter out 'undefined' values)
+    if date_from and date_from not in ['undefined', 'null', '']:
         try:
             date_from_parsed = parse_date(date_from)
             records_query = records_query.filter(
@@ -463,7 +463,7 @@ def calculate_best_category_for_player(player_id, date_from=None, date_to=None):
         except (ValueError, TypeError):
             return None
     
-    if date_to:
+    if date_to and date_to not in ['undefined', 'null', '']:
         try:
             date_to_parsed = parse_date(date_to)
             records_query = records_query.filter(

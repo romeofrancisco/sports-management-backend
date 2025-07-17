@@ -33,8 +33,15 @@ class MultiPlayerProgressService:
         """Extract and parse query parameters from the request."""
         self.team_slug = self.request.query_params.get('team')
         self.metric_id = self.request.query_params.get('metric_id')
-        self.date_from = self.request.query_params.get('date_from')
-        self.date_to = self.request.query_params.get('date_to')
+        
+        # Handle date parameters, filtering out 'undefined' values
+        date_from_param = self.request.query_params.get('date_from')
+        date_to_param = self.request.query_params.get('date_to')
+        
+        # Set to None if the parameter is 'undefined', 'null', or empty
+        self.date_from = date_from_param if date_from_param not in ['undefined', 'null', '', None] else None
+        self.date_to = date_to_param if date_to_param not in ['undefined', 'null', '', None] else None
+        
         self.player_ids_param = self.request.query_params.get('player_ids', '')
         self.limit = self.request.query_params.get('limit')
         self.latest_only = self.request.query_params.get('latest_only', 'false').lower() == 'true'

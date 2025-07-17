@@ -44,8 +44,8 @@ class ProgressService:
                 value__isnull=False  # Only include records with actual values
             ).select_related('metric', 'metric__metric_unit')  # Add metric_unit to select_related
             
-            # Apply the same date filters as the original query
-            if date_from:
+            # Apply the same date filters as the original query (filter out 'undefined' values)
+            if date_from and date_from not in ['undefined', 'null', '']:
                 records_till_date = records_till_date.filter(player_training__session__date__gte=date_from)
                 
             # Group by metric
@@ -135,10 +135,10 @@ class ProgressService:
             'metric__metric_unit'  # Add metric_unit to select_related
         )
         
-        # Apply date filters if provided
-        if date_from:
+        # Apply date filters if provided (filter out 'undefined' values)
+        if date_from and date_from not in ['undefined', 'null', '']:
             records_query = records_query.filter(player_training__session__date__gte=date_from)
-        if date_to:
+        if date_to and date_to not in ['undefined', 'null', '']:
             records_query = records_query.filter(player_training__session__date__lte=date_to)
             
         # Group records by metric
@@ -251,12 +251,12 @@ class ProgressService:
             )
         else:
             # Look for the most recent data available, going backwards from today
-            # First, try the standard 30-day window
-            thirty_days_ago = today - timezone.timedelta(days=30)
+            # First, try the standard 3-month window (90 days)
+            ninety_days_ago = today - timezone.timedelta(days=90)
             
             recent_records = PlayerMetricRecord.objects.filter(
                 player_training__player=player,
-                player_training__session__date__gte=thirty_days_ago,
+                player_training__session__date__gte=ninety_days_ago,
                 player_training__session__date__lte=today,
                 value__isnull=False  # Only include records with actual values
             ).select_related(
@@ -265,32 +265,10 @@ class ProgressService:
                 'metric__metric_unit'
             )
             
-            # If no records found in last 30 days, expand the search backwards
+            # If no records found in last 3 months, return None instead of expanding search
+            # This ensures "recent improvement" only shows data from the actual recent period
             if not recent_records.exists():
-                # Find the most recent training session for this player
-                most_recent_session = PlayerMetricRecord.objects.filter(
-                    player_training__player=player,
-                    value__isnull=False  # Only consider records with actual values
-                ).order_by('-player_training__session__date').first()
-                
-                if not most_recent_session:
-                    return None
-                
-                # Use the most recent session date as our end point
-                most_recent_date = most_recent_session.player_training.session.date
-                
-                # Look backwards 30 days from the most recent session
-                start_date = most_recent_date - timezone.timedelta(days=30)
-                recent_records = PlayerMetricRecord.objects.filter(
-                    player_training__player=player,
-                    player_training__session__date__gte=start_date,
-                    player_training__session__date__lte=most_recent_date,
-                    value__isnull=False  # Only include records with actual values
-                ).select_related(
-                    'player_training__session',
-                        'metric',
-                        'metric__metric_unit'
-                )
+                return None
 
 
         # Group records by metric
@@ -379,10 +357,10 @@ class ProgressService:
             'metric__metric_unit'  # Make sure we select_related the metric_unit
         )
         
-        # Apply date filters if provided
-        if date_from:
+        # Apply date filters if provided (filter out 'undefined' values)
+        if date_from and date_from not in ['undefined', 'null', '']:
             records_query = records_query.filter(player_training__session__date__gte=date_from)
-        if date_to:
+        if date_to and date_to not in ['undefined', 'null', '']:
             records_query = records_query.filter(player_training__session__date__lte=date_to)
             
         if not records_query.exists():
@@ -446,10 +424,10 @@ class ProgressService:
             player=player
         ).values('session').distinct()
         
-        # Apply date filters if provided
-        if date_from:
+        # Apply date filters if provided (filter out 'undefined' values)
+        if date_from and date_from not in ['undefined', 'null', '']:
             sessions_query = sessions_query.filter(session__date__gte=date_from)
-        if date_to:
+        if date_to and date_to not in ['undefined', 'null', '']:
             sessions_query = sessions_query.filter(session__date__lte=date_to)
             
         return sessions_query.count()

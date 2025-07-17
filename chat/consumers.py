@@ -245,7 +245,6 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
                     coach = Coach.objects.get(user=user)
                     # Get teams where this coach is either head coach or assistant coach
                     from django.db.models import Q
-                    from teams.models import Team
                     coach_teams = Team.objects.filter(
                         Q(head_coach=coach) | Q(assistant_coach=coach)
                     )
