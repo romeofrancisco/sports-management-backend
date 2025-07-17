@@ -10,6 +10,7 @@ from leagues.models import League, Season
 
 class GameCoachPermissionSerializer(serializers.ModelSerializer):
     coach_name = serializers.CharField(source="coach.get_full_name", read_only=True)
+    profile = serializers.SerializerMethodField()
     coach_email = serializers.CharField(source="coach.email", read_only=True)
     assigned_by_name = serializers.CharField(
         source="assigned_by.get_full_name", read_only=True
@@ -22,12 +23,29 @@ class GameCoachPermissionSerializer(serializers.ModelSerializer):
             "game",
             "coach",
             "coach_name",
+            "profile",
             "coach_email",
             "assigned_by",
             "assigned_by_name",
             "assigned_at",
         ]
         read_only_fields = ["assigned_by", "assigned_at"]
+
+    def get_profile(self, obj):
+        request = self.context.get("request")
+        image = None
+        # Try coach.profile, then coach.user.profile
+        if hasattr(obj.coach, "profile") and getattr(obj.coach, "profile"):
+            image = getattr(obj.coach, "profile")
+        elif hasattr(obj.coach, "user") and hasattr(obj.coach.user, "profile") and getattr(obj.coach.user, "profile"):
+            image = getattr(obj.coach.user, "profile")
+        # Return absolute URL if request is available, else relative path
+        if image:
+            if request:
+                return request.build_absolute_uri(image.url)
+            else:
+                return image.url
+        return None
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -107,7 +125,7 @@ class RecordableStatSerializer(serializers.ModelSerializer):
 class GameSerializer(serializers.ModelSerializer):
     home_team = TeamSerializer(read_only=True)
     away_team = TeamSerializer(read_only=True)
-    status = serializers.ChoiceField(choices=Game.Status.choices)
+    status = serializers.ChoiceField(choices=Game.Status.choices, required=False)
     winner = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
     score_summary = serializers.SerializerMethodField()
@@ -157,6 +175,7 @@ class GameSerializer(serializers.ModelSerializer):
             "season_id",
             "lineup_status",
             "date",
+            "time",
             "location",
             "status",
             "started_at",

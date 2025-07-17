@@ -285,11 +285,9 @@ class CoachInfoSerializer(ModelSerializer):
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex")
     password = serializers.CharField(source="user.password", required=True, write_only=True)
-    
-    # Teams where this coach is either head coach or assistant coach
-    head_coached_teams = SimpleTeamSerializer(many=True, read_only=True)
-    assistant_coached_teams = SimpleTeamSerializer(many=True, read_only=True)
-    
+
+    # Combined teams field
+    coached_teams = serializers.SerializerMethodField()
     # Sports handling
     sport_ids = serializers.PrimaryKeyRelatedField(
         queryset=Sport.objects.all(), 
@@ -299,16 +297,42 @@ class CoachInfoSerializer(ModelSerializer):
         source='sports'
     )
     sports = SportSerializer(many=True, read_only=True)
-    
     full_name = serializers.SerializerMethodField()
-    
+    team_count = serializers.SerializerMethodField()
+    player_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Coach
-        fields = ["id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password", 
-                 "head_coached_teams", "assistant_coached_teams", "sport_ids", "sports"]
-        
+        fields = [
+            "id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password",
+            "coached_teams", "sport_ids", "sports",
+            "team_count", "player_count"
+        ]
+
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
+
+    def get_coached_teams(self, obj):
+        # Get unique teams where coach is head or assistant
+        head_teams = obj.head_coached_teams.all()
+        assistant_teams = obj.assistant_coached_teams.all()
+        all_teams = {team.id: team for team in list(head_teams) + list(assistant_teams)}
+        return SimpleTeamSerializer(all_teams.values(), many=True, context=self.context).data
+
+    def get_team_count(self, obj):
+        head_team_ids = set(obj.head_coached_teams.values_list('id', flat=True))
+        assistant_team_ids = set(obj.assistant_coached_teams.values_list('id', flat=True))
+        return len(head_team_ids.union(assistant_team_ids))
+
+    def get_player_count(self, obj):
+        team_ids = set(obj.head_coached_teams.values_list('id', flat=True)).union(
+            obj.assistant_coached_teams.values_list('id', flat=True)
+        )
+        from .models import Team
+        players = set()
+        for team in Team.objects.filter(id__in=team_ids):
+            players.update(team.players.values_list('user_id', flat=True))
+        return len(players)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

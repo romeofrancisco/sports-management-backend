@@ -41,6 +41,70 @@ class SportStatTypeViewSet(ModelViewSet):
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["name"]
     filterset_class = SportStatTypeFilter
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        sport_slug = self.request.query_params.get("sport")
+        
+        if sport_slug:
+            sport = get_object_or_404(Sport, slug=sport_slug)
+            queryset = queryset.filter(sport=sport)
+            
+        return queryset
+    
+    @action(detail=False, methods=['get'])
+    def overview(self, request):
+        """Get overview statistics for sport stat types"""
+        sport_slug = request.query_params.get('sport')
+        
+        if not sport_slug:
+            return Response({"error": "Sport slug is required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        sport = get_object_or_404(Sport, slug=sport_slug)
+        queryset = self.queryset.filter(sport=sport)
+        
+        # Calculate overview statistics
+        total_stats = queryset.count()
+        recording_stats = queryset.filter(is_record=True).count()
+        calculated_stats = queryset.filter(is_record=False).count()
+        boxscore_stats = queryset.filter(is_boxscore=True).count()
+        team_comparison_stats = queryset.filter(is_team_comparison=True).count()
+        
+        # Category breakdown
+        scoring_stats = queryset.filter(point_value__gt=0).count()
+        performance_stats = queryset.filter(name__icontains='%').count()
+        negative_stats = queryset.filter(is_negative=True).count()
+        
+        # Additional insights
+        stats_with_formulas = queryset.filter(formula__isnull=False).count()
+        stats_with_point_values = queryset.exclude(point_value=0).count()
+        
+        overview_data = {
+            'total_stats': total_stats,
+            'stat_types': {
+                'recording': recording_stats,
+                'calculated': calculated_stats,
+                'boxscore': boxscore_stats,
+                'team_comparison': team_comparison_stats,
+            },
+            'categories': {
+                'scoring': scoring_stats,
+                'performance': performance_stats,
+                'negative': negative_stats,
+                'other': total_stats - (scoring_stats + performance_stats + negative_stats)
+            },
+            'features': {
+                'with_formulas': stats_with_formulas,
+                'with_point_values': stats_with_point_values,
+                'without_point_values': total_stats - stats_with_point_values
+            },
+            'sport': {
+                'name': sport.name,
+                'slug': sport.slug
+            }
+        }
+        
+        return Response(overview_data)
 
 
 class FormulaViewSet(ModelViewSet):

@@ -17,6 +17,7 @@ import time
 def get_coach_teams(coach_profile):
     """Helper function to get teams where coach is either head coach or assistant coach"""
     from teams.models import Team
+
     return Team.objects.filter(
         Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
     )
@@ -25,9 +26,9 @@ def get_coach_teams(coach_profile):
 def is_coach_team(team, coach_profile):
     """Helper function to check if a team belongs to a coach"""
     from teams.models import Team
+
     return Team.objects.filter(
-        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile),
-        id=team.id
+        Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile), id=team.id
     ).exists()
 
 
@@ -217,10 +218,13 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
         # For admins, show all training sessions
         if user.is_admin:
-            return base_queryset        # For coaches, show only their team's training sessions
+            return (
+                base_queryset  # For coaches, show only their team's training sessions
+            )
         if hasattr(user, "coach_profile"):
             from django.db.models import Q
             from teams.models import Team
+
             coach_teams = Team.objects.filter(
                 Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
             )
@@ -319,8 +323,10 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             if team:
                 from django.db.models import Q
                 from teams.models import Team
+
                 coach_teams = Team.objects.filter(
-                    Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+                    Q(head_coach=self.request.user.coach_profile)
+                    | Q(assistant_coach=self.request.user.coach_profile)
                 )
                 if team not in coach_teams:
                     raise PermissionDenied(
@@ -335,14 +341,16 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """Only allow coaches to update training sessions for their own teams"""
-        if self.request.user.is_admin:            # Admins can update any training session
+        if self.request.user.is_admin:  # Admins can update any training session
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update training sessions for their teams
             from django.db.models import Q
             from teams.models import Team
+
             coach_teams = Team.objects.filter(
-                Q(head_coach=self.request.user.coach_profile) | Q(assistant_coach=self.request.user.coach_profile)
+                Q(head_coach=self.request.user.coach_profile)
+                | Q(assistant_coach=self.request.user.coach_profile)
             )
             session = serializer.instance
 
@@ -366,7 +374,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Only allow coaches to delete training sessions for their own teams"""
-        if self.request.user.is_admin:            # Admins can delete any training session
+        if self.request.user.is_admin:  # Admins can delete any training session
             instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete training sessions for their teams
@@ -650,7 +658,8 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             player_result.get("created_records", 0)
             for player_result in result.get("results", [])
         )
-        total_removed = sum(            player_result.get("deleted_records", 0)
+        total_removed = sum(
+            player_result.get("deleted_records", 0)
             for player_result in result.get("results", [])
         )
         players_processed = result.get("total_players_processed", 0)
@@ -1317,7 +1326,6 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                         # No current record to compare against
                         metric_record["improvement"] = None
 
-                
                         return Response({"previous_record": metric_record})
             else:
                 return Response(
@@ -1377,448 +1385,565 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
             }
         )
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def assigned_metrics(self, request):
         """Get assigned metrics for the current player (session-focused view)"""
         user = request.user
-        
+
         # Ensure only players can access this endpoint
-        if not hasattr(user, 'player_profile'):
+        if not hasattr(user, "player_profile"):
             raise PermissionDenied("Only players can access assigned metrics")
-        
+
         player = user.player_profile
-        
+
         # Get query parameters
-        status_filter = request.query_params.get('status')
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        
+        status_filter = request.query_params.get("status")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+
         # Base queryset for player's training sessions with assigned metrics
-        queryset = PlayerTraining.objects.filter(
-            player=player
-        ).select_related(
-            'session',
-            'session__team'
-        ).prefetch_related(
-            'assigned_metrics',
-            'assigned_metrics__category',
-            'assigned_metrics__metric_unit',
-            'metric_records',
-            'metric_records__metric'
-        ).order_by('-session__date', '-session__start_time')
-        
+        queryset = (
+            PlayerTraining.objects.filter(player=player)
+            .select_related("session", "session__team")
+            .prefetch_related(
+                "assigned_metrics",
+                "assigned_metrics__category",
+                "assigned_metrics__metric_unit",
+                "metric_records",
+                "metric_records__metric",
+            )
+            .order_by("-session__date", "-session__start_time")
+        )
+
         # Apply date filters
         if date_from:
             queryset = queryset.filter(session__date__gte=date_from)
         if date_to:
             queryset = queryset.filter(session__date__lte=date_to)
-          # Apply status filter
-        if status_filter and status_filter != 'all':
-            if status_filter == 'upcoming':
-                queryset = queryset.filter(session__status='upcoming')
-            elif status_filter == 'ongoing':
-                queryset = queryset.filter(session__status='ongoing')
-            elif status_filter == 'completed':
-                queryset = queryset.filter(session__status='completed')
-        
+        # Apply status filter
+        if status_filter and status_filter != "all":
+            if status_filter == "upcoming":
+                queryset = queryset.filter(session__status="upcoming")
+            elif status_filter == "ongoing":
+                queryset = queryset.filter(session__status="ongoing")
+            elif status_filter == "completed":
+                queryset = queryset.filter(session__status="completed")
+
         # Serialize and return paginated results
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
-        
+
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'])
+
+    @action(detail=False, methods=["get"])
     def assigned_metrics_detail(self, request):
         """Get assigned metrics grouped by training session for the current player"""
         user = request.user
-        
+
         # Ensure only players can access this endpoint
-        if not hasattr(user, 'player_profile'):
+        if not hasattr(user, "player_profile"):
             raise PermissionDenied("Only players can access assigned metrics")
-        
+
         player = user.player_profile
-        
+
         # Get query parameters
-        status_filter = request.query_params.get('status')
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        search = request.query_params.get('search')
-        
+        status_filter = request.query_params.get("status")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        search = request.query_params.get("search")
+
         # Get PlayerTraining records with assigned metrics
         base_query = PlayerTraining.objects.filter(
-            player=player,
-            assigned_metrics__isnull=False
-        ).select_related(
-            'session',
-            'session__team'
-        )
-        
+            player=player, assigned_metrics__isnull=False
+        ).select_related("session", "session__team")
+
         # Apply date filters
         if date_from:
             base_query = base_query.filter(session__date__gte=date_from)
         if date_to:
             base_query = base_query.filter(session__date__lte=date_to)
-        
+
         # Get distinct sessions that have assigned metrics for this player
-        session_ids = base_query.values_list('session__id', flat=True).distinct()
-        
+        session_ids = base_query.values_list("session__id", flat=True).distinct()
+
         # Get the actual PlayerTraining records for these sessions
-        player_trainings = PlayerTraining.objects.filter(
-            player=player,
-            session__id__in=session_ids
-        ).select_related(
-            'session',
-            'session__team'
-        ).prefetch_related(
-            'assigned_metrics',
-            'assigned_metrics__category',
-            'assigned_metrics__metric_unit',
-            'metric_records',
-            'metric_records__metric'
-        ).order_by('-session__date', '-session__start_time')
-        
+        player_trainings = (
+            PlayerTraining.objects.filter(player=player, session__id__in=session_ids)
+            .select_related("session", "session__team")
+            .prefetch_related(
+                "assigned_metrics",
+                "assigned_metrics__category",
+                "assigned_metrics__metric_unit",
+                "metric_records",
+                "metric_records__metric",
+            )
+            .order_by("-session__date", "-session__start_time")
+        )
+
         # Group by session to avoid duplicates
         sessions_data = []
         total_metrics_count = 0
-        status_counts = {'completed': 0, 'in_progress': 0, 'assigned': 0, 'missed': 0}
+        status_counts = {"completed": 0, "in_progress": 0, "assigned": 0, "missed": 0}
         sessions_processed = {}  # Track sessions by session ID
-        
+
         for pt in player_trainings:
             session_id = pt.session.id
-            
+
             # If we've already processed this session, skip it
             if session_id in sessions_processed:
                 continue
-                
+
             # Get assigned metrics for this session
             assigned_metrics = []
             metric_records_data = []
             for metric in pt.assigned_metrics.all():
                 # Get metric record for this session
                 metric_record = pt.metric_records.filter(metric=metric).first()
-                
+
                 # Determine individual metric status
                 if metric_record and metric_record.value is not None:
-                    metric_status = 'completed'
-                elif pt.session.status == 'completed':
-                    if pt.attendance_status in ['absent', 'excused']:
-                        metric_status = 'missed'
+                    metric_status = "completed"
+                elif pt.session.status == "completed":
+                    if pt.attendance_status in ["absent", "excused"]:
+                        metric_status = "missed"
                     else:
-                        metric_status = 'missed'
-                elif pt.session.status == 'ongoing':
-                    metric_status = 'in_progress'
-                elif pt.session.status == 'upcoming':
-                    metric_status = 'assigned'
+                        metric_status = "missed"
+                elif pt.session.status == "ongoing":
+                    metric_status = "in_progress"
+                elif pt.session.status == "upcoming":
+                    metric_status = "assigned"
                 else:
-                    metric_status = 'assigned'
-                
+                    metric_status = "assigned"
+
                 # Apply status filter at metric level
-                if status_filter and status_filter != 'all' and metric_status != status_filter:
+                if (
+                    status_filter
+                    and status_filter != "all"
+                    and metric_status != status_filter
+                ):
                     continue
-                
+
                 # Count this metric for summary
                 total_metrics_count += 1
                 status_counts[metric_status] += 1
-                
+
                 # Add to assigned metrics
-                assigned_metrics.append({
-                    'id': metric.id,
-                    'name': metric.name,
-                    'description': metric.description,
-                    'metric_unit': metric.metric_unit.id if metric.metric_unit else None,
-                    'metric_unit_data': {
-                        'id': metric.metric_unit.id,
-                        'code': metric.metric_unit.code,
-                        'name': metric.metric_unit.name,
-                        'normalization_weight': str(metric.metric_unit.normalization_weight),
-                        'description': metric.metric_unit.description,
-                        'is_default': metric.metric_unit.is_default,
-                        'created_by': metric.metric_unit.created_by.id if metric.metric_unit.created_by else None,
-                        'created_by_name': f"{metric.metric_unit.created_by.first_name} {metric.metric_unit.created_by.last_name}".strip() if metric.metric_unit.created_by else None
-                    } if metric.metric_unit else None,
-                    'category': metric.category.id if metric.category else None,
-                    'category_name': metric.category.name if metric.category else "General",
-                    'is_lower_better': metric.is_lower_better,
-                    'weight': str(metric.weight)
-                })
-                
+                assigned_metrics.append(
+                    {
+                        "id": metric.id,
+                        "name": metric.name,
+                        "description": metric.description,
+                        "metric_unit": (
+                            metric.metric_unit.id if metric.metric_unit else None
+                        ),
+                        "metric_unit_data": (
+                            {
+                                "id": metric.metric_unit.id,
+                                "code": metric.metric_unit.code,
+                                "name": metric.metric_unit.name,
+                                "normalization_weight": str(
+                                    metric.metric_unit.normalization_weight
+                                ),
+                                "description": metric.metric_unit.description,
+                                "is_default": metric.metric_unit.is_default,
+                                "created_by": (
+                                    metric.metric_unit.created_by.id
+                                    if metric.metric_unit.created_by
+                                    else None
+                                ),
+                                "created_by_name": (
+                                    f"{metric.metric_unit.created_by.first_name} {metric.metric_unit.created_by.last_name}".strip()
+                                    if metric.metric_unit.created_by
+                                    else None
+                                ),
+                            }
+                            if metric.metric_unit
+                            else None
+                        ),
+                        "category": metric.category.id if metric.category else None,
+                        "category_name": (
+                            metric.category.name if metric.category else "General"
+                        ),
+                        "is_lower_better": metric.is_lower_better,
+                        "weight": str(metric.weight),
+                    }
+                )
+
                 # Add to metric records
-                metric_records_data.append({
-                    'id': metric_record.id if metric_record else None,
-                    'player_training': pt.id,
-                    'metric': metric.id,
-                    'metric_name': metric.name,
-                    'metric_unit_code': metric.metric_unit.code if metric.metric_unit else '',
-                    'metric_unit_name': metric.metric_unit.name if metric.metric_unit else '',
-                    'value': float(metric_record.value) if metric_record and metric_record.value is not None else None,
-                    'player_name': f"{player.user.first_name} {player.user.last_name}".strip(),
-                    'notes': metric_record.notes if metric_record else '',
-                    'recorded_by': f"{metric_record.recorded_by.user.first_name} {metric_record.recorded_by.user.last_name}".strip() if metric_record and metric_record.recorded_by else None,
-                    'recorded_at': metric_record.recorded_at if metric_record else None,
-                    'improvement_from_last': self._calculate_improvement_for_metric(player, metric, metric_record),
-                    'improvement_percentage': self._calculate_improvement_percentage_for_metric(player, metric, metric_record)
-                })
-            
+                metric_records_data.append(
+                    {
+                        "id": metric_record.id if metric_record else None,
+                        "player_training": pt.id,
+                        "metric": metric.id,
+                        "metric_name": metric.name,
+                        "metric_unit_code": (
+                            metric.metric_unit.code if metric.metric_unit else ""
+                        ),
+                        "metric_unit_name": (
+                            metric.metric_unit.name if metric.metric_unit else ""
+                        ),
+                        "value": (
+                            float(metric_record.value)
+                            if metric_record and metric_record.value is not None
+                            else None
+                        ),
+                        "player_name": f"{player.user.first_name} {player.user.last_name}".strip(),
+                        "notes": metric_record.notes if metric_record else "",
+                        "recorded_by": (
+                            f"{metric_record.recorded_by.user.first_name} {metric_record.recorded_by.user.last_name}".strip()
+                            if metric_record and metric_record.recorded_by
+                            else None
+                        ),
+                        "recorded_at": (
+                            metric_record.recorded_at if metric_record else None
+                        ),
+                        "improvement_from_last": self._calculate_improvement_for_metric(
+                            player, metric, metric_record
+                        ),
+                        "improvement_percentage": self._calculate_improvement_percentage_for_metric(
+                            player, metric, metric_record
+                        ),
+                    }
+                )
+
             # Add search filter for session title
             if search and search.lower() not in pt.session.title.lower():
                 continue
-            
+
             # Only include sessions that have metrics after filtering
             if assigned_metrics:
                 session_data = {
-                    'id': pt.id,
-                    'player': {
-                        'id': pt.player.user_id,  # Use user_id since user is the primary key
-                        'first_name': pt.player.user.first_name,
-                        'last_name': pt.player.user.last_name,
-                        'full_name': f"{pt.player.user.first_name} {pt.player.user.last_name}".strip(),
-                        'profile': request.build_absolute_uri(pt.player.user.profile.url) if pt.player.user.profile else None
+                    "id": pt.id,
+                    "player": {
+                        "id": pt.player.user_id,  # Use user_id since user is the primary key
+                        "first_name": pt.player.user.first_name,
+                        "last_name": pt.player.user.last_name,
+                        "full_name": f"{pt.player.user.first_name} {pt.player.user.last_name}".strip(),
+                        "profile": (
+                            request.build_absolute_uri(pt.player.user.profile.url)
+                            if pt.player.user.profile
+                            else None
+                        ),
                     },
-                    'player_name': f"{pt.player.user.first_name} {pt.player.user.last_name}".strip(),
-                    'session': pt.session.id,
-                    'session_title': pt.session.title,
-                    'session_date': pt.session.date,
-                    'session_start_time': pt.session.start_time,
-                    'session_end_time': pt.session.end_time,
-                    'session_location': pt.session.location,
-                    'session_status': pt.session.status,
-                    'session_description': pt.session.description,
-                    'attendance_status': pt.attendance_status,
-                    'notes': pt.notes,
-                    'metric_records': metric_records_data,
-                    'assigned_metrics': assigned_metrics,
-                    'metrics_completion_status': {
-                        'total_assigned': len(assigned_metrics),
-                        'total_recorded': len([mr for mr in metric_records_data if mr['value'] is not None]),
-                        'completion_percentage': round((len([mr for mr in metric_records_data if mr['value'] is not None]) / len(assigned_metrics) * 100), 1) if assigned_metrics else 0,
-                        'status': 'completed' if all(mr['value'] is not None for mr in metric_records_data) else 'in_progress' if any(mr['value'] is not None for mr in metric_records_data) else 'not_started'
+                    "player_name": f"{pt.player.user.first_name} {pt.player.user.last_name}".strip(),
+                    "session": pt.session.id,
+                    "session_title": pt.session.title,
+                    "session_date": pt.session.date,
+                    "session_start_time": pt.session.start_time,
+                    "session_end_time": pt.session.end_time,
+                    "session_location": pt.session.location,
+                    "session_status": pt.session.status,
+                    "session_description": pt.session.description,
+                    "attendance_status": pt.attendance_status,
+                    "notes": pt.notes,
+                    "metric_records": metric_records_data,
+                    "assigned_metrics": assigned_metrics,
+                    "metrics_completion_status": {
+                        "total_assigned": len(assigned_metrics),
+                        "total_recorded": len(
+                            [
+                                mr
+                                for mr in metric_records_data
+                                if mr["value"] is not None
+                            ]
+                        ),
+                        "completion_percentage": (
+                            round(
+                                (
+                                    len(
+                                        [
+                                            mr
+                                            for mr in metric_records_data
+                                            if mr["value"] is not None
+                                        ]
+                                    )
+                                    / len(assigned_metrics)
+                                    * 100
+                                ),
+                                1,
+                            )
+                            if assigned_metrics
+                            else 0
+                        ),
+                        "status": (
+                            "completed"
+                            if all(
+                                mr["value"] is not None for mr in metric_records_data
+                            )
+                            else (
+                                "in_progress"
+                                if any(
+                                    mr["value"] is not None
+                                    for mr in metric_records_data
+                                )
+                                else "not_started"
+                            )
+                        ),
                     },
-                    'can_record_metrics': pt.session.can_record_metrics()
+                    "can_record_metrics": pt.session.can_record_metrics(),
                 }
                 sessions_data.append(session_data)
                 sessions_processed[session_id] = True
-        
+
         # Sort sessions by date (newest first)
-        sessions_data.sort(key=lambda x: x['session_date'], reverse=True)
-        
+        sessions_data.sort(key=lambda x: x["session_date"], reverse=True)
+
         # Paginate the sessions data
         from django.core.paginator import Paginator
-        page_size = int(request.query_params.get('page_size', 10))
-        paginator = Paginator(sessions_data, page_size)
-        page_number = request.query_params.get('page', 1)
-        page_obj = paginator.get_page(page_number)
-        
-        return Response({
-            'count': paginator.count,
-            'next': page_obj.next_page_number() if page_obj.has_next() else None,
-            'previous': page_obj.previous_page_number() if page_obj.has_previous() else None,
-            'results': list(page_obj.object_list),            'summary': {
-                'total_metrics': total_metrics_count,
-                'completed': status_counts['completed'],
-                'in_progress': status_counts['in_progress'],
-                'assigned': status_counts['assigned'],                'missed': status_counts['missed'],
-                'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
-            }
-        })
 
-    @action(detail=False, methods=['get'])
+        page_size = int(request.query_params.get("page_size", 10))
+        paginator = Paginator(sessions_data, page_size)
+        page_number = request.query_params.get("page", 1)
+        page_obj = paginator.get_page(page_number)
+
+        return Response(
+            {
+                "count": paginator.count,
+                "next": page_obj.next_page_number() if page_obj.has_next() else None,
+                "previous": (
+                    page_obj.previous_page_number() if page_obj.has_previous() else None
+                ),
+                "results": list(page_obj.object_list),
+                "summary": {
+                    "total_metrics": total_metrics_count,
+                    "completed": status_counts["completed"],
+                    "in_progress": status_counts["in_progress"],
+                    "assigned": status_counts["assigned"],
+                    "missed": status_counts["missed"],
+                    "completion_rate": (
+                        round(
+                            (status_counts["completed"] / total_metrics_count * 100), 1
+                        )
+                        if total_metrics_count > 0
+                        else 0
+                    ),
+                },
+            }
+        )
+
+    @action(detail=False, methods=["get"])
     def assigned_metrics_overview(self, request):
         """Get overall assigned metrics summary for the current player (no filters applied)"""
         user = request.user
-        
+
         # Ensure only players can access this endpoint
-        if not hasattr(user, 'player_profile'):
+        if not hasattr(user, "player_profile"):
             raise PermissionDenied("Only players can access assigned metrics")
-        
+
         player = user.player_profile
-        
+
         # Get all PlayerTraining records with assigned metrics (no filters)
-        player_trainings = PlayerTraining.objects.filter(
-            player=player,
-            assigned_metrics__isnull=False
-        ).select_related(
-            'session',
-            'session__team'
-        ).prefetch_related(
-            'assigned_metrics',
-            'metric_records',
-            'metric_records__metric'
-        ).distinct()
-        
+        player_trainings = (
+            PlayerTraining.objects.filter(player=player, assigned_metrics__isnull=False)
+            .select_related("session", "session__team")
+            .prefetch_related(
+                "assigned_metrics", "metric_records", "metric_records__metric"
+            )
+            .distinct()
+        )
+
         # Calculate overall summary statistics
         total_metrics_count = 0
-        status_counts = {'completed': 0, 'in_progress': 0, 'assigned': 0, 'missed': 0}
-        
+        status_counts = {"completed": 0, "in_progress": 0, "assigned": 0, "missed": 0}
+
         # Track processed metrics to avoid duplicates
         processed_metrics = set()
-        
+
         for pt in player_trainings:
             for metric in pt.assigned_metrics.all():
                 # Create unique identifier for metric-session combination
                 metric_session_key = f"{metric.id}_{pt.session.id}"
                 if metric_session_key in processed_metrics:
                     continue
-                
+
                 processed_metrics.add(metric_session_key)
                 total_metrics_count += 1
-                
+
                 # Get metric record for this session
                 metric_record = pt.metric_records.filter(metric=metric).first()
-                
+
                 # Determine individual metric status
                 if metric_record and metric_record.value is not None:
-                    metric_status = 'completed'
-                elif pt.session.status == 'completed':
-                    if pt.attendance_status in ['absent', 'excused']:
-                        metric_status = 'missed'
+                    metric_status = "completed"
+                elif pt.session.status == "completed":
+                    if pt.attendance_status in ["absent", "excused"]:
+                        metric_status = "missed"
                     else:
-                        metric_status = 'missed'
-                elif pt.session.status == 'ongoing':
-                    metric_status = 'in_progress'
-                elif pt.session.status == 'upcoming':
-                    metric_status = 'assigned'
+                        metric_status = "missed"
+                elif pt.session.status == "ongoing":
+                    metric_status = "in_progress"
+                elif pt.session.status == "upcoming":
+                    metric_status = "assigned"
                 else:
-                    metric_status = 'assigned'
-                
-                status_counts[metric_status] += 1
-        
-        return Response({
-            'total_metrics': total_metrics_count,
-            'completed': status_counts['completed'],            'in_progress': status_counts['in_progress'],
-            'assigned': status_counts['assigned'],
-            'missed': status_counts['missed'],
-            'completion_rate': round((status_counts['completed'] / total_metrics_count * 100), 1) if total_metrics_count > 0 else 0
-        })
+                    metric_status = "assigned"
 
-    @action(detail=False, methods=['get'])
+                status_counts[metric_status] += 1
+
+        return Response(
+            {
+                "total_metrics": total_metrics_count,
+                "completed": status_counts["completed"],
+                "in_progress": status_counts["in_progress"],
+                "assigned": status_counts["assigned"],
+                "missed": status_counts["missed"],
+                "completion_rate": (
+                    round((status_counts["completed"] / total_metrics_count * 100), 1)
+                    if total_metrics_count > 0
+                    else 0
+                ),
+            }
+        )
+
+    @action(detail=False, methods=["get"])
     def training_overview(self, request):
         """Get training overview statistics for the current player"""
         user = request.user
-        
+
         # Ensure only players can access this endpoint
-        if not hasattr(user, 'player_profile'):
+        if not hasattr(user, "player_profile"):
             raise PermissionDenied("Only players can access training overview")
-        
+
         player = user.player_profile
-        
+
         # Calculate date range for 90 days span (only for recent improvement)
         from datetime import datetime, timedelta
+
         ninety_days_ago = timezone.now().date() - timedelta(days=90)
-        
+
         # Get all training sessions for this player (all time)
         all_trainings = PlayerTraining.objects.filter(player=player)
-        
+
         # 1. Total number of training sessions (all time)
         total_sessions = all_trainings.count()
-        
+
         # 2. Present attendance percentage (all time)
         present_count = all_trainings.filter(
-            attendance_status__in=['present', 'late']
+            attendance_status__in=["present", "late"]
         ).count()
-        
-        attendance_percentage = round((present_count / total_sessions * 100), 1) if total_sessions > 0 else 0
-        
+
+        attendance_percentage = (
+            round((present_count / total_sessions * 100), 1)
+            if total_sessions > 0
+            else 0
+        )
+
         # 3. Number of times late status (all time)
-        late_count = all_trainings.filter(attendance_status='late').count()
-        
+        late_count = all_trainings.filter(attendance_status="late").count()
+
         # 4. Number of training sessions attended (present or late)
         attended_count = present_count
-        
+
         # 5. Recent improvement using same method as dashboard (90 days span only)
         # Use ProgressService to ensure consistency with dashboard
         from .services.progress_service import ProgressService
-        
+
         recent_improvement_data = ProgressService.calculate_recent_improvement(
-            player, 
-            date_from=ninety_days_ago, 
-            date_to=timezone.now().date()
+            player, date_from=ninety_days_ago, date_to=timezone.now().date()
         )
-        
+
         if recent_improvement_data:
-            average_improvement = round(recent_improvement_data['percentage'], 1)
-            metrics_analyzed = recent_improvement_data['metric_count']
+            average_improvement = round(recent_improvement_data["percentage"], 1)
+            metrics_analyzed = recent_improvement_data["metric_count"]
         else:
             average_improvement = 0
             metrics_analyzed = 0
-        
-        return Response({
-            'total_sessions': total_sessions,
-            'attendance_percentage': attendance_percentage,
-            'late_count': late_count,
-            'attended_count': attended_count,  # renamed from absent_count
-            'recent_improvement': average_improvement,
-            'metrics_analyzed': metrics_analyzed,
-            'improvement_date_range_days': 90
-        })
+
+        return Response(
+            {
+                "total_sessions": total_sessions,
+                "attendance_percentage": attendance_percentage,
+                "late_count": late_count,
+                "attended_count": attended_count,  # renamed from absent_count
+                "recent_improvement": average_improvement,
+                "metrics_analyzed": metrics_analyzed,
+                "improvement_date_range_days": 90,
+            }
+        )
 
     def _calculate_improvement_for_metric(self, player, metric, current_record):
         """Calculate improvement from last metric record for a specific metric"""
         if not current_record or current_record.value is None:
             return None
-            
+
         # Get the previous record for this metric for this player
-        previous_record = PlayerMetricRecord.objects.filter(
-            player_training__player=player,
-            metric=metric,
-            value__isnull=False,
-            player_training__session__date__lt=current_record.player_training.session.date
-        ).order_by('-player_training__session__date', '-player_training__session__start_time').first()
-        
+        previous_record = (
+            PlayerMetricRecord.objects.filter(
+                player_training__player=player,
+                metric=metric,
+                value__isnull=False,
+                player_training__session__date__lt=current_record.player_training.session.date,
+            )
+            .order_by(
+                "-player_training__session__date",
+                "-player_training__session__start_time",
+            )
+            .first()
+        )
+
         if not previous_record:
             return None
-            
+
         # Use the shared calculation function with normalization weights
         from .utils import calculate_normalized_improvement
-        
+
         # Get normalization weight from metric unit
         normalization_weight = 1.0
         if metric.metric_unit:
             normalization_weight = float(metric.metric_unit.normalization_weight)
-        
+
         improvement_data = calculate_normalized_improvement(
             float(current_record.value),
             float(previous_record.value),
             metric.is_lower_better,
-            normalization_weight
+            normalization_weight,
         )
-        
-        return improvement_data['raw_value']
 
-    def _calculate_improvement_percentage_for_metric(self, player, metric, current_record):
+        return improvement_data["raw_value"]
+
+    def _calculate_improvement_percentage_for_metric(
+        self, player, metric, current_record
+    ):
         """Calculate improvement percentage from last metric record for a specific metric"""
         if not current_record or current_record.value is None:
             return None
-            
+
         # Get the previous record for this metric for this player
-        previous_record = PlayerMetricRecord.objects.filter(
-            player_training__player=player,
-            metric=metric,
-            value__isnull=False,
-            player_training__session__date__lt=current_record.player_training.session.date
-        ).order_by('-player_training__session__date', '-player_training__session__start_time').first()
-        
+        previous_record = (
+            PlayerMetricRecord.objects.filter(
+                player_training__player=player,
+                metric=metric,
+                value__isnull=False,
+                player_training__session__date__lt=current_record.player_training.session.date,
+            )
+            .order_by(
+                "-player_training__session__date",
+                "-player_training__session__start_time",
+            )
+            .first()
+        )
+
         if not previous_record:
             return None
-            
+
         # Use the shared calculation function with normalization weights
         from .utils import calculate_normalized_improvement
-        
+
         # Get normalization weight from metric unit
         normalization_weight = 1.0
         if metric.metric_unit:
             normalization_weight = float(metric.metric_unit.normalization_weight)
-        
+
         improvement_data = calculate_normalized_improvement(
             float(current_record.value),
             float(previous_record.value),
             metric.is_lower_better,
-            normalization_weight
+            normalization_weight,
         )
-        
-        return improvement_data['percentage']
+
+        return improvement_data["percentage"]
 
 
 class PlayerMetricRecordViewSet(viewsets.ModelViewSet):
@@ -2056,12 +2181,14 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Apply role-based access control
         user = request.user
-        if not user.is_admin:            # For coaches, check if player is in their teams
+        if not user.is_admin:  # For coaches, check if player is in their teams
             if hasattr(user, "coach_profile"):
                 from django.db.models import Q
                 from teams.models import Team
+
                 coach_teams = Team.objects.filter(
-                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                    Q(head_coach=user.coach_profile)
+                    | Q(assistant_coach=user.coach_profile)
                 )
                 if player.team not in coach_teams:
                     raise PermissionDenied(
@@ -2171,10 +2298,48 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
                     total_improvement += improvement
                     metrics_with_improvement += 1
 
-                    # Calculate latest performance score (0-100 scale)
-                    # This is a normalized score based on improvement
-                    performance_score = max(0, min(100, 50 + (improvement / 2)))
+                    # Calculate performance score (0-100 scale)
+                    # More robust scoring system:
+                    # - Base score of 50 (neutral)
+                    # - Add/subtract based on improvement with diminishing returns
+                    # - Use sigmoid-like function for better scaling
+                    if improvement >= 0:
+                        # Positive improvement: scale from 50 to 100
+                        # Using logarithmic scaling to handle large improvements better
+                        improvement_factor = min(
+                            improvement / 50, 2.0
+                        )  # Cap at 200% improvement
+                        performance_score = 50 + (
+                            50 * improvement_factor / (1 + improvement_factor)
+                        )
+                    else:
+                        # Negative improvement: scale from 50 to 0
+                        # Using similar scaling for negative improvements
+                        improvement_factor = min(
+                            abs(improvement) / 50, 2.0
+                        )  # Cap at -200% improvement
+                        performance_score = 50 - (
+                            50 * improvement_factor / (1 + improvement_factor)
+                        )
+
+                    # Ensure score stays within 0-100 range
+                    performance_score = max(0, min(100, performance_score))
                     latest_performance_score += performance_score
+                else:
+                    # Handle case where first_value is 0
+                    # For zero baseline, we can't calculate percentage improvement
+                    # Instead, use a simple scoring based on latest value relative to metric type
+                    if metric.is_lower_better:
+                        # For lower-is-better metrics, lower latest values get higher scores
+                        # This is a simplified approach - you might want to use domain-specific logic
+                        performance_score = max(0, min(100, 100 - latest_value))
+                    else:
+                        # For higher-is-better metrics, higher latest values get higher scores
+                        # This is also simplified - you might want to use domain-specific logic
+                        performance_score = max(0, min(100, latest_value))
+
+                    latest_performance_score += performance_score
+                    metrics_with_improvement += 1
 
                 category_metrics.append(
                     {
@@ -2256,11 +2421,62 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response(chart_data)
 
+    @action(detail=False, methods=["get"])
+    def multi_player_overview(self, request):
+        """
+        Get team overview statistics with weighted improvements for multiple players.
+        
+        Expects GET parameters:
+        - team: team_slug (required if player_ids not provided)
+        - metric_id: metric_id (required)
+        - player_ids: comma-separated list of player IDs (optional, for filtering specific players within a team)
+        
+        Date range is automatically set to 3 months from now for recent improvement calculations.
+        
+        Returns:
+        - number_of_players: Total players analyzed
+        - recent_team_improvement: Team average improvement over last 3 months (weighted)
+        - overall_team_improvement: Team average improvement from first to latest records (weighted)
+        - best_player: Player with highest weighted improvement
+        - team_summary: Additional team statistics
+        """
+        from .services import TeamOverviewService
+        
+        # Get parameters
+        team_slug = request.query_params.get('team')
+        metric_id = request.query_params.get('metric_id')
+        player_ids_param = request.query_params.get('player_ids', '')
+        
+        try:
+            # Use service to get team overview
+            service = TeamOverviewService()
+            response_data = service.get_team_overview(
+                team_slug=team_slug,
+                metric_id=metric_id,
+                player_ids_param=player_ids_param,
+                user=request.user
+            )
+            
+            return Response(response_data)
+            
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PermissionError as e:
+            raise PermissionDenied(str(e))
+        except Exception as e:
+            return Response(
+                {"detail": f"An error occurred: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
 class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     """
     ViewSet for attendance analytics and reporting with role-based access control
-   
+
     """
 
     permission_classes = [IsAuthenticated]
@@ -2359,7 +2575,9 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         """Get individual player attendance analytics"""
         try:
             base_queryset = self.get_base_queryset(request)
-            filters = self._get_filters(request)            # Use service to calculate player analytics
+            filters = self._get_filters(
+                request
+            )  # Use service to calculate player analytics
             players_data = (
                 AttendanceAnalyticsService.calculate_player_attendance_analytics(
                     base_queryset, filters, request
@@ -2386,7 +2604,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
-            user = request.user            # Use service to get player detail analytics
+            user = request.user  # Use service to get player detail analytics
             data = AttendanceAnalyticsService.get_player_detail_analytics(
                 player_id, base_queryset, filters, user, request
             )
@@ -2446,7 +2664,8 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             player_result.get("created_records", 0)
             for player_result in result.get("results", [])
         )
-        total_removed = sum(            player_result.get("deleted_records", 0)
+        total_removed = sum(
+            player_result.get("deleted_records", 0)
             for player_result in result.get("results", [])
         )
         players_processed = result.get("total_players_processed", 0)

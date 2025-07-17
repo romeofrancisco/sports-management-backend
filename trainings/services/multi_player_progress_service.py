@@ -33,8 +33,15 @@ class MultiPlayerProgressService:
         """Extract and parse query parameters from the request."""
         self.team_slug = self.request.query_params.get('team')
         self.metric_id = self.request.query_params.get('metric_id')
-        self.date_from = self.request.query_params.get('date_from')
-        self.date_to = self.request.query_params.get('date_to')
+        
+        # Handle date parameters, filtering out 'undefined' values
+        date_from_param = self.request.query_params.get('date_from')
+        date_to_param = self.request.query_params.get('date_to')
+        
+        # Set to None if the parameter is 'undefined', 'null', or empty
+        self.date_from = date_from_param if date_from_param not in ['undefined', 'null', '', None] else None
+        self.date_to = date_to_param if date_to_param not in ['undefined', 'null', '', None] else None
+        
         self.player_ids_param = self.request.query_params.get('player_ids', '')
         self.limit = self.request.query_params.get('limit')
         self.latest_only = self.request.query_params.get('latest_only', 'false').lower() == 'true'
@@ -110,7 +117,7 @@ class MultiPlayerProgressService:
             
         # Optimize player query to fetch only needed fields 
         return players_query.select_related('team', 'user').only(
-            'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name'
+            'user_id', 'team_id', 'team__name', 'team__slug', 'user__first_name', 'user__last_name', 'user__profile'
         )
     def _paginate_players(self, players_query):
         """
@@ -146,9 +153,17 @@ class MultiPlayerProgressService:
         player_info = {}
         for player in paginated_players:
             player_id = player.user_id
+            
+            # Get profile picture URL with request context
+            profile_url = None
+            if player.user.profile:
+                if hasattr(player.user.profile, 'url'):
+                    profile_url = self.request.build_absolute_uri(player.user.profile.url)
+            
             player_info[player_id] = {
                 'user_id': player_id,
                 'player_name': player.user.get_full_name(),
+                'profile': profile_url,
                 'team': player.team_id,
                 'team_slug': player.team.slug if player.team else None,
                 'team_name': player.team.name if player.team else None,
