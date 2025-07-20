@@ -42,7 +42,8 @@ class PlayerTrainingService:
                 value = metric_data.get('value')
                 notes = metric_data.get('notes', '')
                 
-                if not metric_id or value is None:
+                # Only skip if metric_id is missing, allow None values for clearing
+                if not metric_id:
                     continue
                 
                 try:
@@ -53,7 +54,7 @@ class PlayerTrainingService:
                         player_training=player_training,
                         metric=metric,
                         defaults={
-                            'value': value,
+                            'value': value,  # This will now accept None values
                             'notes': notes,
                             'recorded_by_id': getattr(recorded_by_user, 'coach_profile_id', None)
                         }
