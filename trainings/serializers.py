@@ -34,6 +34,7 @@ class TrainingMetricSerializer(serializers.ModelSerializer):
 
 class PlayerMetricRecordSerializer(serializers.ModelSerializer):
     metric_name = serializers.CharField(source="metric.name", read_only=True)
+    metric_description = serializers.CharField(source="metric.description", read_only=True)
     metric_unit_code = serializers.SerializerMethodField()
     metric_unit_name = serializers.SerializerMethodField()
     player_name = serializers.CharField(source="player_training.player.user.get_full_name", read_only=True)
@@ -48,7 +49,7 @@ class PlayerMetricRecordSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = PlayerMetricRecord
-        fields = ["id", "player_training", "metric", "metric_name", "metric_unit_code", "metric_unit_name", "value", 
+        fields = ["id", "player_training", "metric", "metric_name", "metric_description", "metric_unit_code", "metric_unit_name", "value", 
                  "player_name", "notes", "recorded_by", "recorded_at",
                  "improvement_from_last", "improvement_percentage"]
 
@@ -207,6 +208,201 @@ class TrainingSessionDetailSerializer(serializers.ModelSerializer):
                   "team", "team_name", "location", "status", "auto_status", "categories", 
                   "notes", "created_at", "updated_at", "duration_minutes", "player_records",
                   "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
+
+
+class TrainingSessionInfoSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for basic session info only"""
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_manage_attendance = serializers.BooleanField(read_only=True)
+    can_configure_metrics = serializers.BooleanField(read_only=True)
+    can_record_metrics = serializers.BooleanField(read_only=True)
+    players_count = serializers.SerializerMethodField()
+    
+    def get_players_count(self, obj):
+        """Get count of players without loading full player data"""
+        return obj.player_records.count()
+    
+    class Meta:
+        model = TrainingSession
+        fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
+                  "team", "team_name", "location", "status", "auto_status", 
+                  "notes", "created_at", "updated_at", "duration_minutes", "players_count",
+                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics"]
+
+
+class TrainingSessionWorkflowSerializer(serializers.ModelSerializer):
+    """Serializer for session workflow management - includes basic session info + minimal player data for validation"""
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_manage_attendance = serializers.BooleanField(read_only=True)
+    can_configure_metrics = serializers.BooleanField(read_only=True)
+    can_record_metrics = serializers.BooleanField(read_only=True)
+    player_records = serializers.SerializerMethodField()
+    
+    def get_player_records(self, obj):
+        """Get minimal player data needed for workflow validation"""
+        player_records = obj.player_records.select_related('player__user').prefetch_related('assigned_metrics', 'metric_records').all()
+        players_data = []
+        
+        for record in player_records:
+            # Get basic metric records info for workflow validation
+            metric_records_data = []
+            for metric_record in record.metric_records.all():
+                metric_records_data.append({
+                    'id': metric_record.id,
+                    'metric': metric_record.metric.id,
+                    'metric_name': metric_record.metric.name,
+                    'value': metric_record.value,
+                })
+            
+            # Get assigned metrics info for workflow validation
+            assigned_metrics_data = []
+            for metric in record.assigned_metrics.all():
+                assigned_metrics_data.append({
+                    'id': metric.id,
+                    'name': metric.name,
+                })
+            
+            players_data.append({
+                'id': record.id,
+                'player': {
+                    'id': record.player.user.id,
+                    'first_name': record.player.user.first_name,
+                    'last_name': record.player.user.last_name,
+                },
+                'attendance_status': record.attendance_status,
+                'metric_records': metric_records_data,
+                'assigned_metrics': assigned_metrics_data,
+            })
+        
+        return players_data
+    
+    class Meta:
+        model = TrainingSession
+        fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
+                  "team", "team_name", "location", "status", "auto_status", 
+                  "notes", "created_at", "updated_at", "duration_minutes",
+                  "can_manage_attendance", "can_configure_metrics", "can_record_metrics", "player_records"]
+
+
+class TrainingSessionAttendanceSerializer(serializers.ModelSerializer):
+    """Serializer for attendance management - includes basic session info + player attendance data"""
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_manage_attendance = serializers.BooleanField(read_only=True)
+    attendance_data = serializers.SerializerMethodField()
+    
+    def get_attendance_data(self, obj):
+        """Get lightweight attendance data without metrics"""
+        player_records = obj.player_records.select_related('player__user').all()
+        attendance_list = []
+        
+        for record in player_records:
+            attendance_list.append({
+                'id': record.id,
+                'player': {
+                    'id': record.player.user.id,
+                    'first_name': record.player.user.first_name,
+                    'last_name': record.player.user.last_name,
+                    'full_name': record.player.user.get_full_name(),
+                    'profile': record.player.user.profile.url if hasattr(record.player.user, 'profile') and record.player.user.profile else None,
+                },
+                'player_name': record.player.user.get_full_name(),
+                'session': record.session.id,
+                'attendance_status': record.attendance_status,
+                'notes': record.notes,
+            })
+        
+        return attendance_list
+    
+    class Meta:
+        model = TrainingSession
+        fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
+                  "team", "team_name", "location", "status", "auto_status", 
+                  "can_manage_attendance", "attendance_data"]
+
+
+class TrainingSessionMetricsConfigSerializer(serializers.ModelSerializer):
+    """Serializer for metrics configuration - includes session info + categories + players with assigned metrics"""
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    auto_status = serializers.CharField(source="get_auto_status", read_only=True)
+    can_configure_metrics = serializers.BooleanField(read_only=True)
+    categories = TrainingCategorySerializer(many=True, read_only=True)
+    player_records = serializers.SerializerMethodField()
+    
+    def get_player_records(self, obj):
+        """Get players with assigned metrics data (needed for metrics configuration)"""
+        from .models import TrainingMetric
+        
+        player_records = obj.player_records.select_related('player__user').prefetch_related('assigned_metrics').all()
+        players_data = []
+        
+        for record in player_records:
+            # Get assigned metrics with full details
+            assigned_metrics_data = []
+            for metric in record.assigned_metrics.all():
+                # Handle metric_unit_data safely - provide default structure if metric_unit is None
+                metric_unit_data = None
+                if metric.metric_unit:
+                    metric_unit_data = {
+                        'id': metric.metric_unit.id,
+                        'code': metric.metric_unit.code,
+                        'name': metric.metric_unit.name,
+                        'normalization_weight': metric.metric_unit.normalization_weight,
+                        'description': metric.metric_unit.description,
+                        'is_default': metric.metric_unit.is_default,
+                        'created_by': metric.metric_unit.created_by.id if metric.metric_unit.created_by else None,
+                        'created_by_name': metric.metric_unit.created_by.get_full_name() if metric.metric_unit.created_by else None,
+                    }
+                else:
+                    # Provide default structure to prevent frontend errors
+                    metric_unit_data = {
+                        'id': None,
+                        'code': 'N/A',
+                        'name': 'No Unit',
+                        'normalization_weight': 1.0,
+                        'description': 'No unit specified',
+                        'is_default': False,
+                        'created_by': None,
+                        'created_by_name': None,
+                    }
+                
+                assigned_metrics_data.append({
+                    'id': metric.id,
+                    'name': metric.name,
+                    'description': metric.description,
+                    'metric_unit': metric.metric_unit.id if metric.metric_unit else None,
+                    'metric_unit_data': metric_unit_data,
+                    'category': metric.category.id if metric.category else None,
+                    'category_name': metric.category.name if metric.category else None,
+                    'is_lower_better': metric.is_lower_better,
+                    'weight': metric.weight,
+                })
+            
+            players_data.append({
+                'id': record.id,
+                'player': {
+                    'id': record.player.user.id,
+                    'first_name': record.player.user.first_name,
+                    'last_name': record.player.user.last_name,
+                    'full_name': record.player.user.get_full_name(),
+                    'profile': record.player.user.profile.url if hasattr(record.player.user, 'profile') and record.player.user.profile else None,
+                },
+                'player_name': record.player.user.get_full_name(),
+                'session': record.session.id,
+                'attendance_status': record.attendance_status,
+                'notes': record.notes,
+                'assigned_metrics': assigned_metrics_data,
+            })
+        
+        return players_data
+    
+    class Meta:
+        model = TrainingSession
+        fields = ["id", "session_id", "title", "description", "date", "start_time", "end_time", 
+                  "team", "team_name", "location", "status", "auto_status", "categories",
+                  "can_configure_metrics", "player_records"]
 
 
 from trainings.services.metrics_service import MetricService

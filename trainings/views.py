@@ -51,6 +51,10 @@ from .serializers import (
     TrainingCategorySerializer,
     TrainingSessionListSerializer,
     TrainingSessionDetailSerializer,
+    TrainingSessionInfoSerializer,
+    TrainingSessionWorkflowSerializer,
+    TrainingSessionAttendanceSerializer,
+    TrainingSessionMetricsConfigSerializer,
     PlayerTrainingSerializer,
     TrainingMetricSerializer,
     PlayerMetricRecordSerializer,
@@ -420,6 +424,42 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         service = TrainingSessionService()
         analytics_data = service.get_session_analytics(session)
         return Response(analytics_data)
+
+    @action(detail=True, methods=["get"], url_path="info")
+    def session_info(self, request, pk=None):
+        """Get lightweight session information without heavy player/metrics data"""
+        session = self.get_object()
+        
+        # Use the lightweight serializer
+        serializer = TrainingSessionInfoSerializer(session, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="workflow")
+    def session_workflow(self, request, pk=None):
+        """Get basic session data for workflow management"""
+        session = self.get_object()
+        
+        # Use the workflow serializer (just basic session info for workflow stepper)
+        serializer = TrainingSessionWorkflowSerializer(session, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="attendance")
+    def session_attendance(self, request, pk=None):
+        """Get session data for attendance management"""
+        session = self.get_object()
+        
+        # Use the attendance serializer (session info + lightweight player attendance data)
+        serializer = TrainingSessionAttendanceSerializer(session, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="metrics-config")
+    def session_metrics_config(self, request, pk=None):
+        """Get session data for metrics configuration"""
+        session = self.get_object()
+        
+        # Use the metrics config serializer (session info + categories + basic players list)
+        serializer = TrainingSessionMetricsConfigSerializer(session, context={'request': request})
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         from .services import TrainingSessionService
@@ -1160,6 +1200,97 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                 "You don't have permission to delete player training records"
             )
 
+    @action(detail=True, methods=["get"])
+    def player_metrics_data(self, request, pk=None):
+        """
+        Lightweight endpoint to get a specific player's metric data for recording
+        Returns only the necessary data without the heavy session object
+        """
+        player_training = self.get_object()
+        
+        # Check permissions
+        session = player_training.session
+        user = request.user
+        
+        # Verify user has access to this session's data
+        if not user.is_admin:
+            if hasattr(user, "coach_profile"):
+                # Coach can only access their team's players
+                coach_teams = get_coach_teams(user.coach_profile)
+                if session.team not in coach_teams:
+                    raise PermissionDenied("You don't have permission to access this player's data")
+            elif hasattr(user, "player_profile"):
+                # Player can only access their own data
+                if player_training.player != user.player_profile:
+                    raise PermissionDenied("You can only access your own training data")
+            else:
+                raise PermissionDenied("You don't have permission to access this data")
+        
+        # Return lightweight player metrics data
+        serializer = PlayerTrainingSerializer(player_training, context={'request': request})
+        return Response({
+            'player_training': serializer.data,
+            'session_info': {
+                'id': session.id,
+                'title': session.title,
+                'status': session.status,
+                'can_record_metrics': session.can_record_metrics()
+            }
+        })
+
+    @action(detail=False, methods=["get"])
+    def session_players_metrics(self, request):
+        """
+        Lightweight endpoint to get all players' metric data for a specific session
+        Returns only the necessary data for metrics recording interface
+        """
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response(
+                {'error': 'session_id parameter is required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            session = TrainingSession.objects.get(id=session_id)
+        except TrainingSession.DoesNotExist:
+            return Response(
+                {'error': 'Session not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check permissions
+        user = request.user
+        if not user.is_admin:
+            if hasattr(user, "coach_profile"):
+                coach_teams = get_coach_teams(user.coach_profile)
+                if session.team not in coach_teams:
+                    raise PermissionDenied("You don't have permission to access this session's data")
+            elif hasattr(user, "player_profile"):
+                if session.team != user.player_profile.team:
+                    raise PermissionDenied("You can only access your own team's sessions")
+            else:
+                raise PermissionDenied("You don't have permission to access this data")
+        
+        # Get players with metrics (present/late attendance and assigned metrics)
+        players_with_metrics = self.get_queryset().filter(
+            session=session,
+            attendance_status__in=['present', 'late'],
+            assigned_metrics__isnull=False
+        ).distinct()
+        
+        serializer = PlayerTrainingSerializer(players_with_metrics, many=True, context={'request': request})
+        
+        return Response({
+            'session_info': {
+                'id': session.id,
+                'title': session.title,
+                'status': session.status,
+                'can_record_metrics': session.can_record_metrics()
+            },
+            'players_with_metrics': serializer.data
+        })
+
     @action(detail=True, methods=["post"])
     def record_metrics(self, request, pk=None):
         """Record multiple metrics for a player's training"""
@@ -1326,7 +1457,7 @@ class PlayerTrainingViewSet(viewsets.ModelViewSet):
                         # No current record to compare against
                         metric_record["improvement"] = None
 
-                        return Response({"previous_record": metric_record})
+                return Response({"previous_record": metric_record})
             else:
                 return Response(
                     {
