@@ -122,25 +122,27 @@ class AttendanceAnalyticsService:
         total_sessions = attendance_qs.values('session').distinct().count()
         total_players = attendance_qs.values('player').distinct().count()
         
-        # Attendance distribution
+        # Attendance distribution (percentages)
         distribution = attendance_qs.values('attendance_status').annotate(
             count=Count('id')
         )
-        
+
         attendance_distribution = {}
         for item in distribution:
             attendance_status = item['attendance_status'] or 'pending'
-            attendance_distribution[attendance_status] = item['count']
-        
-        # Calculate rates - include both present and late as "attended"
-        present_count = attendance_distribution.get('present', 0)
-        late_count = attendance_distribution.get('late', 0)
-        attended_count = present_count + late_count
-        overall_rate = (attended_count / total_records * 100) if total_records > 0 else 0
-        
-        # Average attended players per session
-        avg_attended_per_session = attended_count / total_sessions if total_sessions > 0 else 0
-        
+            count = item['count']
+            percentage = (count / total_records * 100) if total_records > 0 else 0
+            attendance_distribution[attendance_status] = round(percentage, 2)
+
+        # Calculate attended counts directly
+        present_count_actual = attendance_qs.filter(attendance_status='present').count()
+        late_count_actual = attendance_qs.filter(attendance_status='late').count()
+        attended_count_actual = present_count_actual + late_count_actual
+        overall_rate = (attended_count_actual / total_records * 100) if total_records > 0 else 0
+
+        # Average attended players per session (actual count per session)
+        avg_attended_per_session = attended_count_actual / total_sessions if total_sessions > 0 else 0
+
         return {
             'total_sessions': total_sessions,
             'total_players': total_players,
