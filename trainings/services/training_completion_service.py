@@ -3,6 +3,7 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 import statistics
+import json
 
 from trainings.models import (
     PlayerMetricRecord,
@@ -12,6 +13,7 @@ from trainings.models import (
 )
 from trainings.services.performance_service import PerformanceService
 from trainings.utils import calculate_normalized_improvement
+from sports_management.gemini_ai import generate_response
 
 
 class TrainingCompletionService:
@@ -349,12 +351,12 @@ class TrainingCompletionService:
         """Generate comprehensive training recommendations based on session data"""
 
         recommendations = {
-            "attendance_recommendations": [],
-            "metrics_recommendations": [],
-            "player_development_recommendations": [],
-            "session_optimization_recommendations": [],
-            "performance_insights": [],
-            "action_items": [],
+            "Training Performance Analysis": [],
+            "Player Development Insights": [],
+            "Team Dynamics Assessment": [],
+            "Training Optimization": [],
+            "Strategic Recommendations": [],
+            "Coach Focus Areas": [],
         }
 
         # Enhanced Attendance Analysis
@@ -363,249 +365,187 @@ class TrainingCompletionService:
         absent_count = attendance_summary["absent"]
         late_count = attendance_summary["late"]
         excused_count = attendance_summary["excused"]
-
-        # Critical attendance issues
-        if attendance_rate < 50:
-            recommendations["attendance_recommendations"].append(
-                {
-                    "priority": "critical",
-                    "category": "attendance",
-                    "title": "Critical Attendance Issue",
-                    "message": f"Very low attendance ({attendance_rate}%) with {absent_count} absent players out of {total_players}.",
-                    "suggestion": "Immediate intervention required: Contact absent players, review session timing, and consider mandatory attendance policies.",
-                    "impact": "Team cohesion and training effectiveness severely compromised",
-                    "action_required": True
-                }
-            )
-        elif attendance_rate < 70:
-            recommendations["attendance_recommendations"].append(
-                {
-                    "priority": "high",
-                    "category": "attendance",
-                    "title": "Low Attendance Concern",
-                    "message": f"Below-target attendance ({attendance_rate}%). {absent_count} players missed training.",
-                    "suggestion": "Send personalized reminders 48-72 hours before sessions. Survey players for scheduling conflicts and preferred training times.",
-                    "impact": "Reduced team synchronization and individual development",
-                    "action_required": True
-                }
-            )
-        elif attendance_rate < 85:
-            recommendations["attendance_recommendations"].append(
-                {
-                    "priority": "medium",
-                    "category": "attendance",
-                    "title": "Room for Attendance Improvement",
-                    "message": f"Good attendance ({attendance_rate}%) but {absent_count} players still missing.",
-                    "suggestion": "Maintain current communication while implementing attendance incentives or recognition programs.",
-                    "impact": "Minor gaps in team training consistency",
-                    "action_required": False
-                }
-            )
-
-        # Late arrivals analysis
-        if late_count > 0:
-            late_percentage = (late_count / total_players) * 100
-            if late_percentage > 20:
-                recommendations["attendance_recommendations"].append(
-                    {
-                        "priority": "medium",
-                        "category": "punctuality",
-                        "title": "Punctuality Issues",
-                        "message": f"{late_count} players ({late_percentage:.1f}%) arrived late to training.",
-                        "suggestion": "Review session start times and transportation logistics. Consider earlier reminder notifications.",
-                        "impact": "Disrupts warm-up routines and affects session flow",
-                        "action_required": True
-                    }
-                )
-
-        # Enhanced Metrics Analysis
+        
+        # Calculate key metrics for analysis
         completion_rate = metrics_summary["completion_rate"]
         unique_metrics = metrics_summary["unique_metrics"]
         players_with_metrics = metrics_summary["players_with_metrics"]
+        
+        # Analyze player performance patterns
+        improving_players = [p for p in player_improvements if p["overall_improvement_percentage"] > 0] if player_improvements else []
+        declining_players = [p for p in player_improvements if p["overall_improvement_percentage"] < -3] if player_improvements else []
+        total_with_metrics = len([p for p in player_improvements if p["metrics_recorded"] > 0]) if player_improvements else 0
 
-        if completion_rate < 40:
-            recommendations["metrics_recommendations"].append(
-                {
-                    "priority": "critical",
-                    "category": "data_collection",
-                    "title": "Critical Data Collection Gap",
-                    "message": f"Very low metrics completion ({completion_rate}%). Insufficient data for performance analysis.",
-                    "suggestion": "Simplify metrics collection process, provide additional staff training, or reduce number of tracked metrics temporarily.",
-                    "impact": "Cannot effectively monitor player progress or make data-driven decisions",
-                    "action_required": True
-                }
-            )
-        elif completion_rate < 60:
-            recommendations["metrics_recommendations"].append(
-                {
-                    "priority": "high",
-                    "category": "data_collection",
-                    "title": "Low Metrics Recording",
-                    "message": f"Below-target metrics completion ({completion_rate}%). {metrics_summary['expected_records'] - metrics_summary['total_metrics_recorded']} measurements missing.",
-                    "suggestion": "Allocate more time for data recording, provide mobile recording tools, or assign dedicated data collection staff.",
-                    "impact": "Limited ability to track individual progress and team performance trends",
-                    "action_required": True
-                }
-            )
-        elif completion_rate < 80:
-            recommendations["metrics_recommendations"].append(
-                {
-                    "priority": "medium",
-                    "category": "data_collection",
-                    "title": "Moderate Data Gaps",
-                    "message": f"Acceptable metrics completion ({completion_rate}%) but some measurements missing.",
-                    "suggestion": "Identify which metrics are most difficult to record and streamline those processes.",
-                    "impact": "Some gaps in performance tracking",
-                    "action_required": False
-                }
-            )
+        # Training Performance Analysis
+        performance_insights = []
+        if attendance_rate >= 85:
+            performance_insights.append("Excellent attendance rate demonstrates strong team commitment and engagement.")
+        elif attendance_rate >= 70:
+            performance_insights.append("Good attendance rate with room for improvement to maximize team development.")
+        else:
+            performance_insights.append("Low attendance rate requires immediate attention to maintain training effectiveness.")
+            
+        if completion_rate >= 80:
+            performance_insights.append("Strong metrics completion rate enables comprehensive performance tracking.")
+        elif completion_rate >= 60:
+            performance_insights.append("Moderate metrics completion allows for basic performance analysis.")
+        else:
+            performance_insights.append("Low metrics completion limits ability to assess player progress effectively.")
+            
+        performance_insights.append(f"Training session tracked {unique_metrics} different performance metrics across {players_with_metrics} active participants.")
+        
+        recommendations["Training Performance Analysis"].append({
+            "priority": "high" if attendance_rate < 70 or completion_rate < 60 else "medium",
+            "category": "performance_overview",
+            "title": "Session Performance Summary",
+            "message": " ".join(performance_insights),
+            "suggestion": "Continue monitoring key performance indicators and adjust training protocols based on attendance and completion patterns.",
+            "impact": "Foundation for all training effectiveness and player development",
+            "action_required": attendance_rate < 70 or completion_rate < 60
+        })
 
-        # Enhanced Player Development Analysis
+        # Player Development Insights
         if player_improvements:
-            improving_players = [p for p in player_improvements if p["overall_improvement_percentage"] > 0]
-            declining_players = [p for p in player_improvements if p["overall_improvement_percentage"] < -3]
-            stagnant_players = [p for p in player_improvements if p["overall_improvement_percentage"] == 0 and p["metrics_recorded"] > 0]
-            
-            total_with_metrics = len([p for p in player_improvements if p["metrics_recorded"] > 0])
-            
-            # Success analysis
-            if len(improving_players) > total_with_metrics * 0.8:
-                recommendations["player_development_recommendations"].append(
-                    {
-                        "priority": "positive",
-                        "category": "performance",
-                        "title": "Excellent Team Progress",
-                        "message": f"Outstanding results! {len(improving_players)} out of {total_with_metrics} players with metrics showed improvement.",
-                        "suggestion": "Document and replicate successful training methods. Consider sharing strategies with other teams or coaches.",
-                        "impact": "Strong positive momentum and team development",
-                        "action_required": False
-                    }
-                )
-            elif len(improving_players) > total_with_metrics * 0.6:
-                recommendations["player_development_recommendations"].append(
-                    {
-                        "priority": "positive",
-                        "category": "performance",
-                        "title": "Good Team Progress",
-                        "message": f"Solid performance with {len(improving_players)} out of {total_with_metrics} players improving.",
-                        "suggestion": "Continue current training approach while providing additional support to players who haven't improved yet.",
-                        "impact": "Positive team development trajectory",
-                        "action_required": False
-                    }
-                )
-
-            # Decline analysis
+            development_analysis = []
+            if len(improving_players) > total_with_metrics * 0.7:
+                development_analysis.append(f"Outstanding player development with {len(improving_players)} out of {total_with_metrics} players showing improvement.")
+                development_analysis.append("Current training methods are highly effective and should be maintained.")
+            elif len(improving_players) > total_with_metrics * 0.5:
+                development_analysis.append(f"Solid player progress with {len(improving_players)} players improving.")
+                development_analysis.append("Continue current approach while providing additional support to remaining players.")
+            else:
+                development_analysis.append(f"Limited improvement observed with only {len(improving_players)} players progressing.")
+                development_analysis.append("Review training methods and consider individualized approaches.")
+                
             if declining_players:
                 avg_decline = sum(p["overall_improvement_percentage"] for p in declining_players) / len(declining_players)
-                recommendations["player_development_recommendations"].append(
-                    {
-                        "priority": "high" if len(declining_players) > total_with_metrics * 0.3 else "medium",
-                        "category": "performance_concern",
-                        "title": "Performance Decline Detected",
-                        "message": f"{len(declining_players)} players showing declining performance (avg. {avg_decline:.1f}% decrease).",
-                        "suggestion": "Conduct individual assessments, review training intensity, check for injuries, and provide personalized training plans.",
-                        "impact": "Risk of reduced team performance and player confidence",
-                        "action_required": True
-                    }
-                )
+                development_analysis.append(f"Attention needed for {len(declining_players)} players showing performance decline (avg. {avg_decline:.1f}% decrease).")
+            
+            recommendations["Player Development Insights"].append({
+                "priority": "high" if len(declining_players) > total_with_metrics * 0.3 else "medium",
+                "category": "player_progress",
+                "title": "Individual Player Development Analysis",
+                "message": " ".join(development_analysis),
+                "suggestion": "• Maintain successful training methods for improving players\n• Provide individual assessments for declining players\n• Consider personalized training plans for consistent improvement",
+                "impact": "Direct influence on individual player growth and team performance",
+                "action_required": len(declining_players) > 0
+            })
 
-            # Stagnation analysis
-            if stagnant_players and len(stagnant_players) > total_with_metrics * 0.2:
-                recommendations["player_development_recommendations"].append(
-                    {
-                        "priority": "medium",
-                        "category": "performance_plateau",
-                        "title": "Performance Plateau",
-                        "message": f"{len(stagnant_players)} players showing no improvement despite active participation.",
-                        "suggestion": "Vary training methods, increase challenge levels, or focus on different skill aspects to break through plateaus.",
-                        "impact": "Missed opportunities for player development",
-                        "action_required": True
-                    }
-                )
+        # Team Dynamics Assessment
+        team_dynamics = []
+        if late_count > 0:
+            late_percentage = (late_count / total_players) * 100
+            if late_percentage > 20:
+                team_dynamics.append(f"Punctuality concerns with {late_count} players ({late_percentage:.1f}%) arriving late.")
+            else:
+                team_dynamics.append(f"Minor punctuality issues with {late_count} late arrivals managed effectively.")
+        else:
+            team_dynamics.append("Excellent punctuality with all attending players arriving on time.")
+            
+        if absent_count > 0:
+            absence_rate = (absent_count / total_players) * 100
+            if absence_rate > 30:
+                team_dynamics.append("High absence rate may indicate scheduling conflicts or motivation issues.")
+            else:
+                team_dynamics.append(f"Manageable absence rate with {absent_count} players unable to attend.")
+        
+        participation_quality = "high" if completion_rate > 75 else "moderate" if completion_rate > 50 else "low"
+        team_dynamics.append(f"Team engagement level assessed as {participation_quality} based on metrics participation.")
+        
+        recommendations["Team Dynamics Assessment"].append({
+            "priority": "medium" if late_count > total_players * 0.2 else "low",
+            "category": "team_cohesion",
+            "title": "Team Participation and Engagement",
+            "message": " ".join(team_dynamics),
+            "suggestion": "• Address punctuality through earlier reminders and transportation support\n• Investigate absence patterns for potential systematic issues\n• Maintain engagement through varied training activities",
+            "impact": "Team cohesion, training flow, and collective development",
+            "action_required": late_count > total_players * 0.2 or absent_count > total_players * 0.3
+        })
 
-        # Session Optimization Recommendations
+        # Training Optimization
+        optimization_notes = []
         duration = session.duration_minutes
         if duration:
-            if duration > 180:  # 3 hours
-                recommendations["session_optimization_recommendations"].append(
-                    {
-                        "priority": "high",
-                        "category": "session_length",
-                        "title": "Excessive Session Duration",
-                        "message": f"Training session was {duration} minutes ({duration//60}h {duration%60}m) - potentially too long for optimal performance.",
-                        "suggestion": "Split into multiple shorter sessions or include more rest periods to maintain focus and prevent fatigue.",
-                        "impact": "Risk of player fatigue, reduced learning effectiveness, and increased injury risk",
-                        "action_required": True
-                    }
-                )
-            elif duration > 150:  # 2.5 hours
-                recommendations["session_optimization_recommendations"].append(
-                    {
-                        "priority": "medium",
-                        "category": "session_length",
-                        "title": "Extended Session Duration",
-                        "message": f"Long training session ({duration//60}h {duration%60}m). Monitor player fatigue levels.",
-                        "suggestion": "Include adequate rest periods and vary activity intensity throughout the session.",
-                        "impact": "Potential for decreased performance in latter portions of training",
-                        "action_required": False
-                    }
-                )
-
-        # Metrics Management
+            if duration > 180:
+                optimization_notes.append(f"Extended session duration ({duration//60}h {duration%60}m) may lead to fatigue and reduced effectiveness.")
+                optimization_notes.append("Consider splitting into shorter, more focused sessions.")
+            elif duration > 150:
+                optimization_notes.append(f"Long training session ({duration//60}h {duration%60}m) requires careful fatigue management.")
+            else:
+                optimization_notes.append(f"Optimal session duration ({duration} minutes) supports focused training.")
+                
         if unique_metrics > 10:
-            recommendations["session_optimization_recommendations"].append(
-                {
-                    "priority": "medium",
-                    "category": "data_complexity",
-                    "title": "High Metrics Complexity",
-                    "message": f"Tracking {unique_metrics} different metrics may be overwhelming for coaches and players.",
-                    "suggestion": "Focus on 5-7 key performance indicators per session. Rotate additional metrics across different sessions.",
-                    "impact": "Data collection fatigue and reduced accuracy in measurements",
-                    "action_required": True
-                }
-            )
-
-        # Performance Insights
-        if metrics_summary["metrics_breakdown"]:
-            # Analyze metric completion patterns
-            well_recorded_metrics = [m for m in metrics_summary["metrics_breakdown"] if m["unique_players"] / players_with_metrics >= 0.8]
-            poorly_recorded_metrics = [m for m in metrics_summary["metrics_breakdown"] if m["unique_players"] / players_with_metrics < 0.5]
+            optimization_notes.append(f"High number of tracked metrics ({unique_metrics}) may overwhelm data collection.")
+            optimization_notes.append("Consider focusing on 5-7 key performance indicators per session.")
+        elif unique_metrics > 0:
+            optimization_notes.append(f"Appropriate metric tracking ({unique_metrics} metrics) enables effective monitoring.")
             
-            if well_recorded_metrics:
-                recommendations["performance_insights"].append(
-                    {
-                        "type": "success_pattern",
-                        "title": "Well-Executed Metrics",
-                        "message": f"{len(well_recorded_metrics)} metrics were successfully recorded for most players.",
-                        "details": [m["metric__name"] for m in well_recorded_metrics[:3]],
-                        "suggestion": "These metrics have good recording processes - consider them as templates for other measurements."
-                    }
-                )
-            
-            if poorly_recorded_metrics:
-                recommendations["performance_insights"].append(
-                    {
-                        "type": "improvement_opportunity",
-                        "title": "Challenging Metrics",
-                        "message": f"{len(poorly_recorded_metrics)} metrics were difficult to record consistently.",
-                        "details": [m["metric__name"] for m in poorly_recorded_metrics[:3]],
-                        "suggestion": "Review equipment needs, time allocation, and training requirements for these measurements."
-                    }
-                )
+        recommendations["Training Optimization"].append({
+            "priority": "high" if duration and duration > 180 else "medium",
+            "category": "session_structure",
+            "title": "Session Structure and Efficiency",
+            "message": " ".join(optimization_notes) if optimization_notes else "Session structure appears well-optimized for training objectives.",
+            "suggestion": "• Monitor player energy levels throughout extended sessions\n• Implement regular rest periods for sessions over 2 hours\n• Prioritize most important metrics to reduce data collection burden",
+            "impact": "Training effectiveness, player fatigue management, and data quality",
+            "action_required": duration and duration > 180
+        })
 
-        # Action Items Generation
-        high_priority_items = [r for category in recommendations.values() if isinstance(category, list) for r in category if r.get("priority") == "high" or r.get("priority") == "critical"]
+        # Strategic Recommendations
+        strategic_insights = []
+        effectiveness_score = TrainingCompletionService._calculate_effectiveness_score(attendance_summary, metrics_summary, player_improvements)
         
-        for item in high_priority_items[:5]:  # Top 5 priority items
-            recommendations["action_items"].append(
-                {
-                    "priority": item["priority"],
-                    "category": item["category"],
-                    "task": item["suggestion"],
-                    "timeline": "immediate" if item["priority"] == "critical" else "within_week",
-                    "responsible": "head_coach" if "attendance" in item["category"] else "coaching_staff"
-                }
-            )
+        if effectiveness_score["score"] >= 85:
+            strategic_insights.append("Excellent training effectiveness indicates optimal training protocols.")
+            strategic_insights.append("Document and replicate successful strategies for consistent results.")
+        elif effectiveness_score["score"] >= 65:
+            strategic_insights.append("Good training effectiveness with opportunities for enhancement.")
+            strategic_insights.append("Focus on improving weaker areas while maintaining strengths.")
+        else:
+            strategic_insights.append("Training effectiveness requires significant improvement.")
+            strategic_insights.append("Comprehensive review of training methods and player engagement needed.")
+            
+        if metrics_summary["metrics_breakdown"]:
+            well_recorded = [m for m in metrics_summary["metrics_breakdown"] if m["unique_players"] / players_with_metrics >= 0.8]
+            if well_recorded:
+                strategic_insights.append(f"Successfully recorded metrics ({len(well_recorded)} metrics) can serve as templates for improvement.")
+                
+        recommendations["Strategic Recommendations"].append({
+            "priority": "high" if effectiveness_score["score"] < 65 else "medium",
+            "category": "long_term_planning",
+            "title": "Long-term Development Strategy",
+            "message": " ".join(strategic_insights),
+            "suggestion": "• Establish consistent training schedules and protocols\n• Implement regular progress reviews and strategy adjustments\n• Share successful methods across coaching staff\n• Set measurable improvement targets for next sessions",
+            "impact": "Long-term team development and sustainable performance improvement",
+            "action_required": effectiveness_score["score"] < 65
+        })
+
+        # Coach Focus Areas
+        priority_areas = []
+        if attendance_rate < 75:
+            priority_areas.append("Attendance improvement through enhanced communication and motivation strategies.")
+        if completion_rate < 70:
+            priority_areas.append("Metrics collection process streamlining for better data capture.")
+        if declining_players:
+            priority_areas.append(f"Individual attention for {len(declining_players)} players showing performance decline.")
+        if not priority_areas:
+            priority_areas.append("Maintain current successful training approaches and continue monitoring progress.")
+            
+        focus_suggestions = []
+        if len(improving_players) > 0:
+            focus_suggestions.append("Recognize and reinforce successful player improvements to maintain momentum.")
+        if total_with_metrics < total_players * 0.8:
+            focus_suggestions.append("Increase player engagement in metrics recording for comprehensive tracking.")
+        focus_suggestions.append("Regular one-on-one discussions with players to understand individual needs and challenges.")
+        
+        recommendations["Coach Focus Areas"].append({
+            "priority": "critical" if attendance_rate < 60 or len(declining_players) > total_with_metrics * 0.4 else "high",
+            "category": "coaching_priorities",
+            "title": "Immediate Coaching Priorities",
+            "message": " ".join(priority_areas),
+            "suggestion": "• " + "\n• ".join(focus_suggestions),
+            "impact": "Direct coaching effectiveness and player development outcomes",
+            "action_required": True
+        })
 
         return recommendations
 
@@ -673,3 +613,397 @@ class TrainingCompletionService:
                 "engagement": round(engagement_score, 1),
             },
         }
+
+    @staticmethod
+    def _generate_ai_insights(session, attendance_summary, metrics_summary, player_improvements, effectiveness_score):
+        """
+        Generate AI-powered insights and analysis for training session performance
+        """
+        
+        # Prepare data for AI analysis
+        session_data = {
+            "session_title": session.title,
+            "team_name": session.team.name if session.team else "No team",
+            "duration_minutes": session.duration_minutes,
+            "location": session.location,
+            "date": session.date.strftime("%Y-%m-%d"),
+            "total_players": attendance_summary["total_players"],
+            "attendance_rate": attendance_summary["attendance_rate"],
+            "present_players": attendance_summary["present"],
+            "absent_players": attendance_summary["absent"],
+            "late_players": attendance_summary["late"],
+            "metrics_completion_rate": metrics_summary["completion_rate"],
+            "total_metrics_recorded": metrics_summary["total_metrics_recorded"],
+            "unique_metrics_tracked": metrics_summary["unique_metrics"],
+            "effectiveness_score": effectiveness_score["score"],
+            "effectiveness_level": effectiveness_score["level"]
+        }
+        
+        # Analyze player improvements
+        improving_players = [p for p in player_improvements if p["overall_improvement_percentage"] > 0]
+        declining_players = [p for p in player_improvements if p["overall_improvement_percentage"] < -2]
+        top_performer = max(player_improvements, key=lambda x: x["overall_improvement_percentage"]) if player_improvements else None
+        
+        player_analysis = {
+            "total_players_with_data": len([p for p in player_improvements if p["metrics_recorded"] > 0]),
+            "improving_players_count": len(improving_players),
+            "declining_players_count": len(declining_players),
+            "average_improvement": sum(p["overall_improvement_percentage"] for p in player_improvements) / len(player_improvements) if player_improvements else 0,
+            "top_performer": {
+                "name": top_performer["player_name"],
+                "improvement": top_performer["overall_improvement_percentage"]
+            } if top_performer and top_performer["overall_improvement_percentage"] > 0 else None,
+            "players_needing_attention": [
+                {"name": p["player_name"], "decline": p["overall_improvement_percentage"]}
+                for p in declining_players[:3]  # Top 3 players needing attention
+            ]
+        }
+        
+        # Get metrics breakdown for analysis
+        metrics_breakdown = metrics_summary.get("metrics_breakdown", [])
+        metric_insights = []
+        # Calculate total players who could record metrics (present + late)
+        eligible_players = attendance_summary["present"] + attendance_summary["late"]
+        
+        for metric in metrics_breakdown[:5]:  # Top 5 metrics
+            metric_insights.append({
+                "name": metric["metric__name"],
+                "records_count": metric["records_count"],
+                "avg_value": round(float(metric["avg_value"]), 2) if metric["avg_value"] else 0,
+                "participation_rate": round((metric["unique_players"] / eligible_players) * 100, 1) if eligible_players > 0 else 0
+            })
+
+        # Format top performer info
+        top_performer_info = "None"
+        if player_analysis['top_performer']:
+            top_performer_info = f"{player_analysis['top_performer']['name']} ({player_analysis['top_performer']['improvement']:.1f}% improvement)"
+        
+        # Format metrics info
+        metrics_info = "\n".join([
+            f"- {m['name']}: {m['records_count']} records, avg {m['avg_value']}, {m['participation_rate']}% participation" 
+            for m in metric_insights
+        ]) if metric_insights else "- No metrics data available"
+        
+        # Format players needing attention
+        attention_info = "\n".join([
+            f"- {p['name']}: {p['decline']:.1f}% decline" 
+            for p in player_analysis['players_needing_attention']
+        ]) if player_analysis['players_needing_attention'] else "- None identified"
+
+        prompt = f"""
+        As a sports performance analyst, analyze this training session data and provide intelligent insights with actionable suggestions:
+
+        SESSION OVERVIEW:
+        - Session: {session_data['session_title']} for {session_data['team_name']}
+        - Date: {session_data['date']} | Duration: {session_data['duration_minutes']} minutes
+        - Location: {session_data['location']}
+        - Overall Effectiveness: {session_data['effectiveness_score']}/100 ({session_data['effectiveness_level']})
+
+        ATTENDANCE ANALYSIS:
+        - Total Players: {session_data['total_players']}
+        - Attendance Rate: {session_data['attendance_rate']}%
+        - Present: {session_data['present_players']} | Late: {session_data['late_players']} | Absent: {session_data['absent_players']}
+
+        PERFORMANCE DATA:
+        - Metrics Completion: {session_data['metrics_completion_rate']}%
+        - Total Measurements: {session_data['total_metrics_recorded']}
+        - Metrics Tracked: {session_data['unique_metrics_tracked']}
+        - Players with Data: {player_analysis['total_players_with_data']}
+
+        PLAYER PERFORMANCE:
+        - Players Improving: {player_analysis['improving_players_count']}
+        - Players Declining: {player_analysis['declining_players_count']}
+        - Average Improvement: {player_analysis['average_improvement']:.1f}%
+        - Top Performer: {top_performer_info}
+
+        KEY METRICS PERFORMANCE:
+        {metrics_info}
+
+        PLAYERS NEEDING ATTENTION:
+        {attention_info}
+
+        Provide comprehensive analysis with both insights and actionable suggestions for each category:
+
+        1. Session Performance Analysis - Overall assessment of training effectiveness with specific improvement recommendations
+        2. Player Development Insights - Individual and collective player progress patterns with development strategies
+        3. Team Dynamics Assessment - How well the team performed as a unit with team building suggestions
+        4. Training Optimization - Specific improvements for future sessions with implementation steps
+        5. Strategic Recommendations - Long-term development strategies with measurable goals
+        6. Coach Focus Areas - Priority areas for coaching attention with specific action plans
+
+        IMPORTANT: You must respond with ONLY a valid JSON object in this exact format. Do not include any other text, markdown formatting, or explanations:
+
+        {{
+            "Session Performance Analysis": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }},
+            "Player Development Insights": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }},
+            "Team Dynamics Assessment": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }},
+            "Training Optimization": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }},
+            "Strategic Recommendations": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }},
+            "Coach Focus Areas": {{
+                "analysis": "your detailed analysis here (3-4 sentences)",
+                "suggestions": "actionable suggestions with bullet points using • format"
+            }}
+        }}
+
+        For each category, provide:
+        - Analysis: 3-4 sentences of insightful analysis based on the data
+        - Suggestions: Specific, actionable recommendations using bullet points (•) with each item on a NEW LINE
+
+        CRITICAL: When using bullet points in suggestions, format them exactly like this with line breaks:
+        • First specific action to take
+        • Second actionable recommendation
+        • Third implementation step
+        
+        DO NOT format bullet points like this: • item1 • item2 • item3
+        Each bullet point MUST be on its own line with a line break after each item.
+        Focus on specific, data-driven insights that coaches can immediately implement.
+        """
+        
+        try:
+            # Call AI with timeout
+            ai_response = generate_response(prompt, timeout=25)
+            
+            # Check if the response is an error message
+            if ai_response.startswith("Error generating response"):
+                raise Exception(ai_response)
+            
+            # Clean the response to ensure it's valid JSON
+            ai_response = ai_response.strip()
+            
+            # Remove any markdown formatting if present
+            if ai_response.startswith('```json'):
+                ai_response = ai_response.replace('```json', '').replace('```', '').strip()
+            elif ai_response.startswith('```'):
+                ai_response = ai_response.replace('```', '').strip()
+                
+            analysis = json.loads(ai_response)
+            
+            return {
+                'ai_analysis': analysis,
+                'session_data': session_data,
+                'player_analysis': player_analysis,
+                'metric_insights': metric_insights,
+                'generated_at': timezone.now().isoformat(),
+                'analysis_type': 'training_session_insights'
+            }
+        except Exception as e:
+            # Enhanced fallback with more specific error handling
+            error_msg = str(e)
+            is_timeout = "timed out" in error_msg.lower()
+            return {
+                'ai_analysis': {
+                    'Session Performance Analysis': f'Training session completed with {session_data["effectiveness_score"]}/100 effectiveness score. Standard analysis available through dashboard metrics.',
+                    'Player Development Insights': f'{player_analysis["improving_players_count"]} players showed improvement while {player_analysis["declining_players_count"]} need additional support.',
+                    'Team Dynamics Assessment': f'Team attendance was {session_data["attendance_rate"]}% with {session_data["metrics_completion_rate"]}% metrics completion rate.',
+                    'Training Optimization': 'Focus on consistent attendance and complete metrics recording for better analysis.',
+                    'Strategic Recommendations': 'Continue monitoring individual player progress and team performance trends.',
+                    'Coach Focus Areas': 'Address attendance issues and ensure comprehensive performance tracking.'
+                },
+                'session_data': session_data,
+                'player_analysis': player_analysis,
+                'metric_insights': metric_insights,
+                'generated_at': timezone.now().isoformat(),
+                'analysis_type': 'training_session_insights',
+                'fallback_used': True,
+                'error_type': 'timeout' if is_timeout else 'general'
+            }
+
+    @staticmethod
+    def generate_team_progress_insights(team, sessions_limit=5):
+        """
+        Generate AI insights for team progress over recent training sessions
+        
+        Args:
+            team: Team instance
+            sessions_limit: Number of recent sessions to analyze (default: 5)
+            
+        Returns:
+            dict: AI-generated team progress analysis
+        """
+        
+        # Get recent completed sessions for the team
+        recent_sessions = TrainingSession.objects.filter(
+            team=team,
+            status=TrainingSession.Status.COMPLETED,
+            date__gte=timezone.now().date() - timedelta(days=30)
+        ).order_by('-date', '-start_time')[:sessions_limit]
+        
+        if not recent_sessions.exists():
+            return {
+                'ai_analysis': {
+                    'Team Progress Overview': 'No recent completed training sessions found for analysis.',
+                    'Performance Trends': 'Insufficient data to determine performance trends.',
+                    'Player Development Patterns': 'No training data available for player development analysis.',
+                    'Team Strengths': 'Cannot assess team strengths without training session data.',
+                    'Areas for Improvement': 'Focus on conducting regular training sessions to enable progress tracking.',
+                    'Long-term Recommendations': 'Establish consistent training schedule and performance tracking.'
+                },
+                'team_data': {'name': team.name, 'sessions_analyzed': 0},
+                'analysis_type': 'team_progress_insights',
+                'fallback_used': True,
+                'error_type': 'no_data'
+            }
+        
+        # Analyze trends across sessions
+        team_metrics = {
+            'sessions_analyzed': recent_sessions.count(),
+            'total_training_hours': sum(s.duration_minutes for s in recent_sessions if s.duration_minutes) / 60,
+            'average_attendance_rate': 0,
+            'average_metrics_completion': 0,
+            'total_players_trained': 0,
+            'improvement_trend': 'stable'
+        }
+        
+        session_summaries = []
+        attendance_rates = []
+        completion_rates = []
+        
+        for session in recent_sessions:
+            # Calculate basic metrics for each session
+            attendance = PlayerTraining.objects.filter(session=session)
+            if attendance.exists():
+                present_count = attendance.filter(attendance_status__in=['present', 'late']).count()
+                attendance_rate = (present_count / attendance.count()) * 100
+                attendance_rates.append(attendance_rate)
+                
+                # Metrics completion
+                metric_records = PlayerMetricRecord.objects.filter(
+                    player_training__session=session, 
+                    value__isnull=False
+                ).count()
+                expected_records = attendance.filter(attendance_status__in=['present', 'late']).count() * 3  # Simplified
+                completion_rate = (metric_records / max(expected_records, 1)) * 100
+                completion_rates.append(min(completion_rate, 100))
+                
+                session_summaries.append({
+                    'date': session.date.strftime('%Y-%m-%d'),
+                    'title': session.title,
+                    'attendance_rate': round(attendance_rate, 1),
+                    'completion_rate': round(min(completion_rate, 100), 1),
+                    'duration': session.duration_minutes
+                })
+        
+        # Calculate averages
+        if attendance_rates:
+            team_metrics['average_attendance_rate'] = sum(attendance_rates) / len(attendance_rates)
+        if completion_rates:
+            team_metrics['average_metrics_completion'] = sum(completion_rates) / len(completion_rates)
+        
+        # Determine trend (simplified)
+        if len(attendance_rates) >= 3:
+            recent_avg = sum(attendance_rates[-2:]) / 2
+            earlier_avg = sum(attendance_rates[:-2]) / max(len(attendance_rates) - 2, 1)
+            if recent_avg > earlier_avg + 5:
+                team_metrics['improvement_trend'] = 'improving'
+            elif recent_avg < earlier_avg - 5:
+                team_metrics['improvement_trend'] = 'declining'
+        
+        team_metrics['total_players_trained'] = PlayerTraining.objects.filter(
+            session__in=recent_sessions
+        ).values('player').distinct().count()
+        
+        prompt = f"""
+        As a sports team development analyst, analyze this team's training progress over recent sessions:
+
+        TEAM OVERVIEW:
+        - Team: {team.name}
+        - Sessions Analyzed: {team_metrics['sessions_analyzed']} (last 30 days)
+        - Total Training Hours: {team_metrics['total_training_hours']:.1f}
+        - Players Trained: {team_metrics['total_players_trained']}
+        - Overall Trend: {team_metrics['improvement_trend']}
+
+        PERFORMANCE METRICS:
+        - Average Attendance Rate: {team_metrics['average_attendance_rate']:.1f}%
+        - Average Metrics Completion: {team_metrics['average_metrics_completion']:.1f}%
+
+        SESSION BREAKDOWN:
+        {chr(10).join([f"- {s['date']}: {s['title']} | Attendance: {s['attendance_rate']}% | Metrics: {s['completion_rate']}% | Duration: {s['duration']}min" for s in session_summaries[:3]])}
+
+        Provide comprehensive team development analysis with:
+        1. Team Progress Overview - Overall assessment of team development trajectory
+        2. Performance Trends - Key patterns in attendance, engagement, and metrics
+        3. Player Development Patterns - How individual players are progressing as a group
+        4. Team Strengths - Areas where the team excels and should continue building
+        5. Areas for Improvement - Specific aspects that need attention and development
+        6. Long-term Recommendations - Strategic suggestions for sustained team growth
+
+        IMPORTANT: You must respond with ONLY a valid JSON object in this exact format. Do not include any other text, markdown formatting, or explanations:
+
+        {{
+            "Team Progress Overview": "your analysis here",
+            "Performance Trends": "your analysis here",
+            "Player Development Patterns": "your analysis here",
+            "Team Strengths": "your analysis here",
+            "Areas for Improvement": "your analysis here",
+            "Long-term Recommendations": "your analysis here"
+        }}
+
+        Keep each section's analysis insightful but concise (3-5 sentences per section).
+        For any actionable items, use bullet points (•) with each item on a NEW LINE.
+        Focus on trends, patterns, and strategic insights for long-term team development.
+        """
+        
+        try:
+            ai_response = generate_response(prompt, timeout=25)
+            
+            if ai_response.startswith("Error generating response"):
+                raise Exception(ai_response)
+            
+            ai_response = ai_response.strip()
+            if ai_response.startswith('```json'):
+                ai_response = ai_response.replace('```json', '').replace('```', '').strip()
+            elif ai_response.startswith('```'):
+                ai_response = ai_response.replace('```', '').strip()
+                
+            analysis = json.loads(ai_response)
+            
+            return {
+                'ai_analysis': analysis,
+                'team_data': {
+                    'name': team.name,
+                    'sessions_analyzed': team_metrics['sessions_analyzed'],
+                    'metrics': team_metrics,
+                    'recent_sessions': session_summaries
+                },
+                'generated_at': timezone.now().isoformat(),
+                'analysis_type': 'team_progress_insights'
+            }
+            
+        except Exception as e:
+            error_msg = str(e)
+            is_timeout = "timed out" in error_msg.lower()
+            return {
+                'ai_analysis': {
+                    'Team Progress Overview': f'Team has completed {team_metrics["sessions_analyzed"]} training sessions with {team_metrics["average_attendance_rate"]:.1f}% average attendance.',
+                    'Performance Trends': f'Current trend shows {team_metrics["improvement_trend"]} pattern in team performance metrics.',
+                    'Player Development Patterns': f'{team_metrics["total_players_trained"]} players participated in recent training sessions.',
+                    'Team Strengths': 'Review individual session reports for detailed performance insights.',
+                    'Areas for Improvement': 'Focus on consistent attendance and comprehensive metrics tracking.',
+                    'Long-term Recommendations': 'Maintain regular training schedule and monitor progress through detailed session analysis.'
+                },
+                'team_data': {
+                    'name': team.name,
+                    'sessions_analyzed': team_metrics['sessions_analyzed'],
+                    'metrics': team_metrics,
+                    'recent_sessions': session_summaries
+                },
+                'generated_at': timezone.now().isoformat(),
+                'analysis_type': 'team_progress_insights',
+                'fallback_used': True,
+                'error_type': 'timeout' if is_timeout else 'general'
+            }

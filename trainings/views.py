@@ -914,6 +914,59 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         )
         return Response({"training_summary": training_summary})
 
+    @action(detail=True, methods=["get"], url_path="ai-insights")
+    def get_ai_insights(self, request, pk=None):
+        """Get AI-powered insights for a specific training session"""
+        from .services.training_completion_service import TrainingCompletionService
+        
+        session = self.get_object()
+        
+        # Check if session is completed
+        if session.status != session.Status.COMPLETED:
+            return Response(
+                {"detail": "AI insights are only available for completed training sessions."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Check if user has permission to view this session's insights
+        user = request.user
+        if not (
+            user.is_admin
+            or (
+                hasattr(user, "coach_profile")
+                and session.team in get_coach_teams(user.coach_profile)
+            )
+            or (
+                hasattr(user, "player_profile") 
+                and user.player_profile.team == session.team
+            )
+        ):
+            return Response(
+                {"detail": "You don't have permission to view this session's AI insights."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # Generate AI insights for this session
+        # First get the basic data needed for AI analysis
+        attendance_summary = TrainingCompletionService._calculate_attendance_summary(session)
+        metrics_summary = TrainingCompletionService._calculate_metrics_summary(session)
+        player_improvements = TrainingCompletionService._calculate_player_improvements(session, request)
+        effectiveness_score = TrainingCompletionService._calculate_effectiveness_score(
+            attendance_summary, metrics_summary, player_improvements
+        )
+        
+        # Generate AI insights
+        ai_insights = TrainingCompletionService._generate_ai_insights(
+            session, attendance_summary, metrics_summary, player_improvements, effectiveness_score
+        )
+        
+        return Response({
+            "ai_insights": ai_insights,
+            "session_id": session.id,
+            "session_title": session.title,
+            "generated_at": ai_insights.get("generated_at")
+        })
+
     @action(
         detail=False,
         methods=["get"],
@@ -2836,6 +2889,54 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 "results": result.get("results", []),
             }
         )
+
+    @action(detail=False, methods=["get"], url_path="team-insights/(?P<team_id>[^/.]+)")
+    def team_progress_insights(self, request, team_id=None):
+        """Get AI-powered team progress insights for recent training sessions"""
+        from .services.training_completion_service import TrainingCompletionService
+        from teams.models import Team
+        
+        try:
+            team = Team.objects.get(id=team_id)
+        except Team.DoesNotExist:
+            return Response(
+                {"detail": "Team not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        
+        # Check if user has permission to view this team's insights
+        user = request.user
+        if not (
+            user.is_admin
+            or (
+                hasattr(user, "coach_profile")
+                and team in get_coach_teams(user.coach_profile)
+            )
+            or (
+                hasattr(user, "player_profile") 
+                and user.player_profile.team == team
+            )
+        ):
+            return Response(
+                {"detail": "You don't have permission to view this team's insights."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # Get the number of sessions to analyze (optional query parameter)
+        sessions_limit = int(request.query_params.get('sessions_limit', 5))
+        sessions_limit = max(1, min(sessions_limit, 10))  # Limit between 1 and 10
+        
+        # Generate team insights
+        team_insights = TrainingCompletionService.generate_team_progress_insights(
+            team, sessions_limit=sessions_limit
+        )
+        
+        return Response({
+            "team_insights": team_insights,
+            "team_id": team.id,
+            "team_name": team.name,
+            "sessions_analyzed": sessions_limit
+        })
         
     @action(detail=False, methods=["get"])
     def attendance_tracker(self, request):
@@ -2843,12 +2944,15 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         Track attendance for all teams or a specific team over a date range.
         Params:
         - team: team_id or slug (optional)
-        - date_from: YYYY-MM-DD (required)
-        - date_to: YYYY-MM-DD (required)
+        - start_date: YYYY-MM-DD (optional, defaults to 7 days ago)
+        - end_date: YYYY-MM-DD (optional, defaults to today)
         Returns:
         - For each team (or the specified team), for each day in the date range:
-            - If a session exists: number of present, percentage
-            - If no session: null/false for that day
+            - If a session exists: number of present, total players, percentage
+            - If no session: null for that day
+        - When a specific team is requested, also includes individual player attendance:
+            - For each player: attendance status for each day in the range
+            - Player details: id, name, jersey_number
         """
         from datetime import datetime, timedelta
         from teams.models import Team
@@ -2870,32 +2974,107 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
         days = (end_date - start_date).days + 1
         date_list = [start_date + timedelta(days=i) for i in range(days)]
+        
         # Get teams
         if team_param:
             teams = Team.objects.filter(id=team_param) if team_param.isdigit() else Team.objects.filter(slug=team_param)
         else:
             teams = Team.objects.all()
+            
         result = []
         for team in teams:
             attendance = {}
-            for day in date_list:
-                sessions = TrainingSession.objects.filter(team=team, date=day)
-                if sessions.exists():
-                    session = sessions.first()
-                    total_players = PlayerTraining.objects.filter(session=session).count()
-                    present_count = PlayerTraining.objects.filter(session=session, attendance_status__in=["present", "late"]).count()
-                    percentage = round((present_count / total_players * 100), 1) if total_players > 0 else 0
-                    attendance[str(day)] = {
-                        "present": present_count,
-                        "percentage": percentage,
-                        "has_session": True
-                    }
-                else:
-                    attendance[str(day)] = None
+            players_data = []
+            
+            # If specific team is requested, only include dates that have sessions
+            if team_param:
+                # Get dates that have sessions for this team within the date range
+                session_dates = TrainingSession.objects.filter(
+                    team=team, 
+                    date__gte=start_date, 
+                    date__lte=end_date
+                ).values_list('date', flat=True).distinct()
+                
+                # Use only dates that have sessions
+                dates_to_process = sorted(session_dates)
+                
+                # Get all players from this team
+                team_players = Player.objects.filter(team=team).select_related('user')
+                
+                for player in team_players:
+                    player_attendance = {}
+                    for day in dates_to_process:
+                        session = TrainingSession.objects.filter(team=team, date=day).first()
+                        if session:
+                            player_training = PlayerTraining.objects.filter(
+                                session=session, 
+                                player=player
+                            ).first()
+                            
+                            if player_training:
+                                player_attendance[str(day)] = {
+                                    "status": player_training.attendance_status,
+                                    "has_session": True
+                                }
+                            else:
+                                # Player not enrolled in this session
+                                player_attendance[str(day)] = {
+                                    "status": "not_enrolled",
+                                    "has_session": True
+                                }
+                    
+                    profile_url = request.build_absolute_uri(player.user.profile.url) if player.user.profile else None
+                    players_data.append({
+                        "id": player.user_id,  # Use user_id since it's the primary key
+                        "name": f"{player.user.first_name} {player.user.last_name}",
+                        "profile": profile_url,
+                        "jersey_number": getattr(player, 'jersey_number', None),
+                        "attendance": player_attendance
+                    })
+                
+                # Calculate team-level attendance for session dates only
+                for day in dates_to_process:
+                    session = TrainingSession.objects.filter(team=team, date=day).first()
+                    if session:
+                        total_players = PlayerTraining.objects.filter(session=session).count()
+                        present_count = PlayerTraining.objects.filter(session=session, attendance_status__in=["present", "late"]).count()
+                        percentage = round((present_count / total_players * 100), 1) if total_players > 0 else 0
+                        attendance[str(day)] = {
+                            "present": present_count,
+                            "total": total_players,
+                            "percentage": percentage,
+                            "has_session": True
+                        }
+            else:
+                # For all teams view, use all dates in range
+                for day in date_list:
+                    sessions = TrainingSession.objects.filter(team=team, date=day)
+                    if sessions.exists():
+                        session = sessions.first()
+                        total_players = PlayerTraining.objects.filter(session=session).count()
+                        present_count = PlayerTraining.objects.filter(session=session, attendance_status__in=["present", "late"]).count()
+                        percentage = round((present_count / total_players * 100), 1) if total_players > 0 else 0
+                        attendance[str(day)] = {
+                            "present": present_count,
+                            "total": total_players,
+                            "percentage": percentage,
+                            "has_session": True
+                        }
+                    else:
+                        attendance[str(day)] = None
+            
             logo_url = request.build_absolute_uri(team.logo.url) if team.logo else None
-            result.append({
+            team_data = {
                 "team": team.name,
+                "team_id": team.id,
                 "logo": logo_url,
                 "attendance": attendance
-            })
+            }
+            
+            # Add players data only if specific team is requested
+            if team_param:
+                team_data["players"] = players_data
+                
+            result.append(team_data)
         return Response(result)
+
