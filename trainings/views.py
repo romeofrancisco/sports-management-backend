@@ -918,16 +918,18 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
     def get_ai_insights(self, request, pk=None):
         """Get AI-powered insights for a specific training session"""
         from .services.training_completion_service import TrainingCompletionService
-        
+
         session = self.get_object()
-        
+
         # Check if session is completed
         if session.status != session.Status.COMPLETED:
             return Response(
-                {"detail": "AI insights are only available for completed training sessions."},
+                {
+                    "detail": "AI insights are only available for completed training sessions."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         # Check if user has permission to view this session's insights
         user = request.user
         if not (
@@ -937,35 +939,47 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                 and session.team in get_coach_teams(user.coach_profile)
             )
             or (
-                hasattr(user, "player_profile") 
+                hasattr(user, "player_profile")
                 and user.player_profile.team == session.team
             )
         ):
             return Response(
-                {"detail": "You don't have permission to view this session's AI insights."},
+                {
+                    "detail": "You don't have permission to view this session's AI insights."
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
-        
+
         # Generate AI insights for this session
         # First get the basic data needed for AI analysis
-        attendance_summary = TrainingCompletionService._calculate_attendance_summary(session)
+        attendance_summary = TrainingCompletionService._calculate_attendance_summary(
+            session
+        )
         metrics_summary = TrainingCompletionService._calculate_metrics_summary(session)
-        player_improvements = TrainingCompletionService._calculate_player_improvements(session, request)
+        player_improvements = TrainingCompletionService._calculate_player_improvements(
+            session, request
+        )
         effectiveness_score = TrainingCompletionService._calculate_effectiveness_score(
             attendance_summary, metrics_summary, player_improvements
         )
-        
+
         # Generate AI insights
         ai_insights = TrainingCompletionService._generate_ai_insights(
-            session, attendance_summary, metrics_summary, player_improvements, effectiveness_score
+            session,
+            attendance_summary,
+            metrics_summary,
+            player_improvements,
+            effectiveness_score,
         )
-        
-        return Response({
-            "ai_insights": ai_insights,
-            "session_id": session.id,
-            "session_title": session.title,
-            "generated_at": ai_insights.get("generated_at")
-        })
+
+        return Response(
+            {
+                "ai_insights": ai_insights,
+                "session_id": session.id,
+                "session_title": session.title,
+                "generated_at": ai_insights.get("generated_at"),
+            }
+        )
 
     @action(
         detail=False,
@@ -2687,6 +2701,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
     ViewSet for attendance analytics and reporting with role-based access control
 
     """
+
     permission_classes = [IsAuthenticated]
 
     def get_base_queryset(self, request):
@@ -2895,7 +2910,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         """Get AI-powered team progress insights for recent training sessions"""
         from .services.training_completion_service import TrainingCompletionService
         from teams.models import Team
-        
+
         try:
             team = Team.objects.get(id=team_id)
         except Team.DoesNotExist:
@@ -2903,7 +2918,7 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 {"detail": "Team not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        
+
         # Check if user has permission to view this team's insights
         user = request.user
         if not (
@@ -2912,36 +2927,40 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                 hasattr(user, "coach_profile")
                 and team in get_coach_teams(user.coach_profile)
             )
-            or (
-                hasattr(user, "player_profile") 
-                and user.player_profile.team == team
-            )
+            or (hasattr(user, "player_profile") and user.player_profile.team == team)
         ):
             return Response(
                 {"detail": "You don't have permission to view this team's insights."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        
+
         # Get the number of sessions to analyze (optional query parameter)
-        sessions_limit = int(request.query_params.get('sessions_limit', 5))
+        sessions_limit = int(request.query_params.get("sessions_limit", 5))
         sessions_limit = max(1, min(sessions_limit, 10))  # Limit between 1 and 10
-        
+
         # Generate team insights
         team_insights = TrainingCompletionService.generate_team_progress_insights(
             team, sessions_limit=sessions_limit
         )
-        
-        return Response({
-            "team_insights": team_insights,
-            "team_id": team.id,
-            "team_name": team.name,
-            "sessions_analyzed": sessions_limit
-        })
-        
+
+        return Response(
+            {
+                "team_insights": team_insights,
+                "team_id": team.id,
+                "team_name": team.name,
+                "sessions_analyzed": sessions_limit,
+            }
+        )
+
     @action(detail=False, methods=["get"])
     def attendance_tracker(self, request):
         """
         Track attendance for all teams or a specific team over a date range.
+        Role-based access control:
+        - Admin: Can view all teams
+        - Coach: Can only view their assigned teams (if coach has only 1 team, automatically shows detailed view)
+        - Player: Can only view their own team
+        
         Params:
         - team: team_id or slug (optional)
         - start_date: YYYY-MM-DD (optional, defaults to 7 days ago)
@@ -2950,13 +2969,22 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
         - For each team (or the specified team), for each day in the date range:
             - If a session exists: number of present, total players, percentage
             - If no session: null for that day
-        - When a specific team is requested, also includes individual player attendance:
+        - When a specific team is requested OR when coach has only 1 team, also includes individual player attendance:
             - For each player: attendance status for each day in the range
             - Player details: id, name, jersey_number
         """
         from datetime import datetime, timedelta
         from teams.models import Team
         from django.utils import timezone
+
+        # Check if user has appropriate role
+        user = request.user
+        if not (user.is_admin or hasattr(user, "coach_profile") or hasattr(user, "player_profile")):
+            return Response(
+                {"error": "You don't have permission to access attendance tracking data."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         date_from = request.query_params.get("start_date")
         date_to = request.query_params.get("end_date")
         # Default to last 7 days if not provided
@@ -2971,79 +2999,145 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
             start_date = datetime.strptime(date_from, "%Y-%m-%d").date()
             end_date = datetime.strptime(date_to, "%Y-%m-%d").date()
         except Exception:
-            return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+            return Response(
+                {"error": "Invalid date format. Use YYYY-MM-DD."}, status=400
+            )
         days = (end_date - start_date).days + 1
         date_list = [start_date + timedelta(days=i) for i in range(days)]
+
+        # Get teams based on user role
+        user = request.user
         
-        # Get teams
         if team_param:
-            teams = Team.objects.filter(id=team_param) if team_param.isdigit() else Team.objects.filter(slug=team_param)
-        else:
-            teams = Team.objects.all()
+            # Get the specific team requested
+            teams = (
+                Team.objects.filter(id=team_param)
+                if team_param.isdigit()
+                else Team.objects.filter(slug=team_param)
+            )
             
+            # Apply role-based access control for the specific team
+            if not user.is_admin:
+                if hasattr(user, "coach_profile"):
+                    coach_teams = get_coach_teams(user.coach_profile)
+                    teams = teams.filter(id__in=[team.id for team in coach_teams])
+                elif hasattr(user, "player_profile"):
+                    # Players can only see their own team
+                    teams = teams.filter(id=user.player_profile.team.id)
+                else:
+                    teams = Team.objects.none()  # No access for other roles
+        else:
+            # Get all teams based on user role
+            if user.is_admin:
+                teams = Team.objects.all()
+            elif hasattr(user, "coach_profile"):
+                teams = get_coach_teams(user.coach_profile)
+            elif hasattr(user, "player_profile"):
+                # Players can only see their own team
+                teams = Team.objects.filter(id=user.player_profile.team.id)
+            else:
+                teams = Team.objects.none()  # No access for other roles
+
+        # Check if user has access to any teams or if the specific team was found
+        if not teams.exists():
+            if team_param:
+                return Response(
+                    {"error": "Team not found or you don't have permission to access this team's attendance data."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            else:
+                return Response(
+                    {"error": "You don't have access to any team's attendance data."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        # Special case: If coach has only 1 team and no team_param is specified, show detailed view
+        show_detailed_view = team_param is not None
+        if not team_param and hasattr(user, "coach_profile") and teams.count() == 1:
+            show_detailed_view = True
+
         result = []
         for team in teams:
             attendance = {}
             players_data = []
-            
-            # If specific team is requested, only include dates that have sessions
-            if team_param:
+
+            # If specific team is requested OR coach has only 1 team, include detailed player data
+            if show_detailed_view:
                 # Get dates that have sessions for this team within the date range
-                session_dates = TrainingSession.objects.filter(
-                    team=team, 
-                    date__gte=start_date, 
-                    date__lte=end_date
-                ).values_list('date', flat=True).distinct()
-                
+                session_dates = (
+                    TrainingSession.objects.filter(
+                        team=team, date__gte=start_date, date__lte=end_date
+                    )
+                    .values_list("date", flat=True)
+                    .distinct()
+                )
+
                 # Use only dates that have sessions
                 dates_to_process = sorted(session_dates)
-                
+
                 # Get all players from this team
-                team_players = Player.objects.filter(team=team).select_related('user')
-                
+                team_players = Player.objects.filter(team=team).select_related("user")
+
                 for player in team_players:
                     player_attendance = {}
                     for day in dates_to_process:
-                        session = TrainingSession.objects.filter(team=team, date=day).first()
+                        session = TrainingSession.objects.filter(
+                            team=team, date=day
+                        ).first()
                         if session:
                             player_training = PlayerTraining.objects.filter(
-                                session=session, 
-                                player=player
+                                session=session, player=player
                             ).first()
-                            
+
                             if player_training:
                                 player_attendance[str(day)] = {
                                     "status": player_training.attendance_status,
-                                    "has_session": True
+                                    "has_session": True,
                                 }
                             else:
                                 # Player not enrolled in this session
                                 player_attendance[str(day)] = {
                                     "status": "not_enrolled",
-                                    "has_session": True
+                                    "has_session": True,
                                 }
-                    
-                    profile_url = request.build_absolute_uri(player.user.profile.url) if player.user.profile else None
-                    players_data.append({
-                        "id": player.user_id,  # Use user_id since it's the primary key
-                        "name": f"{player.user.first_name} {player.user.last_name}",
-                        "profile": profile_url,
-                        "jersey_number": getattr(player, 'jersey_number', None),
-                        "attendance": player_attendance
-                    })
-                
+
+                    profile_url = (
+                        request.build_absolute_uri(player.user.profile.url)
+                        if player.user.profile
+                        else None
+                    )
+                    players_data.append(
+                        {
+                            "id": player.user_id,  # Use user_id since it's the primary key
+                            "name": f"{player.user.first_name} {player.user.last_name}",
+                            "profile": profile_url,
+                            "jersey_number": getattr(player, "jersey_number", None),
+                            "attendance": player_attendance,
+                        }
+                    )
+
                 # Calculate team-level attendance for session dates only
                 for day in dates_to_process:
-                    session = TrainingSession.objects.filter(team=team, date=day).first()
+                    session = TrainingSession.objects.filter(
+                        team=team, date=day
+                    ).first()
                     if session:
-                        total_players = PlayerTraining.objects.filter(session=session).count()
-                        present_count = PlayerTraining.objects.filter(session=session, attendance_status__in=["present", "late"]).count()
-                        percentage = round((present_count / total_players * 100), 1) if total_players > 0 else 0
+                        total_players = PlayerTraining.objects.filter(
+                            session=session
+                        ).count()
+                        present_count = PlayerTraining.objects.filter(
+                            session=session, attendance_status__in=["present", "late"]
+                        ).count()
+                        percentage = (
+                            round((present_count / total_players * 100), 1)
+                            if total_players > 0
+                            else 0
+                        )
                         attendance[str(day)] = {
                             "present": present_count,
                             "total": total_players,
                             "percentage": percentage,
-                            "has_session": True
+                            "has_session": True,
                         }
             else:
                 # For all teams view, use all dates in range
@@ -3051,30 +3145,37 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
                     sessions = TrainingSession.objects.filter(team=team, date=day)
                     if sessions.exists():
                         session = sessions.first()
-                        total_players = PlayerTraining.objects.filter(session=session).count()
-                        present_count = PlayerTraining.objects.filter(session=session, attendance_status__in=["present", "late"]).count()
-                        percentage = round((present_count / total_players * 100), 1) if total_players > 0 else 0
+                        total_players = PlayerTraining.objects.filter(
+                            session=session
+                        ).count()
+                        present_count = PlayerTraining.objects.filter(
+                            session=session, attendance_status__in=["present", "late"]
+                        ).count()
+                        percentage = (
+                            round((present_count / total_players * 100), 1)
+                            if total_players > 0
+                            else 0
+                        )
                         attendance[str(day)] = {
                             "present": present_count,
                             "total": total_players,
                             "percentage": percentage,
-                            "has_session": True
+                            "has_session": True,
                         }
                     else:
                         attendance[str(day)] = None
-            
+
             logo_url = request.build_absolute_uri(team.logo.url) if team.logo else None
             team_data = {
                 "team": team.name,
                 "team_id": team.id,
                 "logo": logo_url,
-                "attendance": attendance
+                "attendance": attendance,
             }
-            
-            # Add players data only if specific team is requested
-            if team_param:
+
+            # Add players data if specific team is requested OR coach has only 1 team
+            if show_detailed_view:
                 team_data["players"] = players_data
-                
+
             result.append(team_data)
         return Response(result)
-
