@@ -250,6 +250,8 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
             "id",
             "session_id",
             "title",
+            "description",
+            "notes",
             "date",
             "start_time",
             "end_time",
