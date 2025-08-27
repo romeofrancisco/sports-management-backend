@@ -490,7 +490,8 @@ class GameViewSet(viewsets.ModelViewSet):
         if user.is_admin:
             return queryset
 
-            # Filter normal games based on user role, but keep all league/tournament games        if hasattr(user, "coach_profile"):
+        # Filter normal games based on user role, but keep all league/tournament games
+        if hasattr(user, "coach_profile"):
             # For coaches: practice games only for teams they coach
             from django.db.models import Q
             from teams.models import Team

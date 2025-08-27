@@ -43,8 +43,13 @@ class BracketViewSet(viewsets.ModelViewSet):
             ).order_by('-date').first()
             
             if latest_game and latest_game.date:
-                # Set season end_date to the date part of the latest game
-                season.end_date = latest_game.date.date()
+                # Check if latest_game.date is already a date object or datetime
+                if hasattr(latest_game.date, 'date'):
+                    # It's a datetime object, extract the date part
+                    season.end_date = latest_game.date.date()
+                else:
+                    # It's already a date object
+                    season.end_date = latest_game.date
                 season.save(update_fields=['end_date'])
                 
     def _generate_single_elimination(self, bracket):

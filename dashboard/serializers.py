@@ -131,15 +131,39 @@ class UpcomingGameSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     home_team = serializers.CharField()
     away_team = serializers.CharField()
-    date = serializers.DateTimeField()
+    date = serializers.DateField()
+    time = serializers.TimeField(allow_null=True)
     location = serializers.CharField()
     is_home = serializers.BooleanField()
+
+
+class UpcomingTrainingSessionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    date = serializers.DateField()
+    start_time = serializers.TimeField(allow_null=True)
+    location = serializers.CharField()
+    team = serializers.CharField()
+
+
+class RecentGameSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    home_team = serializers.CharField()
+    away_team = serializers.CharField()
+    date = serializers.DateField()
+    time = serializers.TimeField(allow_null=True)
+    location = serializers.CharField()
+    home_team_score = serializers.IntegerField()
+    away_team_score = serializers.IntegerField()
+    is_home = serializers.BooleanField()
+    result = serializers.CharField()  # "win", "loss", or "draw"
 
 
 class RecentSessionSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     title = serializers.CharField()
     date = serializers.DateField()
+    location = serializers.CharField()
     team = serializers.CharField()
     attendance_count = serializers.IntegerField()
     total_players = serializers.IntegerField()
@@ -150,6 +174,8 @@ class CoachOverviewSerializer(serializers.Serializer):
     team_attendance = TeamAttendanceSerializer(many=True)
     upcoming_games = UpcomingGameSerializer(many=True)
     recent_training_sessions = RecentSessionSerializer(many=True)
+    upcoming_training_sessions = UpcomingTrainingSessionSerializer(many=True)
+    recent_games = RecentGameSerializer(many=True)
 
 
 class PlayerProgressSerializer(serializers.Serializer):

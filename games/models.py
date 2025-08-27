@@ -138,9 +138,14 @@ class Game(models.Model):
 
         # For non-league games, allow team coaches
         coach_profile = user.coach_profile
-        return (
-            coach_profile.team == self.home_team or coach_profile.team == self.away_team
+        
+        # Check if coach is head coach or assistant coach of either team
+        from teams.models import Team
+        coach_teams = Team.objects.filter(
+            models.Q(head_coach=coach_profile) | models.Q(assistant_coach=coach_profile)
         )
+        
+        return self.home_team in coach_teams or self.away_team in coach_teams
 
     def get_assigned_coaches(self):
         """Get all coaches assigned to manage this game"""
