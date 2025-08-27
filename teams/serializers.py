@@ -22,6 +22,7 @@ class GameSummarySerializer(ModelSerializer):
         fields = [
             'id',
             'date',
+            'time',
             'home_team_name',
             'away_team_name', 
             'home_team_abbreviation',
