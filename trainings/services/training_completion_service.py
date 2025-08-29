@@ -171,22 +171,28 @@ class TrainingCompletionService:
 
         # Calculate expected records based on actual assignments
         expected_records = 0
+        participating_players_count = participating_players.count()
+        
+        # Get session-level metrics as baseline
+        session_metrics_count = session.metrics.count()
+        
         for player_training in participating_players:
             # Get assigned metrics for this specific player
             player_assigned_metrics = player_training.assigned_metrics.count()
 
             # If no specific assignments, use session-level metrics
             if player_assigned_metrics == 0:
-                player_assigned_metrics = session.metrics.count()
-
-            # If still no metrics, use the unique metrics that have records
-            if player_assigned_metrics == 0:
-                player_assigned_metrics = unique_metrics
+                player_assigned_metrics = session_metrics_count
 
             expected_records += player_assigned_metrics
 
-        # Calculate completion rate based on unique player-metric combinations to avoid >100%
-        # Count unique player-metric combinations that were actually recorded
+        # If no metrics at session or player level, use reasonable default
+        if expected_records == 0 and participating_players_count > 0:
+            # Use unique metrics that exist in the system for this sport/team
+            default_metrics = unique_metrics if unique_metrics > 0 else 3  # Reasonable default
+            expected_records = participating_players_count * default_metrics
+
+        # Calculate completion rate based on unique player-metric combinations
         unique_combinations_recorded = (
             metric_records.values("player_training__player", "metric")
             .distinct()
@@ -563,26 +569,41 @@ class TrainingCompletionService:
         # Player improvement component (35% weight)
         improvement_score = 0
         if player_improvements:
-            positive_improvements = [
-                p
-                for p in player_improvements
-                if p["overall_improvement_percentage"]
-                and p["overall_improvement_percentage"] > 0
-            ]
-            improvement_rate = len(positive_improvements) / len(player_improvements)
-            improvement_score = improvement_rate * 100
+            total_improvement = 0
+            valid_improvements = 0
+            
+            for p in player_improvements:
+                if p["overall_improvement_percentage"] is not None:
+                    # Weight positive improvements more, but don't ignore negative ones
+                    improvement_value = p["overall_improvement_percentage"]
+                    if improvement_value > 0:
+                        total_improvement += min(improvement_value, 100)  # Cap individual improvements
+                    else:
+                        total_improvement += max(improvement_value, -50)  # Limit negative impact
+                    valid_improvements += 1
+            
+            if valid_improvements > 0:
+                avg_improvement = total_improvement / valid_improvements
+                # Normalize to 0-100 scale (20% average improvement = 100 points)
+                improvement_score = max(0, min(100, (avg_improvement / 20.0) * 100 + 50))
 
         # Engagement quality component (10% weight) - measures depth of participation
         engagement_score = 0
         if attendance_summary["total_players"] > 0:
-            # Calculate based on metrics per player ratio
+            # Calculate based on metrics per player ratio and attendance quality
             if metrics_summary["players_with_metrics"] > 0:
                 avg_metrics_per_player = (
                     metrics_summary["total_metrics_recorded"]
                     / metrics_summary["players_with_metrics"]
                 )
-                # Normalize to 0-100 scale (assuming 3+ metrics per player is excellent)
-                engagement_score = min(100, (avg_metrics_per_player / 3.0) * 100)
+                # Improved engagement calculation
+                metrics_engagement = min(100, (avg_metrics_per_player / 4.0) * 100)  # 4 metrics = 100%
+                
+                # Factor in attendance quality (present vs late/absent)
+                attendance_quality = attendance_summary["attendance_rate"]
+                
+                # Combined engagement score
+                engagement_score = (metrics_engagement * 0.7) + (attendance_quality * 0.3)
 
         # Calculate weighted score
         effectiveness_score = (

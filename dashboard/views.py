@@ -430,6 +430,28 @@ class DashboardViewSet(viewsets.ViewSet):
                     (present_records / total_records * 100) if total_records > 0 else 0
                 )
 
+                # Calculate effectiveness score with improved formula
+                base_score = attendance_rate * 0.6  # 60% weight on attendance
+                
+                # Training frequency score (normalized to 0-40 scale)
+                # Ideal: 8-12 sessions per month (2-3 per week)
+                training_frequency_score = 0
+                if recent_trainings >= 8:
+                    training_frequency_score = min(40, recent_trainings * 3.33)  # Cap at 40
+                elif recent_trainings >= 4:
+                    training_frequency_score = recent_trainings * 5  # 4-7 sessions
+                else:
+                    training_frequency_score = recent_trainings * 2.5  # Penalty for too few
+                
+                # Team engagement bonus (if managing multiple teams effectively)
+                engagement_bonus = 0
+                if team_count > 1 and attendance_rate >= 70:
+                    engagement_bonus = min(10, team_count * 2)  # Max 10 points bonus
+                
+                # Calculate final effectiveness score
+                effectiveness_score = base_score + training_frequency_score + engagement_bonus
+                effectiveness_score = max(0, min(100, effectiveness_score))  # Ensure 0-100 range
+
                 coach_analytics.append(
                     {
                         "coach_id": coach.user.id,
@@ -438,9 +460,7 @@ class DashboardViewSet(viewsets.ViewSet):
                         "total_players": total_players,
                         "recent_trainings": recent_trainings,
                         "attendance_rate": round(attendance_rate, 2),
-                        "effectiveness_score": round(
-                            (attendance_rate + (recent_trainings * 10)) / 2, 2
-                        ),
+                        "effectiveness_score": round(effectiveness_score, 2),
                     }
                 )
 
@@ -539,31 +559,56 @@ class DashboardViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def coach_overview(self, request):
-        """Team-focused dashboard for coaches"""
+        """Team-focused dashboard for coaches - also supports admin access to specific coach data"""
         user = request.user
+        coach_id = request.query_params.get("coach_id")
 
         try:
-            if not hasattr(user, "coach_profile"):
-                logger.warning(
-                    f"Coach profile not found for user {user.id} ({user.username})"
-                )
-                return Response(
-                    {"error": "Coach profile not found"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            # Import models at the beginning
+            from teams.models import Coach, Team, Player
+            from games.models import Game
+            from trainings.models import TrainingSession, PlayerTraining
+
+            # If coach_id is provided, check if user has permission to view other coaches
+            if coach_id:
+                # Admin users can view any coach
+                if user.role == "Admin":
+                    try:
+                        coach = Coach.objects.get(user_id=coach_id)
+                    except Coach.DoesNotExist:
+                        return Response(
+                            {"error": "Coach not found"},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+                else:
+                    return Response(
+                        {"error": "Permission denied"},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                # Default behavior - get current user's coach profile
+                if not hasattr(user, "coach_profile"):
+                    logger.warning(
+                        f"Coach profile not found for user {user.id} ({user.username})"
+                    )
+                    return Response(
+                        {"error": "Coach profile not found"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                coach = user.coach_profile
 
             # Get teams where this coach is either head coach or assistant coach
             coach_teams = Team.objects.filter(
-                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                Q(head_coach=coach) | Q(assistant_coach=coach)
             )
 
             logger.info(
-                f"Coach {user.username} has {coach_teams.count()} teams assigned"
+                f"Coach {coach.user.username if coach.user else 'Unknown'} has {coach_teams.count()} teams assigned"
             )
 
             # If coach has no teams, return empty data instead of error
             if coach_teams.count() == 0:
-                logger.warning(f"Coach {user.username} has no teams assigned")
+                logger.warning(f"Coach {coach.user.username if coach.user else 'Unknown'} has no teams assigned")
                 response_data = {
                     "team_overview": {
                         "total_teams": 0,
@@ -573,6 +618,8 @@ class DashboardViewSet(viewsets.ViewSet):
                     "team_attendance": [],
                     "upcoming_games": [],
                     "recent_training_sessions": [],
+                    "upcoming_training_sessions": [],
+                    "recent_games": [],
                 }
                 serializer = CoachOverviewSerializer(response_data)
                 return Response(serializer.data)
@@ -732,118 +779,141 @@ class DashboardViewSet(viewsets.ViewSet):
 
         Query parameters:
         - team_slug: Filter players by specific team (optional)
+        - coach_id: View specific coach's data (admin only)
         """
         user = request.user
         team_slug = request.query_params.get("team_slug")
+        coach_id = request.query_params.get("coach_id")
 
-        # For admin users, allow access to any team data
-        if user.role == "Admin":
-            if team_slug:
-                # Admin requesting specific team data
-                try:
-                    specific_team = Team.objects.get(slug=team_slug)
-                    coach_teams = Team.objects.filter(id=specific_team.id)
-                except Team.DoesNotExist:
-                    return Response({"error": "Team not found"}, status=404)
+        try:
+            # Import models at the beginning
+            from teams.models import Coach, Team, Player
+            from trainings.models import PlayerTraining, PlayerMetricRecord
+
+            # For admin users, allow access to any team data or specific coach data
+            if user.role == "Admin":
+                if coach_id:
+                    # Admin requesting specific coach data
+                    try:
+                        coach = Coach.objects.get(user_id=coach_id)
+                        coach_teams = Team.objects.filter(
+                            Q(head_coach=coach) | Q(assistant_coach=coach)
+                        )
+                    except Coach.DoesNotExist:
+                        return Response({"error": "Coach not found"}, status=404)
+                elif team_slug:
+                    # Admin requesting specific team data
+                    try:
+                        specific_team = Team.objects.get(slug=team_slug)
+                        coach_teams = Team.objects.filter(id=specific_team.id)
+                    except Team.DoesNotExist:
+                        return Response({"error": "Team not found"}, status=404)
+                else:
+                    # Admin requesting all teams (limit for performance)
+                    coach_teams = Team.objects.all()[:10]  # Limit for performance
             else:
-                # Admin requesting all teams (limit for performance)
-                coach_teams = Team.objects.all()[:10]  # Limit for performance
-        else:
-            # Coach users - check their assigned teams
-            if not hasattr(user, "coach_profile"):
-                logger.warning(
-                    f"Coach profile not found for user {user.id} ({user.username}) in player_progress"
-                )
-                return Response({"error": "Coach profile not found"}, status=400)
-
-            # Get teams where this coach is either head coach or assistant coach
-            coach_teams = Team.objects.filter(
-                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
-            )
-
-            # If team_slug is provided, filter to only that team (if coach has access)
-            if team_slug:
-                coach_teams = coach_teams.filter(slug=team_slug)
-                if not coach_teams.exists():
-                    return Response(
-                        {"error": "You don't have access to this team"}, status=403
+                # Coach users - check their assigned teams
+                if not hasattr(user, "coach_profile"):
+                    logger.warning(
+                        f"Coach profile not found for user {user.id} ({user.username}) in player_progress"
                     )
+                    return Response({"error": "Coach profile not found"}, status=400)
 
-            logger.info(
-                f"Coach {user.username} has {coach_teams.count()} teams in player_progress"
-            )
+                # Get teams where this coach is either head coach or assistant coach
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                )
 
-        # If no teams found, return empty data instead of error
-        if coach_teams.count() == 0:
-            logger.warning(
-                f"User {user.username} has no teams assigned in player_progress"
-            )
-            data = {"player_progress": []}
+                # If team_slug is provided, filter to only that team (if coach has access)
+                if team_slug:
+                    coach_teams = coach_teams.filter(slug=team_slug)
+                    if not coach_teams.exists():
+                        return Response(
+                            {"error": "You don't have access to this team"}, status=403
+                        )
+
+                logger.info(
+                    f"Coach {user.username} has {coach_teams.count()} teams in player_progress"
+                )
+
+            # If no teams found, return empty data instead of error
+            if coach_teams.count() == 0:
+                logger.warning(
+                    f"User {user.username} has no teams assigned in player_progress"
+                )
+                data = {"player_progress": []}
+                serializer = CoachPlayerProgressSerializer(data)
+                return Response(serializer.data)
+
+            players = Player.objects.filter(team__in=coach_teams).select_related(
+                "team", "user"
+            )  # Optimize query
+            # Get player progress data
+            player_progress_data = []
+            last_30_days = timezone.now() - timedelta(days=30)
+
+            for player in players[:15]:  # Limit to top 15 for dashboard
+                # Get recent training records
+                recent_training_records = PlayerTraining.objects.filter(
+                    player=player, session__date__gte=last_30_days.date()
+                )
+
+                # Get recent metric records
+                recent_metrics = PlayerMetricRecord.objects.filter(
+                    player_training__player=player,
+                    recorded_at__gte=last_30_days,
+                    value__isnull=False,  # Only include records with actual values
+                ).order_by("-recorded_at")
+
+                # Calculate attendance rate
+                total_sessions = recent_training_records.count()
+                attended_sessions = recent_training_records.filter(
+                    attendance_status="present"
+                ).count()
+
+                attendance_rate = (
+                    (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
+                )
+
+                # Calculate performance improvements
+                overall_improvement = self._calculate_overall_improvement(player)
+                recent_improvement = self._calculate_recent_improvement(
+                    player, last_30_days
+                )
+
+                player_progress_data.append(
+                    {
+                        "player_id": player.user_id,
+                        "player_name": player.user.get_full_name(),
+                        "team": player.team.name if player.team else "No Team",
+                        "team_slug": player.team.slug if player.team else None,
+                        "jersey_number": player.jersey_number,
+                        "recent_metrics_count": recent_metrics.count(),
+                        "attendance_rate": round(attendance_rate, 2),
+                        "total_sessions": total_sessions,
+                        "last_training_date": (
+                            recent_training_records.order_by("-session__date")
+                            .first()
+                            .session.date
+                            if recent_training_records.exists()
+                            else None
+                        ),
+                        "overall_improvement": overall_improvement,
+                        "recent_improvement": recent_improvement,
+                    }
+                )
+
+            data = {"player_progress": player_progress_data}
+
             serializer = CoachPlayerProgressSerializer(data)
             return Response(serializer.data)
 
-        players = Player.objects.filter(team__in=coach_teams).select_related(
-            "team", "user"
-        )  # Optimize query
-        # Get player progress data
-        player_progress_data = []
-        last_30_days = timezone.now() - timedelta(days=30)
-
-        for player in players[:15]:  # Limit to top 15 for dashboard
-            # Get recent training records
-            recent_training_records = PlayerTraining.objects.filter(
-                player=player, session__date__gte=last_30_days.date()
+        except Exception as e:
+            logger.error(f"Error in coach_player_progress: {str(e)}")
+            return Response(
+                {"error": "An error occurred while fetching coach player progress data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-            # Get recent metric records
-            recent_metrics = PlayerMetricRecord.objects.filter(
-                player_training__player=player,
-                recorded_at__gte=last_30_days,
-                value__isnull=False,  # Only include records with actual values
-            ).order_by("-recorded_at")
-
-            # Calculate attendance rate
-            total_sessions = recent_training_records.count()
-            attended_sessions = recent_training_records.filter(
-                attendance_status="present"
-            ).count()
-
-            attendance_rate = (
-                (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
-            )
-
-            # Calculate performance improvements
-            overall_improvement = self._calculate_overall_improvement(player)
-            recent_improvement = self._calculate_recent_improvement(
-                player, last_30_days
-            )
-
-            player_progress_data.append(
-                {
-                    "player_id": player.user_id,
-                    "player_name": player.user.get_full_name(),
-                    "team": player.team.name if player.team else "No Team",
-                    "team_slug": player.team.slug if player.team else None,
-                    "jersey_number": player.jersey_number,
-                    "recent_metrics_count": recent_metrics.count(),
-                    "attendance_rate": round(attendance_rate, 2),
-                    "total_sessions": total_sessions,
-                    "last_training_date": (
-                        recent_training_records.order_by("-session__date")
-                        .first()
-                        .session.date
-                        if recent_training_records.exists()
-                        else None
-                    ),
-                    "overall_improvement": overall_improvement,
-                    "recent_improvement": recent_improvement,
-                }
-            )
-
-        data = {"player_progress": player_progress_data}
-
-        serializer = CoachPlayerProgressSerializer(data)
-        return Response(serializer.data)
 
     def _calculate_overall_improvement(self, player):
         """Calculate overall improvement across all metrics for a player"""
