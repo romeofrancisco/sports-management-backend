@@ -288,7 +288,8 @@ class Season(models.Model):
         unique_together = ["league", "name"]
 
     def __str__(self):
-        return f"{self.league.name} Season {self.start_date.year} - {self.end_date.year} ({self.status})"
+        end_year = self.end_date.year if self.end_date else "TBD"
+        return f"{self.league.name} Season {self.start_date.year} - {end_year} ({self.status})"
 
     def clean(self):
         # Only one ongoing season per league

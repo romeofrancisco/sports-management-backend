@@ -596,8 +596,8 @@ class PlayerStatsSummaryService:
                         display_name = stat_display_names[code]
                         makes = ratio_makes_attempts[code]['makes']
                         attempts = ratio_makes_attempts[code]['attempts']
-                        if attempts > 0:
-                            totals[display_name] = f"{makes}/{attempts}"
+                        # Always include ratio stats, even if attempts is 0
+                        totals[display_name] = f"{makes}/{attempts}"
                 
                 # Calculate derived formulas for totals
                 for stat in self.formula_stats:
@@ -649,6 +649,26 @@ class PlayerStatsSummaryService:
                 # Only include periods if not in calculation mode
                 if not for_calculation:
                     response_entry["periods"] = periods_out
+                    
+                    # Build period values for each stat
+                    period_values_by_stat = {}
+                    for period_data in periods_out:
+                        period_num = period_data["period"]
+                        for stat_name, value in period_data["stats"].items():
+                            if stat_name not in period_values_by_stat:
+                                period_values_by_stat[stat_name] = {}
+                            period_values_by_stat[stat_name][str(period_num)] = value
+                    
+                    # Add stats field for frontend compatibility
+                    response_entry["stats"] = [
+                        {
+                            "name": stat_name,
+                            "display_name": stat_name,
+                            "value": value,
+                            "period_values": period_values_by_stat.get(stat_name, {})
+                        }
+                        for stat_name, value in totals.items()
+                    ]
 
             response.append(response_entry)
             

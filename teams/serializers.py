@@ -232,47 +232,56 @@ class PlayerInfoSerializer(ModelSerializer):
         return value
 
     def create(self, validated_data):
+        from django.db import transaction
+        
         user_data = validated_data.pop("user", {})
         team = validated_data.pop("team_id", None)
         positions = validated_data.pop("position_ids", [])
         sport = validated_data.pop("sport_slug", None)
 
-        user_serializer = PlayerSerializer(data=user_data)
-        user_serializer.is_valid(raise_exception=True)
-        user = user_serializer.save()
+        # Use atomic transaction to ensure both user and player are created together
+        # If player creation fails, user creation will be rolled back
+        with transaction.atomic():
+            user_serializer = PlayerSerializer(data=user_data)
+            user_serializer.is_valid(raise_exception=True)
+            user = user_serializer.save()
 
-        player = Player.objects.create(
-            user=user, team=team, sport=sport, **validated_data
-        )
-        player.position.set(positions)
-        return player
+            player = Player.objects.create(
+                user=user, team=team, sport=sport, **validated_data
+            )
+            player.position.set(positions)
+            return player
 
     def update(self, instance, validated_data):
+        from django.db import transaction
+        
         user_data = validated_data.pop("user", {})
         team = validated_data.pop("team_id", None)
         positions = validated_data.pop("position_ids", None)
         sport = validated_data.pop("sport_slug", None)
 
-        if user_data:
-            user_serializer = PlayerSerializer(
-                instance.user, data=user_data, partial=True
-            )
-            user_serializer.is_valid(raise_exception=True)
-            user_serializer.save()
+        # Use atomic transaction to ensure both user and player updates succeed together
+        with transaction.atomic():
+            if user_data:
+                user_serializer = PlayerSerializer(
+                    instance.user, data=user_data, partial=True
+                )
+                user_serializer.is_valid(raise_exception=True)
+                user_serializer.save()
 
-        if team is not None:
-            instance.team = team
-        if sport is not None:
-            instance.sport = sport
-        if positions is not None:
-            instance.position.set(positions)
+            if team is not None:
+                instance.team = team
+            if sport is not None:
+                instance.sport = sport
+            if positions is not None:
+                instance.position.set(positions)
 
-        # Only update the player model with remaining player data (not user data)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        
-        return instance
+            # Only update the player model with remaining player data (not user data)
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            
+            return instance
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
@@ -342,39 +351,47 @@ class CoachInfoSerializer(ModelSerializer):
             self.fields["password"].required = False
 
     def create(self, validated_data):
+        from django.db import transaction
+        
         user_data = validated_data.pop("user")
         sports = validated_data.pop("sports", [])
 
-        # Create the User instance using the nested serializer
-        user_serializer = CoachSerializer(data=user_data)
-        user_serializer.is_valid(raise_exception=True)  # Ensures data is valid
-        user = user_serializer.save()
+        # Use atomic transaction to ensure both user and coach are created together
+        with transaction.atomic():
+            # Create the User instance using the nested serializer
+            user_serializer = CoachSerializer(data=user_data)
+            user_serializer.is_valid(raise_exception=True)  # Ensures data is valid
+            user = user_serializer.save()
 
-        # Create the Coach instance with the user instance
-        coach = Coach.objects.create(user=user, **validated_data)
-        coach.sports.set(sports)
-        return coach
+            # Create the Coach instance with the user instance
+            coach = Coach.objects.create(user=user, **validated_data)
+            coach.sports.set(sports)
+            return coach
         
     def update(self, instance, validated_data):
+        from django.db import transaction
+        
         user_data = validated_data.pop("user", {})
         sports = validated_data.pop("sports", None)
         user = instance.user
 
-        # Update the User model
-        for attr, value in user_data.items():
-            if attr == "password":
-                user.set_password(value)
-            else:
-                setattr(user, attr, value)
-        user.save()
+        # Use atomic transaction to ensure both user and coach updates succeed together
+        with transaction.atomic():
+            # Update the User model
+            for attr, value in user_data.items():
+                if attr == "password":
+                    user.set_password(value)
+                else:
+                    setattr(user, attr, value)
+            user.save()
 
-        # Update sports if provided
-        if sports is not None:
-            instance.sports.set(sports)
+            # Update sports if provided
+            if sports is not None:
+                instance.sports.set(sports)
 
-        # Update the Coach model
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+            # Update the Coach model
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
 
-        return instance
+            return instance

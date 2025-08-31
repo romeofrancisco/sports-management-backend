@@ -773,6 +773,7 @@ class TeamViewSet(ModelViewSet):
 class SportTeamsViewSet(ReadOnlyModelViewSet):
     serializer_class = TeamSerializer
     lookup_field = "pk"
+    permission_classes = [IsAuthenticated]
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -781,13 +782,41 @@ class SportTeamsViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         sport_slug = self.kwargs["sport_slug"]
+        user = self.request.user
+        
         try:
             sport = Sport.objects.get(slug=sport_slug)
-            return Team.objects.filter(sport=sport)
         except Sport.DoesNotExist:
-            return Response(
-                {"error": "Sport does not exist"}, status=status.HTTP_404_NOT_FOUND
+            return Team.objects.none()  # Return empty queryset instead of Response
+        
+        # Base queryset filtered by sport
+        base_queryset = Team.objects.filter(sport=sport)
+        
+        # Apply role-based filtering similar to TeamViewSet
+        if user.is_authenticated and hasattr(user, "is_admin") and user.is_admin:
+            # Admin: All teams in the sport
+            return base_queryset.select_related(
+                "sport", "head_coach__user", "assistant_coach__user"
+            ).prefetch_related(
+                "players", "head_coach__sports", "assistant_coach__sports"
             )
+        
+        if hasattr(user, "coach_profile"):
+            # Coach: Only their teams in the sport
+            return base_queryset.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            ).select_related(
+                "sport", "head_coach__user", "assistant_coach__user"
+            ).prefetch_related(
+                "players", "head_coach__sports", "assistant_coach__sports"
+            )
+        
+        if hasattr(user, "player_profile") and user.player_profile.team:
+            # Player: Only their own team if it's in this sport
+            return base_queryset.filter(id=user.player_profile.team.id)
+        
+        # User doesn't have appropriate role - return empty queryset
+        return Team.objects.none()
 
 
 class PlayerViews(ModelViewSet):
@@ -906,6 +935,42 @@ class PlayerViews(ModelViewSet):
 
         return [permission() for permission in permission_classes]
 
+    def create(self, request, *args, **kwargs):
+        """
+        Override create to handle integrity errors and convert them to validation errors
+        """
+        from django.db import IntegrityError
+        from rest_framework import status
+        from rest_framework.response import Response
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        try:
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        except IntegrityError as e:
+            # Handle jersey number uniqueness constraint
+            if 'teams_player_team_id_jersey_number' in str(e):
+                return Response(
+                    {
+                        'jersey_number': ['A player with this jersey number already exists in this team.']
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Handle other integrity errors
+            elif 'unique constraint' in str(e).lower():
+                return Response(
+                    {
+                        'non_field_errors': ['This combination of values already exists.']
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                # Re-raise if it's not a constraint violation we can handle
+                raise
+
     def perform_update(self, serializer):
         """Only allow coaches to update players in their own teams"""
         if self.request.user.is_admin:  # Admins can update any player
@@ -926,6 +991,45 @@ class PlayerViews(ModelViewSet):
                 raise PermissionDenied(
                     "You can only update players from your own teams"
                 )
+
+    def update(self, request, *args, **kwargs):
+        """
+        Override update to handle integrity errors and convert them to validation errors
+        """
+        from django.db import IntegrityError
+        from rest_framework import status
+        from rest_framework.response import Response
+
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        try:
+            self.perform_update(serializer)
+            if getattr(instance, '_prefetched_objects_cache', None):
+                instance._prefetched_objects_cache = {}
+            return Response(serializer.data)
+        except IntegrityError as e:
+            # Handle jersey number uniqueness constraint
+            if 'teams_player_team_id_jersey_number' in str(e):
+                return Response(
+                    {
+                        'jersey_number': ['A player with this jersey number already exists in this team.']
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Handle other integrity errors
+            elif 'unique constraint' in str(e).lower():
+                return Response(
+                    {
+                        'non_field_errors': ['This combination of values already exists.']
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                # Re-raise if it's not a constraint violation we can handle
+                raise
 
     def perform_destroy(self, instance):
         """Only allow coaches to delete players in their own teams"""
