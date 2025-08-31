@@ -16,7 +16,7 @@ def get_coach_teams(coach_profile):
     )
 
 
-from .models import Game, PlayerStat, Substitution, GameCoachPermission
+from .models import Game, PlayerStat, Substitution, GameCoachPermission, GameSet, StartingLineup
 from teams.models import Player
 from sports.models import SportStatType, Sport
 from users.models import User
@@ -566,6 +566,73 @@ class GameViewSet(viewsets.ModelViewSet):
 
         # Deny access for other users
         raise PermissionDenied("You don't have permission to create games")
+
+    def perform_destroy(self, instance):
+        """
+        Custom destroy method to handle set-based games properly
+        and ensure all related objects are deleted in correct order
+        """
+        from django.db import transaction
+        
+        # Store the game ID before any deletion attempts
+        game_id = instance.id
+        
+        try:
+            with transaction.atomic():
+                # For set-based games, explicitly delete GameSet records first
+                if hasattr(instance.sport, 'scoring_type') and instance.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+                    # Delete all related GameSet records using the stored game_id
+                    GameSet.objects.filter(game_id=game_id).delete()
+                
+                # Delete other related objects that might not cascade properly
+                # Use direct queries with game_id to avoid issues with the instance
+                PlayerStat.objects.filter(game_id=game_id).delete()
+                Substitution.objects.filter(game_id=game_id).delete()
+                GameCoachPermission.objects.filter(game_id=game_id).delete()
+                
+                # Use the StartingLineup model's related name
+                StartingLineup.objects.filter(game_id=game_id).delete()
+                
+                # Finally delete the game instance
+                instance.delete()
+                
+        except Exception as e:
+            logger.error(f"Error deleting game {game_id}: {str(e)}")
+            # For database consistency issues, try to clean up orphaned records
+            try:
+                # Clean up any orphaned records using the stored game_id
+                GameSet.objects.filter(game_id=game_id).delete()
+                PlayerStat.objects.filter(game_id=game_id).delete()
+                Substitution.objects.filter(game_id=game_id).delete()
+                GameCoachPermission.objects.filter(game_id=game_id).delete()
+                
+                StartingLineup.objects.filter(game_id=game_id).delete()
+                
+                # Try to get a fresh instance and delete it
+                try:
+                    fresh_instance = Game.objects.get(id=game_id)
+                    fresh_instance.delete()
+                except Game.DoesNotExist:
+                    # Game is already deleted, which is what we wanted
+                    logger.info(f"Game {game_id} was already deleted during cleanup")
+                    
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup for game {game_id}: {str(cleanup_error)}")
+                # As a last resort, try to force delete using raw SQL
+                try:
+                    from django.db import connection
+                    with connection.cursor() as cursor:
+                        # Delete in correct order to avoid foreign key violations
+                        cursor.execute("DELETE FROM games_gameset WHERE game_id = %s", [game_id])
+                        cursor.execute("DELETE FROM games_playerstat WHERE game_id = %s", [game_id])
+                        cursor.execute("DELETE FROM games_substitution WHERE game_id = %s", [game_id])
+                        cursor.execute("DELETE FROM games_gamecoachpermission WHERE game_id = %s", [game_id])
+                        cursor.execute("DELETE FROM games_startinglineup WHERE game_id = %s", [game_id])
+                        cursor.execute("DELETE FROM games_game WHERE id = %s", [game_id])
+                    logger.info(f"Force deleted game {game_id} using raw SQL")
+                except Exception as sql_error:
+                    logger.error(f"Failed to force delete game {game_id}: {str(sql_error)}")
+                    raise
 
     @action(detail=True, methods=["get"])
     def game_leaders(self, request, pk=None):

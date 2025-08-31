@@ -106,8 +106,7 @@ class DashboardViewSet(viewsets.ViewSet):
             ).count()
 
             upcoming_trainings = TrainingSession.objects.filter(
-                date__gte=timezone.now().date(),
-                date__lte=(timezone.now() + timedelta(days=7)).date(),
+                status="upcoming"
             ).count()
 
             # Distribution statistics with more detail
@@ -1010,7 +1009,9 @@ class DashboardViewSet(viewsets.ViewSet):
             upcoming_sessions = []
             if player.team:
                 upcoming_sessions = TrainingSession.objects.filter(
-                    team=player.team, date__gte=timezone.now().date()
+                    team=player.team, 
+                    status="upcoming",
+                    date__gte=timezone.now().date()
                 ).order_by("date")[:6]
 
             upcoming_sessions_data = [
@@ -1982,10 +1983,13 @@ class DashboardViewSet(viewsets.ViewSet):
 
     def _generate_usage_report(self, date_from, date_to):
         """Generate system usage report"""
-        # User activity
+        # User activity - users who were active within the date range
         active_users = User.objects.filter(
             last_login__gte=timezone.make_aware(
                 timezone.datetime.combine(date_from, timezone.datetime.min.time())
+            ),
+            last_login__lte=timezone.make_aware(
+                timezone.datetime.combine(date_to, timezone.datetime.max.time())
             )
         ).count()
 
