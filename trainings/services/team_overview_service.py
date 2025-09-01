@@ -1,6 +1,9 @@
 from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
+from django.core.cache import cache
+import hashlib
+import json
 from teams.models import Team, Player
 from trainings.models import TrainingMetric, PlayerTraining
 from trainings.utils import batch_fetch_record_data, calculate_player_improvement
@@ -11,6 +14,17 @@ class TeamOverviewService:
     Service class for handling team overview statistics with weighted improvements.
     Provides comprehensive team performance analysis including player improvements,
     attendance rates, and best performing players.
+    
+    PERFORMANCE OPTIMIZATIONS IMPLEMENTED:
+    1. Batch fetching of metric records (single query vs N queries)
+    2. Bulk attendance calculation (single annotated query vs N queries)
+    3. Caching of results (10 minutes cache)
+    4. Efficient data structures (defaultdict, bulk operations)
+    
+    RECOMMENDED DATABASE INDEXES:
+    - player_training.player_id + session.date (for attendance queries)
+    - playermetricrecord.player_training_id + metric_id + session.date (for metrics)
+    - session.date + team_id (for date range filtering)
     """
     
     def __init__(self):
@@ -22,7 +36,7 @@ class TeamOverviewService:
     
     def get_team_overview(self, team_slug=None, metric_id=None, player_ids_param=None, user=None):
         """
-        Get comprehensive team overview statistics.
+        Get comprehensive team overview statistics with caching.
         
         Args:
             team_slug: Team slug identifier (optional if player_ids_param provided)
@@ -44,6 +58,14 @@ class TeamOverviewService:
         if not team_slug and not player_ids_param:
             raise ValueError("Either team or player_ids parameter is required")
         
+        # Generate cache key for this request
+        cache_key = self._generate_cache_key(team_slug, metric_id, player_ids_param, user)
+        
+        # Try to get from cache first
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            return cached_result
+        
         # Get players and team information
         players_list, team_name = self._get_players_and_team_info(
             team_slug, player_ids_param, user
@@ -53,7 +75,9 @@ class TeamOverviewService:
         
         # Handle empty team case
         if not player_ids:
-            return self._create_empty_response(team_name, metric_id)
+            empty_result = self._create_empty_response(team_name, metric_id)
+            cache.set(cache_key, empty_result, 300)  # Cache for 5 minutes
+            return empty_result
         
         # Get metric information
         metric_is_lower_better = self._get_metric_info(metric_id)
@@ -70,8 +94,26 @@ class TeamOverviewService:
         # Calculate team statistics
         team_stats = self._calculate_team_statistics(players_list, player_improvements)
         
-        # Build and return response
-        return self._build_response(team_name, player_ids, team_stats, metric_id)
+        # Build response
+        result = self._build_response(team_name, player_ids, team_stats, metric_id)
+        
+        # Cache the result for 10 minutes
+        cache.set(cache_key, result, 600)
+        
+        return result
+    
+    def _generate_cache_key(self, team_slug, metric_id, player_ids_param, user):
+        """Generate a unique cache key for this request."""
+        key_data = {
+            'team_slug': team_slug,
+            'metric_id': metric_id,
+            'player_ids': player_ids_param,
+            'user_id': user.id if user else None,
+            'date_range': f"{self.date_from}_{self.date_to}"
+        }
+        key_string = json.dumps(key_data, sort_keys=True)
+        key_hash = hashlib.md5(key_string.encode()).hexdigest()
+        return f"team_overview_{key_hash}"
     
     def _get_players_and_team_info(self, team_slug, player_ids_param, user):
         """
@@ -207,9 +249,10 @@ class TeamOverviewService:
         best_player_data = None
         best_improvement_score = float('-inf')
         
-        # Additional team statistics
-        total_training_sessions = 0
-        total_attendance_sessions = 0
+        # Fetch all attendance data in a single query to avoid N+1
+        attendance_stats = self._bulk_calculate_attendance(players_list)
+        total_training_sessions = sum(stats['total_sessions'] for stats in attendance_stats.values())
+        total_attendance_sessions = sum(stats['attended_sessions'] for stats in attendance_stats.values())
         
         for player in players_list:
             player_id = player.user_id
@@ -248,11 +291,6 @@ class TeamOverviewService:
                         ),
                         'best_performance': improvement_data.get('best_performance')
                     }
-            
-            # Calculate attendance statistics
-            attendance_stats = self._calculate_player_attendance(player)
-            total_training_sessions += attendance_stats['total_sessions']
-            total_attendance_sessions += attendance_stats['attended_sessions']
         
         return {
             'players_with_data': players_with_data,
@@ -263,37 +301,48 @@ class TeamOverviewService:
             'total_attendance_sessions': total_attendance_sessions
         }
     
-    def _calculate_player_attendance(self, player):
+    def _bulk_calculate_attendance(self, players_list):
         """
-        Calculate attendance statistics for a single player.
+        Calculate attendance statistics for all players in a single query.
         
         Args:
-            player: Player object
+            players_list: List of player objects
             
         Returns:
-            dict: Player attendance statistics
+            dict: Player -> attendance statistics
         """
-        try:
-            player_trainings = PlayerTraining.objects.filter(
-                player=player,
-                session__date__gte=self.three_months_ago,
-                session__date__lte=self.today
-            )
-            total_sessions = player_trainings.count()
-            attended_sessions = player_trainings.filter(
-                attendance_status__in=['present', 'late']
-            ).count()
-            
-            return {
-                'total_sessions': total_sessions,
-                'attended_sessions': attended_sessions
+        from django.db.models import Count, Q
+        
+        player_ids = [player.user_id for player in players_list]
+        
+        # Single query to get all attendance data
+        attendance_data = PlayerTraining.objects.filter(
+            player__user_id__in=player_ids,
+            session__date__gte=self.three_months_ago,
+            session__date__lte=self.today
+        ).values('player__user_id').annotate(
+            total_sessions=Count('id'),
+            attended_sessions=Count('id', filter=Q(attendance_status__in=['present', 'late']))
+        )
+        
+        # Convert to dictionary for easy lookup
+        attendance_by_player = {
+            data['player__user_id']: {
+                'total_sessions': data['total_sessions'],
+                'attended_sessions': data['attended_sessions']
             }
-        except Exception:
-            # Handle any potential errors gracefully
-            return {
-                'total_sessions': 0,
-                'attended_sessions': 0
-            }
+            for data in attendance_data
+        }
+        
+        # Ensure all players have data (fill in zeros for players with no sessions)
+        for player in players_list:
+            if player.user_id not in attendance_by_player:
+                attendance_by_player[player.user_id] = {
+                    'total_sessions': 0,
+                    'attended_sessions': 0
+                }
+        
+        return attendance_by_player
     
     def _create_empty_response(self, team_name, metric_id):
         """

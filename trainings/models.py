@@ -37,12 +37,25 @@ class TrainingCategory(models.Model):
     """Training categories like 'Endurance', 'Speed', 'Strength', etc."""
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
+    is_default = models.BooleanField(
+        default=False,
+        help_text="System default categories that cannot be deleted by regular users"
+    )
+    created_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_training_categories',
+        help_text="User who created this training category"
+    )
     
     def __str__(self):
         return self.name
     
     class Meta:
         verbose_name_plural = "Training Categories"
+        ordering = ['name']
 class TrainingSession(models.Model):
     """Records a training session for a team"""
     class Status(models.TextChoices):
@@ -194,6 +207,18 @@ class TrainingMetric(models.Model):
         default=1.0,
         help_text="Weight factor for calculating overall improvement. Higher weight = more impact on overall performance."
     )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="System default metrics that cannot be deleted by regular users"
+    )
+    created_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_training_metrics',
+        help_text="User who created this training metric"
+    )
     
     def __str__(self):
         return f"{self.name} ({self.metric_unit.code})"
@@ -202,6 +227,9 @@ class TrainingMetric(models.Model):
     def primary_category(self):
         """Returns the category of the metric (for backwards compatibility)"""
         return self.category
+    
+    class Meta:
+        ordering = ['name']
 
 class PlayerMetricRecord(models.Model):
     """Records a specific measurement for a player during a training session"""    
