@@ -37,14 +37,28 @@ class MetricUnitSerializer(serializers.ModelSerializer):
 
 
 class TrainingCategorySerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(
+        source="created_by.get_full_name", read_only=True
+    )
+
     class Meta:
         model = TrainingCategory
-        fields = ["id", "name", "description"]
+        fields = [
+            "id",
+            "name",
+            "description",
+            "is_default",
+            "created_by",
+            "created_by_name",
+        ]
 
 
 class TrainingMetricSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
     metric_unit_data = MetricUnitSerializer(source="metric_unit", read_only=True)
+    created_by_name = serializers.CharField(
+        source="created_by.get_full_name", read_only=True
+    )
 
     class Meta:
         model = TrainingMetric
@@ -58,6 +72,9 @@ class TrainingMetricSerializer(serializers.ModelSerializer):
             "category_name",
             "is_lower_better",
             "weight",
+            "is_default",
+            "created_by",
+            "created_by_name",
         ]
 
 

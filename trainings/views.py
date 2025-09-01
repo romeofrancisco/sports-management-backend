@@ -84,6 +84,29 @@ class MetricUnitViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "code", "description"]
 
+    def get_queryset(self):
+        """
+        Return metric units based on user role:
+        - Admin: All metric units
+        - Coach: Only admin-created units (system defaults) and their own units
+        - Others: Only admin-created units (system defaults)
+        """
+        user = self.request.user
+        base_queryset = MetricUnit.objects.all().order_by("name")
+
+        # Admin can see all units
+        if user.is_admin:
+            return base_queryset
+        
+        # Coach can see admin-created units (system defaults) and their own units
+        if hasattr(user, 'coach_profile') and user.is_coach:
+            return base_queryset.filter(
+                Q(is_default=True) | Q(created_by=user)
+            )
+        
+        # Others (players, etc.) can only see admin-created units (system defaults)
+        return base_queryset.filter(is_default=True)
+
     def get_permissions(self):
         """
         Instantiates and returns the list of permissions that this view requires.
@@ -163,18 +186,99 @@ class TrainingCategoryViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "description"]
 
+    def get_queryset(self):
+        """
+        Return training categories based on user role:
+        - Admin: All training categories
+        - Coach: Only admin-created categories (system defaults) and their own categories
+        - Others: Only admin-created categories (system defaults)
+        """
+        user = self.request.user
+        base_queryset = TrainingCategory.objects.all().order_by("name")
+
+        # Admin can see all categories
+        if user.is_admin:
+            return base_queryset
+        
+        # Coach can see admin-created categories (system defaults) and their own categories
+        if hasattr(user, 'coach_profile') and user.is_coach:
+            return base_queryset.filter(
+                Q(is_default=True) | Q(created_by=user)
+            )
+        
+        # Others (players, etc.) can only see admin-created categories (system defaults)
+        return base_queryset.filter(is_default=True)
+
     def get_permissions(self):
         """
         Instantiates and returns the list of permissions that this view requires.
         - GET requests are accessible to authenticated users
-        - POST/PUT/PATCH/DELETE requests are restricted to admin users only
+        - POST/PUT/PATCH/DELETE requests are restricted to admin and coach users
         """
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            permission_classes = [IsAdminUser]
+            permission_classes = [IsAdminOrCoachUser]
         else:
             permission_classes = [IsAuthenticated]
 
         return [permission() for permission in permission_classes]
+
+    def perform_create(self, serializer):
+        """Set creation logic based on user role"""
+        user = self.request.user
+
+        # Admin-created categories are automatically system defaults
+        if user.is_admin:
+            serializer.save(created_by=user, is_default=True)
+        # Coach-created categories are not system defaults
+        else:
+            serializer.save(created_by=user, is_default=False)
+
+    def perform_update(self, serializer):
+        """Allow updates based on user role and ownership"""
+        user = self.request.user
+        instance = serializer.instance
+
+        # Admin can update any category
+        if user.is_admin:
+            serializer.save()
+        # Coach can only update categories they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("Coaches cannot edit system default categories")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("You can only edit categories you created")
+            serializer.save()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You don't have permission to update training categories")
+
+    def perform_destroy(self, instance):
+        """Allow deletion based on user role and ownership"""
+        user = self.request.user
+
+        # Admin can delete any category (including system defaults)
+        if user.is_admin:
+            instance.delete()
+        # Coach can only delete categories they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("Coaches cannot delete system default categories")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("You can only delete categories you created")
+            instance.delete()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You don't have permission to delete training categories")
 
 
 class TrainingMetricViewSet(viewsets.ModelViewSet):
@@ -185,18 +289,99 @@ class TrainingMetricViewSet(viewsets.ModelViewSet):
     filterset_fields = ["category", "sessions"]
     search_fields = ["name", "description"]
 
+    def get_queryset(self):
+        """
+        Return training metrics based on user role:
+        - Admin: All training metrics
+        - Coach: Only admin-created metrics (system defaults) and their own metrics
+        - Others: Only admin-created metrics (system defaults)
+        """
+        user = self.request.user
+        base_queryset = TrainingMetric.objects.all().order_by("name")
+
+        # Admin can see all metrics
+        if user.is_admin:
+            return base_queryset
+        
+        # Coach can see admin-created metrics (system defaults) and their own metrics
+        if hasattr(user, 'coach_profile') and user.is_coach:
+            return base_queryset.filter(
+                Q(is_default=True) | Q(created_by=user)
+            )
+        
+        # Others (players, etc.) can only see admin-created metrics (system defaults)
+        return base_queryset.filter(is_default=True)
+
     def get_permissions(self):
         """
         Instantiates and returns the list of permissions that this view requires.
         - GET requests are accessible to authenticated users
-        - POST/PUT/PATCH/DELETE requests are restricted to admin users only
+        - POST/PUT/PATCH/DELETE requests are restricted to admin and coach users
         """
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            permission_classes = [IsAdminUser]
+            permission_classes = [IsAdminOrCoachUser]
         else:
             permission_classes = [IsAuthenticated]
 
         return [permission() for permission in permission_classes]
+
+    def perform_create(self, serializer):
+        """Set creation logic based on user role"""
+        user = self.request.user
+
+        # Admin-created metrics are automatically system defaults
+        if user.is_admin:
+            serializer.save(created_by=user, is_default=True)
+        # Coach-created metrics are not system defaults
+        else:
+            serializer.save(created_by=user, is_default=False)
+
+    def perform_update(self, serializer):
+        """Allow updates based on user role and ownership"""
+        user = self.request.user
+        instance = serializer.instance
+
+        # Admin can update any metric
+        if user.is_admin:
+            serializer.save()
+        # Coach can only update metrics they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("Coaches cannot edit system default metrics")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("You can only edit metrics you created")
+            serializer.save()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You don't have permission to update training metrics")
+
+    def perform_destroy(self, instance):
+        """Allow deletion based on user role and ownership"""
+        user = self.request.user
+
+        # Admin can delete any metric (including system defaults)
+        if user.is_admin:
+            instance.delete()
+        # Coach can only delete metrics they created (non-default)
+        elif user.is_coach:
+            if instance.is_default:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("Coaches cannot delete system default metrics")
+            if instance.created_by != user:
+                from rest_framework.exceptions import PermissionDenied
+
+                raise PermissionDenied("You can only delete metrics you created")
+            instance.delete()
+        else:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You don't have permission to delete training metrics")
 
 
 class TrainingSessionViewSet(viewsets.ModelViewSet):
@@ -2465,6 +2650,7 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
         categories = TrainingCategory.objects.filter(
             metrics__records__player_training__player=player
         ).distinct()
+
 
         for category in categories:
             # Get all records for metrics in this category

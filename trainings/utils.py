@@ -4,6 +4,152 @@ import hashlib
 import json
 import time
 from decimal import Decimal
+from django.db.models import Q, Prefetch
+from collections import defaultdict
+
+
+def batch_fetch_record_data(player_ids, metric_id, date_from, date_to):
+    """
+    Efficiently fetch metric records for multiple players using a single query.
+    
+    Args:
+        player_ids: List of player IDs
+        metric_id: Metric ID or 'overall'
+        date_from: Start date (YYYY-MM-DD)
+        date_to: End date (YYYY-MM-DD)
+        
+    Returns:
+        dict: Player ID -> list of metric records
+    """
+    from .models import PlayerMetricRecord, PlayerTraining
+    
+    # Build the query filter
+    base_filter = Q(
+        player_training__player__user_id__in=player_ids,
+        player_training__session__date__gte=date_from,
+        player_training__session__date__lte=date_to,
+        value__isnull=False
+    )
+    
+    if metric_id != 'overall':
+        base_filter &= Q(metric_id=metric_id)
+    
+    # Fetch all records in a single query with proper select_related
+    records = PlayerMetricRecord.objects.filter(base_filter).select_related(
+        'player_training__player__user',
+        'player_training__session',
+        'metric'
+    ).order_by(
+        'player_training__player__user_id',
+        'player_training__session__date',
+        'player_training__session__start_time'
+    )
+    
+    # Group records by player
+    records_by_player = defaultdict(list)
+    for record in records:
+        player_id = record.player_training.player.user_id
+        records_by_player[player_id].append(record)
+    
+    return dict(records_by_player)
+
+
+def calculate_player_improvement(records_by_player, metric_is_lower_better, metric_id):
+    """
+    Calculate improvement statistics for multiple players efficiently.
+    
+    Args:
+        records_by_player: Dict of player_id -> list of records
+        metric_is_lower_better: Whether lower values are better
+        metric_id: Metric ID being analyzed
+        
+    Returns:
+        dict: Player ID -> improvement data
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+    
+    player_improvements = {}
+    three_months_ago = timezone.now().date() - timedelta(days=90)
+    
+    for player_id, records in records_by_player.items():
+        if not records:
+            player_improvements[player_id] = {
+                'overall_improvement': None,
+                'recent_improvement': None,
+                'best_performance': None
+            }
+            continue
+            
+        # Sort records by date for proper calculation
+        sorted_records = sorted(records, key=lambda r: (
+            r.player_training.session.date,
+            r.player_training.session.start_time or '00:00'
+        ))
+        
+        # Calculate overall improvement (first vs last)
+        overall_improvement = None
+        if len(sorted_records) >= 2:
+            first_record = sorted_records[0]
+            last_record = sorted_records[-1]
+            
+            if first_record.value and last_record.value:
+                overall_improvement = calculate_normalized_improvement(
+                    float(last_record.value),
+                    float(first_record.value),
+                    metric_is_lower_better,
+                    getattr(last_record.metric.metric_unit, 'normalization_weight', 1.0) if last_record.metric.metric_unit else 1.0
+                )
+                overall_improvement = {
+                    'percentage': overall_improvement['percentage'],
+                    'sessions_count': len(sorted_records)
+                }
+        
+        # Calculate recent improvement (last 3 months)
+        recent_records = [
+            r for r in sorted_records 
+            if r.player_training.session.date >= three_months_ago
+        ]
+        
+        recent_improvement = None
+        if len(recent_records) >= 2:
+            first_recent = recent_records[0]
+            last_recent = recent_records[-1]
+            
+            if first_recent.value and last_recent.value:
+                recent_improvement = calculate_normalized_improvement(
+                    float(last_recent.value),
+                    float(first_recent.value),
+                    metric_is_lower_better,
+                    getattr(last_recent.metric.metric_unit, 'normalization_weight', 1.0) if last_recent.metric.metric_unit else 1.0
+                )
+                recent_improvement = {
+                    'percentage': recent_improvement['percentage'],
+                    'sessions_count': len(recent_records)
+                }
+        
+        # Find best performance
+        best_performance = None
+        if sorted_records:
+            if metric_is_lower_better:
+                best_record = min(sorted_records, key=lambda r: float(r.value) if r.value else float('inf'))
+            else:
+                best_record = max(sorted_records, key=lambda r: float(r.value) if r.value else float('-inf'))
+            
+            if best_record.value:
+                best_performance = {
+                    'value': float(best_record.value),
+                    'date': best_record.player_training.session.date.isoformat(),
+                    'session_title': best_record.player_training.session.title
+                }
+        
+        player_improvements[player_id] = {
+            'overall_improvement': overall_improvement,
+            'recent_improvement': recent_improvement,
+            'best_performance': best_performance
+        }
+    
+    return player_improvements
 
 
 def calculate_normalized_improvement(current_value, previous_value, is_lower_better, normalization_weight=1.0):
