@@ -517,23 +517,20 @@ class PlayerStatsSummaryService:
                     period_stats = {}
                     period_points = 0
                     
-                    # Calculate period points from recording stats
+                    # Calculate period points from recording stats (but DON'T add to totals here)
                     for stat in self.recording_stats.filter(point_value__gt=0):
                         stat_value = period_data["recording_stats"].get(stat.code, 0)
                         if stat_value:
                             period_points += stat_value * stat.point_value
-                            
-                        # Also collect raw stats for totals calculation
-                        recording_totals[stat.code] += stat_value or 0
                     
-                    # Collect all recording stats for period and totals
+                    # Collect all recording stats for period and totals (ONLY ONCE HERE)
                     for code, value in period_data["recording_stats"].items():
                         # Add to period stats display if in player summary
                         if code in stat_display_names:
                             display_name = stat_display_names[code]
                             period_stats[display_name] = value
                         
-                        # Add to recording totals regardless
+                        # Add to recording totals (this is the ONLY place we add to totals)
                         recording_totals[code] += value or 0
                     
                     # Process ratio stats for period
@@ -567,8 +564,8 @@ class PlayerStatsSummaryService:
                                 else:
                                     period_stats[display_name] = value
                             
-                            # Collect formula values regardless
-                            formula_values[code] += value
+                            # DON'T collect formula values for totals - they should be recalculated
+                            # formula_values[code] += value
                     
                     # Only add periods if not in calculation mode
                     if not for_calculation:
@@ -608,28 +605,71 @@ class PlayerStatsSummaryService:
                         if not display_name:
                             continue
                         
-                        components = formula_component_map.get(code, [])
-                        if not components:
+                        components = stat.formula.components.all().order_by('order')
+                        component_codes = [comp.stat_type.code for comp in components]
+                        
+                        if not component_codes:
                             continue
                         
                         variables = {}
                         all_components_found = True
                         
-                        # Build variables for formula calculation
-                        for comp_code in components:
+                        # Build variables for formula calculation using TOTAL recording stats
+                        # NOT the accumulated formula values from periods
+                        for comp_code in component_codes:
                             if comp_code in recording_totals:
-                                variables[comp_code] = recording_totals[comp_code]
-                            elif comp_code in formula_values:
-                                variables[comp_code] = formula_values[comp_code]
-                            elif comp_code in ratio_component_lookup:
-                                if comp_code in ratio_makes_attempts:
-                                    variables[comp_code] = ratio_makes_attempts[comp_code]['makes']
+                                # Use total recording stats directly
+                                if stat.formula.uses_point_value:
+                                    # Get point value from any period that has it
+                                    point_value = 0
+                                    for period_data in data["periods"].values():
+                                        if "point_values" in period_data and comp_code in period_data["point_values"]:
+                                            point_value = period_data["point_values"][comp_code]
+                                            break
+                                    variables[comp_code] = recording_totals[comp_code] * point_value
+                                else:
+                                    variables[comp_code] = recording_totals[comp_code]
+                            elif comp_code in ratio_makes_attempts:
+                                # For ratio components, use the makes value
+                                variables[comp_code] = ratio_makes_attempts[comp_code]['makes']
+                            else:
+                                # Check if this component is another calculated stat that we need to compute
+                                # Look for its formula and calculate it with totals
+                                comp_stat = next((s for s in self.formula_stats if s.code == comp_code), None)
+                                if comp_stat and comp_stat.formula and not comp_stat.formula.is_ratio:
+                                    # Recursively calculate this component using totals
+                                    comp_components = comp_stat.formula.components.all().order_by('order')
+                                    comp_variables = {}
+                                    for comp_comp in comp_components:
+                                        comp_comp_code = comp_comp.stat_type.code
+                                        if comp_comp_code in recording_totals:
+                                            if comp_stat.formula.uses_point_value:
+                                                point_value = 0
+                                                for period_data in data["periods"].values():
+                                                    if "point_values" in period_data and comp_comp_code in period_data["point_values"]:
+                                                        point_value = period_data["point_values"][comp_comp_code]
+                                                        break
+                                                comp_variables[comp_comp_code] = recording_totals[comp_comp_code] * point_value
+                                            else:
+                                                comp_variables[comp_comp_code] = recording_totals[comp_comp_code]
+                                        elif comp_comp_code in ratio_makes_attempts:
+                                            comp_variables[comp_comp_code] = ratio_makes_attempts[comp_comp_code]['makes']
+                                        else:
+                                            comp_variables[comp_comp_code] = 0
+                                    
+                                    if comp_stat.formula.expression and comp_variables:
+                                        try:
+                                            comp_result = eval(comp_stat.formula.expression, {}, comp_variables)
+                                            variables[comp_code] = comp_result
+                                        except Exception:
+                                            variables[comp_code] = 0
+                                            all_components_found = False
+                                    else:
+                                        variables[comp_code] = 0
+                                        all_components_found = False
                                 else:
                                     variables[comp_code] = 0
                                     all_components_found = False
-                            else:
-                                variables[comp_code] = 0
-                                all_components_found = False
                         
                         # Calculate formula result if we have all components
                         if all_components_found and variables:
@@ -639,6 +679,7 @@ class PlayerStatsSummaryService:
                                     decimal_places = stat.formula.decimal_places
                                     result = round(result, decimal_places)
                                 totals[display_name] = result
+                                    
                             except Exception as e:
                                 totals[display_name] = 0
                                 logger.debug(f"Error calculating formula for {code}: {str(e)}")
