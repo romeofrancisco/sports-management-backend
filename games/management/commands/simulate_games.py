@@ -288,7 +288,14 @@ class Command(BaseCommand):
         """Simulate a completed game with player stats"""
         # Start the game
         game.status = Game.Status.IN_PROGRESS
-        game.started_at = game.date
+        # Convert date to datetime if it's a date object, then make timezone-aware
+        if hasattr(game.date, 'hour'):  # It's already a datetime
+            game.started_at = timezone.make_aware(game.date) if timezone.is_naive(game.date) else game.date
+        else:
+            # It's a date object, convert to datetime first
+            from datetime import datetime, time
+            game_datetime = datetime.combine(game.date, time())
+            game.started_at = timezone.make_aware(game_datetime)
         game.save()
         
         # Get all players in the starting lineup
@@ -342,6 +349,9 @@ class Command(BaseCommand):
         
         # Complete the game
         game.status = Game.Status.COMPLETED
+        # Ensure started_at is timezone-aware before adding timedelta
+        if timezone.is_naive(game.started_at):
+            game.started_at = timezone.make_aware(game.started_at)
         game.ended_at = game.started_at + timedelta(hours=random.uniform(1.5, 3))
         game.duration = game.ended_at - game.started_at
         

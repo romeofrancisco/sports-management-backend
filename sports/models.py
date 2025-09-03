@@ -97,10 +97,16 @@ class SportStatCategory(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
 
     def __str__(self):
-        return f"{self.name} ({self.sport})"
-
+        return f"{self.name} - {self.sport.name}"
 
 class SportStatType(models.Model):
+    class CATEGORY_TYPES(models.TextChoices):
+        SCORING = "scoring", "Scoring"
+        PERFORMANCE = "performance", "Performance"
+        OFFENSIVE = "offensive", "Offensive"
+        DEFENSIVE = "defensive", "Defensive"
+        OTHER = "other", "Other"
+    
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE, help_text="The sport this stat type belongs to")
     name = models.CharField(max_length=30, help_text="Name of the stat type (e.g. 'Field Goal', 'Assists')")
     display_name = models.CharField(
@@ -111,8 +117,14 @@ class SportStatType(models.Model):
     )
     code = models.CharField(max_length=20, blank=True, null=True, help_text="Code used in formulas (e.g. 'FG', 'AST')")
     point_value = models.IntegerField(default=0, help_text="Points awarded for this stat (0 if not a scoring stat)")
-    category = models.ForeignKey(SportStatCategory, on_delete=models.CASCADE, null=True, blank=True)
-
+    category = models.CharField(
+        max_length=20, 
+        choices=CATEGORY_TYPES, 
+        default=CATEGORY_TYPES.OTHER,
+        help_text="Category for organizing stats in the UI",
+        null=True,
+    )
+    
     is_team_summary = models.BooleanField(default=False, help_text="If True, this stat appears in team summary statistics")
     is_player_summary = models.BooleanField(default=False, help_text="If True, this stat appears in player summary statistics")
     
@@ -167,6 +179,8 @@ class LeaderCategory(models.Model):
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name='leader_categories',
                              help_text="The sport this leader category belongs to")
     name = models.CharField(max_length=50, help_text="Name of the leader category")
+    display_order = models.PositiveSmallIntegerField(default=0, 
+                                                  help_text="Order for displaying the category in UI")
     stat_types = models.ManyToManyField(SportStatType, related_name='leader_categories',
                                 help_text="Stats used to determine leaders (max 4)")
     primary_stat = models.ForeignKey(
@@ -177,8 +191,9 @@ class LeaderCategory(models.Model):
         blank=True,
         help_text="The primary stat used for ordering leaders in this category"
     )
+    
     class Meta:
-        ordering = ['name']
+        ordering = ['display_order', 'name']
         unique_together = ['sport', 'name']
         verbose_name = "Leader Category"
         verbose_name_plural = "Leader Categories"
