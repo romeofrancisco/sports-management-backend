@@ -91,16 +91,16 @@ class FormulaComponent(models.Model):
 
     def __str__(self):
         return f"{self.formula.name} - {self.stat_type.name} ({self.order})"
+    
+class SportStatCategory(models.Model):
+    name = models.CharField(max_length=100)
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"{self.name} ({self.sport})"
 
 
 class SportStatType(models.Model):
-    class CATEGORY_TYPES(models.TextChoices):
-        SCORING = "scoring", "Scoring"
-        PERFORMANCE = "performance", "Performance"
-        OFFENSIVE = "offensive", "Offensive"
-        DEFENSIVE = "defensive", "Defensive"
-        OTHER = "other", "Other"
-    
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE, help_text="The sport this stat type belongs to")
     name = models.CharField(max_length=30, help_text="Name of the stat type (e.g. 'Field Goal', 'Assists')")
     display_name = models.CharField(
@@ -111,16 +111,8 @@ class SportStatType(models.Model):
     )
     code = models.CharField(max_length=20, blank=True, null=True, help_text="Code used in formulas (e.g. 'FG', 'AST')")
     point_value = models.IntegerField(default=0, help_text="Points awarded for this stat (0 if not a scoring stat)")
-    category = models.CharField(
-        max_length=20, 
-        choices=CATEGORY_TYPES, 
-        default=CATEGORY_TYPES.OTHER,
-        help_text="Category for organizing stats in the UI"
-    )
-    
-    is_team_stat = models.BooleanField(default=False, help_text="If True, this stat applies to teams")
-    is_player_stat = models.BooleanField(default=False, help_text="If True, this stat applies to players")
-    
+    category = models.ForeignKey(SportStatCategory, on_delete=models.CASCADE, null=True, blank=True)
+
     is_team_summary = models.BooleanField(default=False, help_text="If True, this stat appears in team summary statistics")
     is_player_summary = models.BooleanField(default=False, help_text="If True, this stat appears in player summary statistics")
     
