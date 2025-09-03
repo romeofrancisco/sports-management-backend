@@ -151,15 +151,35 @@ def handle_match_completion(sender, instance, **kwargs):
                         f"No next round exists. Bracket {bracket.id} has likely finished."
                     )
                     return
-                next_match = next_round.matches.first()
 
-                # Get winners from the completed round
-                winners = list(current_round.matches.values_list("winner", flat=True))
+                # Get all matches from current round in order
+                current_matches = list(current_round.matches.order_by('id'))
+                next_matches = list(next_round.matches.order_by('id'))
 
-                if len(winners) >= 2:
-                    next_match.home_team_id = winners[0]
-                    next_match.away_team_id = winners[1]
-                    next_match.save(update_fields=["home_team", "away_team"])
+                # Pair winners from current round matches to next round matches
+                for i, next_match in enumerate(next_matches):
+                    # Each next round match gets winners from two current round matches
+                    first_match_idx = i * 2
+                    second_match_idx = i * 2 + 1
+                    
+                    update_fields = []
+                    
+                    # Assign home team from first match winner
+                    if first_match_idx < len(current_matches) and current_matches[first_match_idx].winner:
+                        if not next_match.home_team:
+                            next_match.home_team = current_matches[first_match_idx].winner
+                            update_fields.append("home_team")
+                    
+                    # Assign away team from second match winner
+                    if second_match_idx < len(current_matches) and current_matches[second_match_idx].winner:
+                        if not next_match.away_team:
+                            next_match.away_team = current_matches[second_match_idx].winner
+                            update_fields.append("away_team")
+                    
+                    if update_fields:
+                        next_match.save(update_fields=update_fields)
+                        logger.info(f"Assigned teams to next round match {next_match.id}: "
+                                  f"Home: {next_match.home_team}, Away: {next_match.away_team}")
 
                 # Now advance the bracket's round tracker
                 bracket.current_round = current_round_number + 1
