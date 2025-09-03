@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Sport, Position, SportStatType, Formula, FormulaComponent, LeaderCategory
+from .models import Sport, Position, SportStatCategory, SportStatType, Formula, FormulaComponent, LeaderCategory
 from games.models import PlayerStat
 from django.db.models import Count
 
@@ -75,11 +75,17 @@ class FormulaSerializer(serializers.ModelSerializer):
                     
         return instance
 
+class SportStatCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SportStatCategory
+        fields = "__all__"
+
 class SportStatTypeSerializer(serializers.ModelSerializer):
     sport = serializers.SlugRelatedField(
         queryset=Sport.objects.all(), slug_field="slug"
     )
     expression = serializers.CharField(source="formula.expression", read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True)
 
     class Meta:
         model = SportStatType

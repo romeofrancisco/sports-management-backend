@@ -1,8 +1,9 @@
 from rest_framework.viewsets import ModelViewSet
-from .models import Sport, Position, SportStatType, Formula, LeaderCategory
+from .models import Sport, Position, SportStatCategory, SportStatType, Formula, LeaderCategory
 from .serializers import (
     SportSerializer,
     PositionSerializer,
+    SportStatCategorySerializer,
     SportStatTypeSerializer,
     FormulaSerializer,
     LeaderCategorySerializer,
@@ -34,6 +35,19 @@ class SportsViewSet(ModelViewSet):
             return [IsAuthenticated()]  # Any authenticated user can read
         return [IsAdminUser()]  # Admin permission required for write operations
 
+class SportStatCategoryViewSet(ModelViewSet):
+    queryset = SportStatCategory.objects.all()
+    serializer_class = SportStatCategorySerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        sport = self.request.query_params.get("sport")
+        
+        if sport:
+            sport = get_object_or_404(Sport, sport=sport)
+            queryset = queryset.filter(sport=sport)
+            
+        return queryset
 
 class SportStatTypeViewSet(ModelViewSet):
     queryset = SportStatType.objects.select_related("sport").all()
