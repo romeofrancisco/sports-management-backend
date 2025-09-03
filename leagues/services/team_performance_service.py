@@ -216,6 +216,7 @@ class TeamPerformanceService:
         """
         points_scored = 0
         points_conceded = 0
+        wins = 0
         
         for game in team_games:
             if game.home_team == team:
@@ -224,16 +225,27 @@ class TeamPerformanceService:
                 opponent_score = game.away_team_score
                 points_scored += team_score
                 points_conceded += opponent_score
+                
+                # Check if team won
+                if team_score > opponent_score:
+                    wins += 1
             else:
                 # Team is away team
                 team_score = game.away_team_score
                 opponent_score = game.home_team_score
                 points_scored += team_score
                 points_conceded += opponent_score
+                
+                # Check if team won
+                if team_score > opponent_score:
+                    wins += 1
         
         # Calculate averages
         avg_points_scored = points_scored / games_count if games_count > 0 else 0
         avg_points_conceded = points_conceded / games_count if games_count > 0 else 0
+        
+        # Calculate win percentage
+        win_percentage = round((wins / games_count) * 100, 2) if games_count > 0 else 0
         
         # Get win streaks
         current_streak = 0
@@ -258,6 +270,9 @@ class TeamPerformanceService:
             'team_color': team.color,
             'team_logo': self.request.build_absolute_uri(team.logo.url) if team.logo and self.request else None,
             'games_played': games_count,
+            'matches_won': wins,
+            'matches_lost': games_count - wins,
+            'win_percentage': win_percentage,
             'avg_points_scored': round(avg_points_scored, 2),
             'avg_points_conceded': round(avg_points_conceded, 2),
             'point_differential': round(avg_points_scored - avg_points_conceded, 2),
