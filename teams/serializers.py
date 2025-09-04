@@ -146,17 +146,37 @@ class TeamSerializer(ModelSerializer):
         }
     
     def validate(self, data):
-        """Validate that coaches can handle the sport for this team"""
+        """Validate that coaches can handle the sport for this team and team name is unique"""
         head_coach = data.get('head_coach')
         assistant_coach = data.get('assistant_coach')
         sport = data.get('sport')
+        name = data.get('name')
+        division = data.get('division')
         
         # If we're updating, get current values if not provided
         if self.instance:
             head_coach = head_coach or self.instance.head_coach
             assistant_coach = assistant_coach or self.instance.assistant_coach
             sport = sport or self.instance.sport
+            name = name or self.instance.name
+            division = division or self.instance.division
         
+        # Validate unique team name within sport and division
+        if name and sport and division:
+            existing_team = Team.objects.filter(
+                name__iexact=name,
+                sport=sport,
+                division=division
+            )
+            if self.instance:
+                existing_team = existing_team.exclude(pk=self.instance.pk)
+            
+            if existing_team.exists():
+                raise serializers.ValidationError({
+                    'name': f"A team with the name '{name}' already exists in {sport.name} {division} division."
+                })
+        
+        # Validate coaches can handle the sport
         if head_coach and sport and not head_coach.can_coach_team(type('Team', (), {'sport': sport})()):
             raise serializers.ValidationError({
                 'head_coach': f"Selected head coach cannot coach {sport.name} teams. Please assign a coach who handles this sport."
@@ -168,6 +188,21 @@ class TeamSerializer(ModelSerializer):
             })
         
         return data
+    
+    def create(self, validated_data):
+        """Create a new team instance with proper validation"""
+        try:
+            instance = Team(**validated_data)
+            instance.full_clean()  # This calls the model's clean() method
+            instance.save()
+            return instance
+        except Exception as e:
+            # Convert any remaining integrity errors to validation errors
+            if 'slug' in str(e) and 'unique constraint' in str(e):
+                raise serializers.ValidationError({
+                    'name': 'Team name conflicts with existing team. Please choose a different name.'
+                })
+            raise e
 
 class SportsTeamSerializer(Serializer):
     sport = serializers.CharField()

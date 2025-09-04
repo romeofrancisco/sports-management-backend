@@ -331,6 +331,9 @@ def collect_system_data():
     understaffed_teams = Team.objects.annotate(
         player_count=Count('players')
     ).filter(player_count__lt=5).count()
+    teams_without_coaches = Team.objects.filter(
+        head_coach__isnull=True, assistant_coach__isnull=True
+    ).count()
     
     low_engagement_coaches = Coach.objects.annotate(
         recent_sessions=Count(
@@ -356,14 +359,29 @@ def collect_system_data():
     ).count()
     games_completion_rate = (completed_games / total_games * 100) if total_games > 0 else 0
     
-    # Calculate health score (simplified version)
+    # Calculate health score using same logic as views.py
     health_score = 100
+    
     if total_teams > 0:
-        health_score -= (inactive_teams / total_teams) * 30
-    health_score -= min((unassigned_players / max(total_players, 1)) * 20, 20)
-    health_score -= min((understaffed_teams / max(total_teams, 1)) * 15, 15)
-    if attendance_rate < 70:
-        health_score -= (70 - attendance_rate) * 0.5
+        # Teams without coaches (20 points deduction)
+        health_score -= (teams_without_coaches / total_teams) * 20
+        
+        # Understaffed teams (<5 players) (15 points deduction)
+        health_score -= (understaffed_teams / total_teams) * 15
+        
+        # Inactive teams (25 points deduction)
+        health_score -= (inactive_teams / total_teams) * 25
+    
+    # Attendance rate below 80% (0.5 points per percentage below 80)
+    if attendance_rate < 80:
+        health_score -= (80 - attendance_rate) * 0.5
+    
+    # Unassigned players (10 points deduction)
+    if total_players > 0:
+        health_score -= (unassigned_players / total_players) * 10
+    
+    # Ensure score is between 0-100
+    health_score = max(0, min(100, round(health_score)))
     
     return {
         'total_teams': total_teams,
@@ -376,9 +394,10 @@ def collect_system_data():
         'low_engagement_coaches': low_engagement_coaches,
         'unassigned_players': unassigned_players,
         'understaffed_teams': understaffed_teams,
+        'teams_without_coaches': teams_without_coaches,  # Added this for completeness
         'avg_players_per_team': avg_players_per_team,
         'games_completion_rate': games_completion_rate,
-        'health_score': max(0, min(100, health_score)),
+        'health_score': health_score,  # Now using the same calculation as views.py
         'good_attendance_players': 0,  # Simplified calculation to avoid PostgreSQL issues
         'avg_coach_effectiveness': 75.0  # Placeholder for more complex calculation
     }

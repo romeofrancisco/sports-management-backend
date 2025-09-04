@@ -29,20 +29,56 @@ class Team(models.Model):
     def __str__(self):
         return f"{self.name} ({self.sport}) "
     
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        
+        # Check for duplicate team names within the same sport and division
+        if Team.objects.filter(
+            name__iexact=self.name,
+            sport=self.sport,
+            division=self.division
+        ).exclude(pk=self.pk).exists():
+            raise ValidationError({
+                'name': f"A team with the name '{self.name}' already exists in {self.sport.name} {self.division} division."
+            })
+    
     def save(self, *args, **kwargs):
+        from django.core.exceptions import ValidationError
+        
+        # Check for duplicate team names within the same sport and division
+        if Team.objects.filter(
+            name__iexact=self.name,
+            sport=self.sport,
+            division=self.division
+        ).exclude(pk=self.pk).exists():
+            raise ValidationError(f"A team with the name '{self.name}' already exists in {self.sport.name} {self.division} division.")
+        
+        # Generate unique slug
         if not self.slug:
-            self.slug = slugify(self.name)  # Auto-generate slug from name
+            base_slug = slugify(self.name)
+            slug = base_slug
+            counter = 1
+            
+            while Team.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+                
+            self.slug = slug
         
         # Validate coaches can handle this sport
         if self.head_coach and not self.head_coach.can_coach_team(self):
-            from django.core.exceptions import ValidationError
             raise ValidationError(f"Head coach {self.head_coach} cannot coach {self.sport.name} teams.")
         
         if self.assistant_coach and not self.assistant_coach.can_coach_team(self):
-            from django.core.exceptions import ValidationError
             raise ValidationError(f"Assistant coach {self.assistant_coach} cannot coach {self.sport.name} teams.")
             
-        super().save(*args, **kwargs)
+        try:
+            super().save(*args, **kwargs)
+        except Exception as e:
+            # Convert any remaining integrity errors to validation errors
+            if 'slug' in str(e) and 'unique constraint' in str(e):
+                raise ValidationError("Team name conflicts with existing team. Please choose a different name.")
+            raise e
         
     def win_loss_record(self):
         wins = Game.objects.filter(
