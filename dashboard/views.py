@@ -1662,6 +1662,21 @@ class DashboardViewSet(viewsets.ViewSet):
                     }
                 )
 
+            # Check for teams without coaches
+            teams_without_coaches = Team.objects.filter(
+                head_coach__isnull=True, assistant_coach__isnull=True
+            ).count()
+
+            if teams_without_coaches > 0:
+                insights.append(
+                    {
+                        "type": "warning",
+                        "title": "Teams Need Coach Assignment",
+                        "message": f"{teams_without_coaches} teams have no head coach or assistant coach assigned",
+                        "action": "Assign coaches to teams or recruit new coaching staff",
+                    }
+                )
+
             # Generate recommendations based on system analysis
             if Team.objects.count() > 0:
                 avg_players_per_team = (

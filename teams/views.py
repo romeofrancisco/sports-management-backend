@@ -774,6 +774,8 @@ class SportTeamsViewSet(ReadOnlyModelViewSet):
     serializer_class = TeamSerializer
     lookup_field = "pk"
     permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ["division"]
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
