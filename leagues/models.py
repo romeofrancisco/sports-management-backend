@@ -315,6 +315,22 @@ class Season(models.Model):
             if self.end_date > self.end_date:
                 raise ValidationError("Season cannot end after league end date")
 
+    def validate_team_division(self, team):
+        """Validate that a team's division matches the league's division"""
+        if team.division != self.league.division:
+            raise ValidationError(
+                f"Team '{team.name}' has division '{team.division}' but league '{self.league.name}' requires '{self.league.division}' division."
+            )
+
+    def add_team(self, team):
+        """Add a team to the season with division validation"""
+        self.validate_team_division(team)
+        self.teams.add(team)
+
+    def remove_team(self, team):
+        """Remove a team from the season"""
+        self.teams.remove(team)
+
     @property
     def get_bracket(self):
         return getattr(self, "bracket", None)

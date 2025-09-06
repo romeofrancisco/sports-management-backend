@@ -112,14 +112,33 @@ class SeasonSerializer(serializers.ModelSerializer):
     def validate(self, data):
         start = data.get("start_date")
         end = data.get("end_date")
-        print("Start", start)
-        print("End", end)
+        teams = data.get("teams", [])
+        
+
         # Allow end_date to be None or missing
         if start and end:
             if start >= end:
                 raise serializers.ValidationError(
                     {"end_date": "End date must be after start date."}
                 )
+        
+        # Validate that all teams have the same division as the league
+        if teams and hasattr(self, 'instance') and self.instance:
+            league = self.instance.league
+            for team in teams:
+                if team.division != league.division:
+                    raise serializers.ValidationError({
+                        "teams": f"Team '{team.name}' has division '{team.division}' but league '{league.name}' requires '{league.division}' division."
+                    })
+        elif teams and 'league' in self.context:
+            # For creation, get league from context
+            league = self.context['league']
+            for team in teams:
+                if team.division != league.division:
+                    raise serializers.ValidationError({
+                        "teams": f"Team '{team.name}' has division '{team.division}' but league '{league.name}' requires '{league.division}' division."
+                    })
+                    
         return data
 
     def get_has_bracket(self, obj):
