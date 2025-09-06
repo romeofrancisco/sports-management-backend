@@ -6,8 +6,13 @@ from sports.models import Sport
 
 
 class League(models.Model):
+    class Division(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+
     name = models.CharField(max_length=255)
     sport = models.ForeignKey("sports.Sport", on_delete=models.CASCADE)
+    division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
     logo = models.ImageField(upload_to="league_logos/", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -278,12 +283,12 @@ class Season(models.Model):
     class Meta:
         ordering = [
             models.Case(
-                models.When(status='ongoing', then=0),
-                models.When(status='upcoming', then=1),
+                models.When(status="ongoing", then=0),
+                models.When(status="upcoming", then=1),
                 default=2,
                 output_field=models.IntegerField(),
             ),
-            '-start_date',
+            "-start_date",
         ]
         unique_together = ["league", "name"]
 
@@ -309,6 +314,22 @@ class Season(models.Model):
                 raise ValidationError("Season end date must be after start date")
             if self.end_date > self.end_date:
                 raise ValidationError("Season cannot end after league end date")
+
+    def validate_team_division(self, team):
+        """Validate that a team's division matches the league's division"""
+        if team.division != self.league.division:
+            raise ValidationError(
+                f"Team '{team.name}' has division '{team.division}' but league '{self.league.name}' requires '{self.league.division}' division."
+            )
+
+    def add_team(self, team):
+        """Add a team to the season with division validation"""
+        self.validate_team_division(team)
+        self.teams.add(team)
+
+    def remove_team(self, team):
+        """Remove a team from the season"""
+        self.teams.remove(team)
 
     @property
     def get_bracket(self):

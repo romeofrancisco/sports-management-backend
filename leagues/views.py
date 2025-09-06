@@ -42,9 +42,26 @@ class LeagueViewSet(viewsets.ModelViewSet):
     def statistics(self, request, pk=None):
         """Get comprehensive league statistics for the dashboard"""
         league = self.get_object()
-        from .services import LeagueStatisticsService
-        service = LeagueStatisticsService(league, request)
-        statistics = service.get_statistics()
+        
+        # Basic statistics calculation - can be expanded later
+        seasons = league.seasons.all()
+        teams_count = Team.objects.filter(leagues__in=seasons).distinct().count()
+        seasons_count = seasons.count()
+        active_seasons = seasons.filter(status='ongoing').count()
+        
+        total_games = 0
+        for season in seasons:
+            total_games += season.games_count
+        
+        current_season = seasons.filter(status='ongoing').first()
+        
+        statistics = {
+            'teams_count': teams_count,
+            'seasons_count': seasons_count,
+            'active_seasons': active_seasons,
+            'games_count': total_games,
+            'current_season': SeasonSerializer(current_season, context={'request': request}).data if current_season else None
+        }
         
         return Response(statistics)
     @action(detail=True, methods=["get"])
@@ -96,6 +113,13 @@ class SeasonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Season.objects.filter(league_id=self.kwargs['league_pk'])
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if 'league_pk' in self.kwargs:
+            league = get_object_or_404(League, pk=self.kwargs['league_pk'])
+            context['league'] = league
+        return context
+
     def perform_create(self, serializer):
         league = get_object_or_404(League, pk=self.kwargs['league_pk'])
         serializer.save(league=league)
@@ -106,32 +130,85 @@ class SeasonViewSet(viewsets.ModelViewSet):
         action_type = request.data.get("action")
         
         try:
-            from .services import SeasonManagementService
-            service = SeasonManagementService(season)
-            result = service.manage_season(action_type)
-            return Response(result, status=status.HTTP_200_OK)
+            # Basic season management - can be expanded later
+            if action_type == "start":
+                season.start_season()
+                return Response({"message": "Season started successfully"}, status=status.HTTP_200_OK)
+            elif action_type == "complete":
+                season.complete_season()
+                return Response({"message": "Season completed successfully"}, status=status.HTTP_200_OK)
+            elif action_type == "pause":
+                season.pause_season()
+                return Response({"message": "Season paused successfully"}, status=status.HTTP_200_OK)
+            elif action_type == "cancel":
+                season.cancel_season()
+                return Response({"message": "Season cancelled successfully"}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
         except ValidationError as e:
-            return Response({"detail": e.message}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def add_team(self, request, pk=None):
         season = self.get_object()
         team_id = request.data.get('team_id')
         
-        from .services import SeasonTeamService
-        service = SeasonTeamService(season)
-        result, status_code = service.add_team(team_id)
-        return Response(result, status=status_code)
+        try:
+            team = get_object_or_404(Team, pk=team_id)
+            
+            # Validate team division matches league division
+            if team.division != season.league.division:
+                return Response({
+                    'error': f"Team '{team.name}' has division '{team.division}' but league '{season.league.name}' requires '{season.league.division}' division."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if team is already in the season
+            if season.teams.filter(id=team_id).exists():
+                return Response({
+                    'error': f"Team '{team.name}' is already in this season."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            season.teams.add(team)
+            return Response({
+                'message': f"Team '{team.name}' added to season successfully."
+            }, status=status.HTTP_200_OK)
+            
+        except Team.DoesNotExist:
+            return Response({
+                'error': 'Team not found.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def remove_team(self, request, pk=None):
         season = self.get_object()
         team_id = request.data.get('team_id')
         
-        from .services import SeasonTeamService
-        service = SeasonTeamService(season)
-        result, status_code = service.remove_team(team_id)
-        return Response(result, status=status_code)
+        try:
+            team = get_object_or_404(Team, pk=team_id)
+            
+            # Check if team is in the season
+            if not season.teams.filter(id=team_id).exists():
+                return Response({
+                    'error': f"Team '{team.name}' is not in this season."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            season.teams.remove(team)
+            return Response({
+                'message': f"Team '{team.name}' removed from season successfully."
+            }, status=status.HTTP_200_OK)
+            
+        except Team.DoesNotExist:
+            return Response({
+                'error': 'Team not found.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['get'])
     def standings(self, request, league_pk=None, pk=None):
