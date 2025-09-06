@@ -257,6 +257,22 @@ class BoxscoreService:
         home_team_point_values = {}
         away_team_point_values = {}
         
+        # Initialize team period totals for set-based sports
+        home_team_period_totals = {}
+        away_team_period_totals = {}
+        if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            for period in range(1, self.game.current_period + 1):
+                home_team_period_totals[period] = {
+                    'recording_totals': defaultdict(int),
+                    'ratio_makes_attempts': defaultdict(lambda: {'makes': 0, 'attempts': 0}),
+                    'formula_values': defaultdict(int)
+                }
+                away_team_period_totals[period] = {
+                    'recording_totals': defaultdict(int),
+                    'ratio_makes_attempts': defaultdict(lambda: {'makes': 0, 'attempts': 0}),
+                    'formula_values': defaultdict(int)
+                }
+        
         # Process player stats and collect team totals
         for pid, data in summary.items():
             response_entry = {
@@ -356,6 +372,12 @@ class BoxscoreService:
                     for code, value in period_data["recording_stats"].items():
                         recording_totals[code] += value or 0
                         team_recording_totals[code] += value or 0
+                        
+                        # Track period-specific team totals for set-based sports
+                        if is_home_team:
+                            home_team_period_totals[period]['recording_totals'][code] += value or 0
+                        else:
+                            away_team_period_totals[period]['recording_totals'][code] += value or 0
                     
                     # Process ratio stats for period
                     for code, ratio_value in period_data["ratio_stats"].items():
@@ -368,6 +390,14 @@ class BoxscoreService:
                                 # Add to team totals for ratios
                                 team_ratio_makes_attempts[code]['makes'] += made
                                 team_ratio_makes_attempts[code]['attempts'] += attempted
+                                
+                                # Track period-specific team ratio totals for set-based sports
+                                if is_home_team:
+                                    home_team_period_totals[period]['ratio_makes_attempts'][code]['makes'] += made
+                                    home_team_period_totals[period]['ratio_makes_attempts'][code]['attempts'] += attempted
+                                else:
+                                    away_team_period_totals[period]['ratio_makes_attempts'][code]['makes'] += made
+                                    away_team_period_totals[period]['ratio_makes_attempts'][code]['attempts'] += attempted
                             except (ValueError, AttributeError):
                                 pass
                     
@@ -376,6 +406,12 @@ class BoxscoreService:
                         if not code in ratio_component_lookup and value is not None:
                             formula_values[code] += value
                             team_formula_values[code] += value
+                            
+                            # Track period-specific team formula totals for set-based sports
+                            if is_home_team:
+                                home_team_period_totals[period]['formula_values'][code] += value
+                            else:
+                                away_team_period_totals[period]['formula_values'][code] += value
                     
                     # Add recording stats to period display - only boxscore stats
                     for code, value in period_data["recording_stats"].items():
@@ -633,6 +669,82 @@ class BoxscoreService:
             "total_stats": home_team_totals
         }
         
+        # Add period stats for set-based sports
+        if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            home_team_periods = []
+            for period in range(1, self.game.current_period + 1):
+                period_stats = {}
+                
+                # Add recording stats for this period - only boxscore stats
+                for code, value in home_team_period_totals[period]['recording_totals'].items():
+                    if code in stat_display_names:
+                        display_name = stat_display_names[code]
+                        period_stats[display_name] = value
+                
+                # Add ratio stats for this period - only boxscore stats
+                for code, components in ratio_component_lookup.items():
+                    if code in stat_display_names:
+                        display_name = stat_display_names[code]
+                        makes = home_team_period_totals[period]['ratio_makes_attempts'][code]['makes']
+                        attempts = home_team_period_totals[period]['ratio_makes_attempts'][code]['attempts']
+                        if attempts > 0:
+                            period_stats[display_name] = f"{makes}/{attempts}"
+                
+                # Calculate derived formulas for this period - only boxscore stats
+                for stat in self.formula_stats:
+                    if stat.is_boxscore and not stat.formula.is_ratio and stat.formula.expression:
+                        code = stat.code
+                        display_name = stat_display_names.get(code)
+                        
+                        if not display_name:
+                            continue
+                        
+                        components = formula_component_map.get(code, [])
+                        if not components:
+                            continue
+                        
+                        variables = {}
+                        all_components_found = True
+                        uses_point_value = stat.formula.uses_point_value
+                        
+                        # Build variables for formula calculation using period data
+                        for comp_code in components:
+                            if comp_code in home_team_period_totals[period]['recording_totals']:
+                                # Use point value instead of count if the formula requires it
+                                if uses_point_value and comp_code in home_team_point_values:
+                                    variables[comp_code] = home_team_period_totals[period]['recording_totals'][comp_code] * home_team_point_values[comp_code]
+                                else:
+                                    variables[comp_code] = home_team_period_totals[period]['recording_totals'][comp_code]
+                            elif comp_code in home_team_period_totals[period]['formula_values']:
+                                variables[comp_code] = home_team_period_totals[period]['formula_values'][comp_code]
+                            elif comp_code in ratio_component_lookup:
+                                if comp_code in home_team_period_totals[period]['ratio_makes_attempts']:
+                                    variables[comp_code] = home_team_period_totals[period]['ratio_makes_attempts'][comp_code]['makes']
+                                else:
+                                    variables[comp_code] = 0
+                                    all_components_found = False
+                            else:
+                                variables[comp_code] = 0
+                                all_components_found = False
+                        
+                        # Calculate formula result if we have all components
+                        if all_components_found and variables:
+                            try:
+                                result = eval(stat.formula.expression, {}, variables)
+                                if isinstance(result, float):
+                                    decimal_places = stat.formula.decimal_places
+                                    result = round(result, decimal_places)
+                                period_stats[display_name] = result
+                            except Exception as e:
+                                period_stats[display_name] = 0
+                
+                home_team_periods.append({
+                    "period": period,
+                    "stats": period_stats
+                })
+            
+            home_team_summary["periods"] = home_team_periods
+        
         # Create a team summary player for the away team
         away_team_summary = {
             "id": "away_team_total",
@@ -641,6 +753,82 @@ class BoxscoreService:
             "team_id": self.game.away_team.id,
             "total_stats": away_team_totals
         }
+        
+        # Add period stats for set-based sports
+        if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            away_team_periods = []
+            for period in range(1, self.game.current_period + 1):
+                period_stats = {}
+                
+                # Add recording stats for this period - only boxscore stats
+                for code, value in away_team_period_totals[period]['recording_totals'].items():
+                    if code in stat_display_names:
+                        display_name = stat_display_names[code]
+                        period_stats[display_name] = value
+                
+                # Add ratio stats for this period - only boxscore stats
+                for code, components in ratio_component_lookup.items():
+                    if code in stat_display_names:
+                        display_name = stat_display_names[code]
+                        makes = away_team_period_totals[period]['ratio_makes_attempts'][code]['makes']
+                        attempts = away_team_period_totals[period]['ratio_makes_attempts'][code]['attempts']
+                        if attempts > 0:
+                            period_stats[display_name] = f"{makes}/{attempts}"
+                
+                # Calculate derived formulas for this period - only boxscore stats
+                for stat in self.formula_stats:
+                    if stat.is_boxscore and not stat.formula.is_ratio and stat.formula.expression:
+                        code = stat.code
+                        display_name = stat_display_names.get(code)
+                        
+                        if not display_name:
+                            continue
+                        
+                        components = formula_component_map.get(code, [])
+                        if not components:
+                            continue
+                        
+                        variables = {}
+                        all_components_found = True
+                        uses_point_value = stat.formula.uses_point_value
+                        
+                        # Build variables for formula calculation using period data
+                        for comp_code in components:
+                            if comp_code in away_team_period_totals[period]['recording_totals']:
+                                # Use point value instead of count if the formula requires it
+                                if uses_point_value and comp_code in away_team_point_values:
+                                    variables[comp_code] = away_team_period_totals[period]['recording_totals'][comp_code] * away_team_point_values[comp_code]
+                                else:
+                                    variables[comp_code] = away_team_period_totals[period]['recording_totals'][comp_code]
+                            elif comp_code in away_team_period_totals[period]['formula_values']:
+                                variables[comp_code] = away_team_period_totals[period]['formula_values'][comp_code]
+                            elif comp_code in ratio_component_lookup:
+                                if comp_code in away_team_period_totals[period]['ratio_makes_attempts']:
+                                    variables[comp_code] = away_team_period_totals[period]['ratio_makes_attempts'][comp_code]['makes']
+                                else:
+                                    variables[comp_code] = 0
+                                    all_components_found = False
+                            else:
+                                variables[comp_code] = 0
+                                all_components_found = False
+                        
+                        # Calculate formula result if we have all components
+                        if all_components_found and variables:
+                            try:
+                                result = eval(stat.formula.expression, {}, variables)
+                                if isinstance(result, float):
+                                    decimal_places = stat.formula.decimal_places
+                                    result = round(result, decimal_places)
+                                period_stats[display_name] = result
+                            except Exception as e:
+                                period_stats[display_name] = 0
+                
+                away_team_periods.append({
+                    "period": period,
+                    "stats": period_stats
+                })
+            
+            away_team_summary["periods"] = away_team_periods
         
         # Add team totals to the player lists
         home_team_players.append(home_team_summary)
