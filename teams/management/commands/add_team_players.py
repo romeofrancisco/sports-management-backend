@@ -58,8 +58,10 @@ class Command(BaseCommand):
         available_numbers = [num for num in range(1, 100) if num not in existing_numbers]
         
         # Default player data options
-        first_names = ['Michael', 'LeBron', 'Kevin', 'Stephen', 'Kobe', 'James', 'Kawhi', 
-                      'Giannis', 'Damian', 'Luka', 'Nikola', 'Joel', 'Jayson', 'Anthony', 'John']
+        male_first_names = ['Michael', 'LeBron', 'Kevin', 'Stephen', 'Kobe', 'James', 'Kawhi', 
+                           'Giannis', 'Damian', 'Luka', 'Nikola', 'Joel', 'Jayson', 'Anthony', 'John']
+        female_first_names = ['Diana', 'Sue', 'Maya', 'Candace', 'Lisa', 'Tamika', 'Lauren', 
+                             'Skylar', 'Breanna', 'Elena', 'Napheesa', 'Sabrina', 'Paige', 'Caitlin', 'Angel']
         last_names = ['Jordan', 'James', 'Durant', 'Curry', 'Bryant', 'Harden', 'Leonard',
                       'Antetokounmpo', 'Lillard', 'Doncic', 'Jokic', 'Embiid', 'Tatum', 'Davis', 'Wall']
         
@@ -73,8 +75,11 @@ class Command(BaseCommand):
                 email = f"player_{team.slug}_{i}_{counter}@example.com"
                 counter += 1
             
-            # Pick random names
-            first_name = random.choice(first_names)
+            # Pick random names based on team division
+            if team.division == 'female':
+                first_name = random.choice(female_first_names)
+            else:
+                first_name = random.choice(male_first_names)
             last_name = random.choice(last_names)
             
             # Create user for the player
@@ -82,6 +87,7 @@ class Command(BaseCommand):
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
+                sex=team.division,  # Set sex to match team division (male/female)
                 # Add any other required fields for your User model
                 is_active=True,
                 # If you need to set a password
@@ -113,4 +119,4 @@ class Command(BaseCommand):
                 for pos in random.sample(positions, min(len(positions), random.randint(1, 2))):
                     player.position.add(pos)
             
-            self.stdout.write(f"Created player: {first_name} {last_name} (#{jersey_number})")
+            self.stdout.write(f"Created player: {first_name} {last_name} (#{jersey_number}) - {team.division} division")

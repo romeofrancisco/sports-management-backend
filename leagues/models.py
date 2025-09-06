@@ -6,8 +6,13 @@ from sports.models import Sport
 
 
 class League(models.Model):
+    class Division(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+
     name = models.CharField(max_length=255)
     sport = models.ForeignKey("sports.Sport", on_delete=models.CASCADE)
+    division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
     logo = models.ImageField(upload_to="league_logos/", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -278,12 +283,12 @@ class Season(models.Model):
     class Meta:
         ordering = [
             models.Case(
-                models.When(status='ongoing', then=0),
-                models.When(status='upcoming', then=1),
+                models.When(status="ongoing", then=0),
+                models.When(status="upcoming", then=1),
                 default=2,
                 output_field=models.IntegerField(),
             ),
-            '-start_date',
+            "-start_date",
         ]
         unique_together = ["league", "name"]
 
