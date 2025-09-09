@@ -663,7 +663,7 @@ class BoxscoreService:
         # Create a team summary player for the home team
         home_team_summary = {
             "id": "home_team_total",
-            "name": "TEAM",
+            "name": "Team",
             "jersey_number": None,
             "team_id": self.game.home_team.id,
             "total_stats": home_team_totals
@@ -748,7 +748,7 @@ class BoxscoreService:
         # Create a team summary player for the away team
         away_team_summary = {
             "id": "away_team_total",
-            "name": "TEAM",
+            "name": "Team",
             "jersey_number": None,
             "team_id": self.game.away_team.id,
             "total_stats": away_team_totals
