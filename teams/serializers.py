@@ -66,7 +66,7 @@ class SimpleTeamSerializer(ModelSerializer):
 
     class Meta:
         model = Team
-        fields = ['id', 'name', 'abbreviation', 'color', 'logo', 'sport_name', 'division', 'slug', 'player_count']
+        fields = ['id', 'name', 'abbreviation', 'color', 'logo', 'sport_name', 'division', 'slug', 'player_count', 'is_active']
 
     def get_player_count(self, obj):
         return obj.players.count()
@@ -80,6 +80,8 @@ class TeamSerializer(ModelSerializer):
     assistant_coach_id = serializers.IntegerField(source="assistant_coach.user.id", read_only=True, allow_null=True)
     sport_name = serializers.CharField(source="sport.name", read_only=True)
     player_count = serializers.SerializerMethodField()
+    can_be_hard_deleted = serializers.SerializerMethodField()
+    has_associated_data = serializers.SerializerMethodField()
     
     # Enhanced coach information
     head_coach_info = serializers.SerializerMethodField()
@@ -102,6 +104,14 @@ class TeamSerializer(ModelSerializer):
 
     def get_player_count(self, obj):
         return obj.players.count()
+    
+    def get_can_be_hard_deleted(self, obj):
+        """Check if team can be safely hard deleted"""
+        return obj.can_be_hard_deleted()
+    
+    def get_has_associated_data(self, obj):
+        """Check if team has associated games or training sessions"""
+        return obj.has_associated_data()
     
     def get_head_coach_info(self, obj):
         """Return comprehensive head coach information"""
@@ -235,6 +245,9 @@ class PlayerInfoSerializer(ModelSerializer):
     sport = SportSerializer(read_only=True)
     
     full_name = serializers.SerializerMethodField()
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    can_be_hard_deleted = serializers.SerializerMethodField()
+    has_associated_data = serializers.SerializerMethodField()
 
     class Meta:
         model = Player
@@ -259,6 +272,9 @@ class PlayerInfoSerializer(ModelSerializer):
             "positions",
             "sport_slug",
             "sport",
+            "is_active",
+            "can_be_hard_deleted",
+            "has_associated_data",
         ]
 
     def validate_position_ids(self, value):
@@ -320,6 +336,14 @@ class PlayerInfoSerializer(ModelSerializer):
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
+    
+    def get_can_be_hard_deleted(self, obj):
+        """Check if player can be safely hard deleted"""
+        return obj.can_be_hard_deleted()
+    
+    def get_has_associated_data(self, obj):
+        """Check if player has associated data"""
+        return obj.has_associated_data()
 
 
 class CoachInfoSerializer(ModelSerializer):
@@ -345,13 +369,16 @@ class CoachInfoSerializer(ModelSerializer):
     full_name = serializers.SerializerMethodField()
     team_count = serializers.SerializerMethodField()
     player_count = serializers.SerializerMethodField()
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    can_be_hard_deleted = serializers.SerializerMethodField()
+    has_associated_data = serializers.SerializerMethodField()
 
     class Meta:
         model = Coach
         fields = [
             "id", "profile", "first_name", "last_name", "full_name", "sex", "email", "password",
             "coached_teams", "sport_ids", "sports",
-            "team_count", "player_count"
+            "team_count", "player_count", "is_active", "can_be_hard_deleted", "has_associated_data"
         ]
 
     def get_full_name(self, obj):
@@ -378,6 +405,14 @@ class CoachInfoSerializer(ModelSerializer):
         for team in Team.objects.filter(id__in=team_ids):
             players.update(team.players.values_list('user_id', flat=True))
         return len(players)
+    
+    def get_can_be_hard_deleted(self, obj):
+        """Check if coach can be safely hard deleted"""
+        return obj.can_be_hard_deleted()
+    
+    def get_has_associated_data(self, obj):
+        """Check if coach has associated data"""
+        return obj.has_associated_data()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
