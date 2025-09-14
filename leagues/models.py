@@ -12,7 +12,9 @@ class League(models.Model):
 
     name = models.CharField(max_length=255)
     sport = models.ForeignKey("sports.Sport", on_delete=models.CASCADE)
-    division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
+    division = models.CharField(
+        max_length=10, choices=Division.choices, default=Division.MALE
+    )
     logo = models.ImageField(upload_to="league_logos/", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

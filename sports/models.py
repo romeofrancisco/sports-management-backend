@@ -3,6 +3,12 @@ from django.utils.text import slugify
 from django.core.exceptions import ValidationError
 
 
+class ActiveSportManager(models.Manager):
+    """Manager to return only active sports by default"""
+    def get_queryset(self):
+        return super().get_queryset().filter(is_active=True)
+
+
 class Sport(models.Model):
     class SCORING_TYPES(models.TextChoices):
         POINTS = "points", "Points"
@@ -45,7 +51,15 @@ class Sport(models.Model):
         blank=True,
         help_text="Target value needed to win a match (e.g., 3 sets)",
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this sport is active and can be used for new games"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # Managers
+    objects = models.Manager()  # Default manager (includes inactive)
+    active = ActiveSportManager()  # Active sports only
 
     def __str__(self):
         return self.name
@@ -54,6 +68,56 @@ class Sport(models.Model):
         if not self.slug:
             self.slug = f"{slugify(self.name)}-{self.id}"
         super().save(*args, **kwargs)
+
+    def soft_delete(self):
+        """
+        Soft delete the sport by setting is_active to False
+        This preserves historical data while preventing new usage
+        """
+        if self.has_associated_data():
+            self.is_active = False
+            self.save(update_fields=['is_active'])
+            return True
+        return False
+
+    def reactivate(self):
+        """Reactivate a soft-deleted sport"""
+        self.is_active = True
+        self.save(update_fields=['is_active'])
+
+    def has_associated_data(self):
+        """
+        Check if this sport has any associated data that would prevent hard deletion
+        """
+        # Check for games
+        if hasattr(self, 'game_set') and self.game_set.exists():
+            return True
+        
+        # Check for teams
+        if hasattr(self, 'team_set') and self.team_set.exists():
+            return True
+            
+        # Check for leagues
+        if hasattr(self, 'league_set') and self.league_set.exists():
+            return True
+            
+        # Check for stat types
+        if self.sportstattype_set.exists():
+            return True
+            
+        return False
+
+    def can_hard_delete(self):
+        """
+        Check if this sport can be safely hard deleted
+        (has no associated data)
+        """
+        return not self.has_associated_data()
+
+    @property
+    def status_display(self):
+        """Display status for admin interface"""
+        return "Active" if self.is_active else "Inactive"
 
 
 class Formula(models.Model):

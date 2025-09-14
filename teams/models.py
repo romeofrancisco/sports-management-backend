@@ -7,6 +7,15 @@ from games.models import Game
 from django.utils.text import slugify
 from games.models import Substitution
 
+class TeamManager(models.Manager):
+    def active(self):
+        """Return only active teams"""
+        return self.filter(is_active=True)
+    
+    def inactive(self):
+        """Return only inactive teams"""
+        return self.filter(is_active=False)
+
 class Team(models.Model):
     class Division(models.TextChoices):
         MALE = "male", "Male"
@@ -21,7 +30,10 @@ class Team(models.Model):
     assistant_coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='assistant_coached_teams')
     logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
     slug = models.SlugField(unique=True, blank=True)
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    objects = TeamManager()
     
     class Meta:
         ordering = ['name', 'created_at']
@@ -102,6 +114,35 @@ class Team(models.Model):
             'loss': losses,
             'win_percentage': wins / (wins + losses) if (wins + losses) > 0 else 0
         }
+    
+    def has_associated_data(self):
+        """Check if team has any associated games or training sessions"""
+        # Check for games (both home and away)
+        has_games = Game.objects.filter(
+            Q(home_team=self) | Q(away_team=self)
+        ).exists()
+        
+        # Check for training sessions
+        from trainings.models import TrainingSession
+        has_trainings = TrainingSession.objects.filter(team=self).exists()
+        
+        return has_games or has_trainings
+    
+    def soft_delete(self):
+        """Soft delete the team by setting is_active to False"""
+        self.is_active = False
+        self.save(update_fields=['is_active'])
+        return True
+    
+    def reactivate(self):
+        """Reactivate the team by setting is_active to True"""
+        self.is_active = True
+        self.save(update_fields=['is_active'])
+        return True
+    
+    def can_be_hard_deleted(self):
+        """Check if team can be safely hard deleted"""
+        return not self.has_associated_data()
      
 
 class Coach(models.Model):
@@ -122,6 +163,28 @@ class Coach(models.Model):
     def can_coach_team(self, team):
         """Check if coach can coach a specific team based on their sports"""
         return self.sports.filter(id=team.sport.id).exists()
+    
+    def has_associated_data(self):
+        """Check if coach has associated teams or other data"""
+        # Check for teams where this coach is head coach or assistant coach
+        has_head_coach_teams = self.head_coached_teams.exists()
+        has_assistant_coach_teams = self.assistant_coached_teams.exists()
+        
+        return has_head_coach_teams or has_assistant_coach_teams
+    
+    def soft_delete(self):
+        """Deactivate the coach's user account instead of deleting"""
+        self.user.is_active = False
+        self.user.save()
+    
+    def reactivate(self):
+        """Reactivate the coach's user account"""
+        self.user.is_active = True
+        self.user.save()
+    
+    def can_be_hard_deleted(self):
+        """Check if coach can be safely hard deleted"""
+        return not self.has_associated_data()
 
 class PlayerManager(models.Manager):
     def active_in_game(self, game):
@@ -215,3 +278,37 @@ class Player(models.Model):
         else:
             # Substitute is active if subbed in more than subbed out
             return subs_in > subs_out
+    
+    def has_associated_data(self):
+        """Check if player has associated games, training sessions, or other data"""
+        # Check for game-related data
+        has_game_stats = self.player_stats.exists()
+        has_substitutions = (
+            self.substitutions_in.exists() or 
+            self.substitutions_out.exists()
+        )
+        has_lineups = hasattr(self, 'startinglineup_set') and self.startinglineup_set.exists()
+        
+        # Check for training-related data
+        has_training_records = self.training_records.exists()
+        
+        return (
+            has_game_stats or 
+            has_substitutions or 
+            has_lineups or 
+            has_training_records
+        )
+    
+    def soft_delete(self):
+        """Deactivate the player's user account instead of deleting"""
+        self.user.is_active = False
+        self.user.save()
+    
+    def reactivate(self):
+        """Reactivate the player's user account"""
+        self.user.is_active = True
+        self.user.save()
+    
+    def can_be_hard_deleted(self):
+        """Check if player can be safely hard deleted"""
+        return not self.has_associated_data()

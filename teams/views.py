@@ -52,19 +52,19 @@ class TeamViewSet(ModelViewSet):
     def get_queryset(self):
         """
         Return teams based on user role:
-        - Admin: All teams
-        - Coach: Only their own teams
-        - Player: Only their team
+        - Admin: All teams (active and inactive)
+        - Coach: Only their own active teams
+        - Player: Only their team if active
         - Others: Permission denied for all actions including list"""
         user = self.request.user
-        # For admins, show all teams with optimized queries
+        # For admins, show all teams (active and inactive) with optimized queries
         if user.is_authenticated and hasattr(user, "is_admin") and user.is_admin:
             return Team.objects.select_related(
                 "sport", "head_coach__user", "assistant_coach__user"
             ).prefetch_related(
                 "players", "head_coach__sports", "assistant_coach__sports"
             )
-            # For coaches, show only their teams with optimized queries
+            # For coaches, show only their active teams with optimized queries
         if hasattr(user, "coach_profile"):
             # Get teams where this coach is either head coach or assistant coach
             from django.db.models import Q
@@ -72,14 +72,15 @@ class TeamViewSet(ModelViewSet):
             return (
                 Team.objects.filter(
                     Q(head_coach=user.coach_profile)
-                    | Q(assistant_coach=user.coach_profile)
+                    | Q(assistant_coach=user.coach_profile),
+                    is_active=True  # Only active teams for coaches
                 )
                 .select_related("sport", "head_coach__user", "assistant_coach__user")
                 .prefetch_related(
                     "players", "head_coach__sports", "assistant_coach__sports"
                 )
             )
-            # For players, show only their team with optimized queries
+            # For players, show only their team if active with optimized queries
         if hasattr(user, "player_profile") and user.player_profile.team:
             return (
                 Team.objects.select_related(
@@ -88,7 +89,7 @@ class TeamViewSet(ModelViewSet):
                 .prefetch_related(
                     "players", "head_coach__sports", "assistant_coach__sports"
                 )
-                .filter(id=user.player_profile.team.id)
+                .filter(id=user.player_profile.team.id, is_active=True)
             )
 
         # User doesn't have appropriate role - deny access
@@ -174,9 +175,10 @@ class TeamViewSet(ModelViewSet):
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update their own teams
             coach = self.request.user.coach_profile
-            # Get teams where this coach is either head coach or assistant coach
+            # Get teams where this coach is either head coach or assistant coach (only active)
             coached_teams = Team.objects.filter(
-                Q(head_coach=coach) | Q(assistant_coach=coach)
+                Q(head_coach=coach) | Q(assistant_coach=coach),
+                is_active=True  # Only active teams for coaches
             )
             if serializer.instance in coached_teams:
                 serializer.save()
@@ -184,22 +186,48 @@ class TeamViewSet(ModelViewSet):
                 raise PermissionDenied("You can only update your own teams")
 
     def perform_destroy(self, instance):
-        """Only allow coaches to delete their own teams"""
+        """Soft delete or hard delete team based on associated data"""
         if self.request.user.is_admin:  # Admins can delete any team
-            instance.delete()
+            if instance.has_associated_data():
+                # Soft delete if team has associated games or trainings
+                instance.soft_delete()
+            else:
+                # Hard delete if no associated data
+                instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only delete their own teams
             coach = self.request.user.coach_profile
-            # Get teams where this coach is either head coach or assistant coach
+            # Get teams where this coach is either head coach or assistant coach (only active)
             coached_teams = Team.objects.filter(
-                Q(head_coach=coach) | Q(assistant_coach=coach)
+                Q(head_coach=coach) | Q(assistant_coach=coach),
+                is_active=True  # Only active teams for coaches
             )
 
             # Check if the team belongs to the coach
             if instance in coached_teams:
-                instance.delete()
+                if instance.has_associated_data():
+                    # Soft delete if team has associated games or trainings
+                    instance.soft_delete()
+                else:
+                    # Hard delete if no associated data
+                    instance.delete()
             else:
                 raise PermissionDenied("You can only delete your own teams")
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminOrCoachUser])
+    def reactivate(self, request, **kwargs):
+        """Reactivate a deactivated team"""
+        team = self.get_object()
+        
+        if team.is_active:
+            return Response(
+                {"detail": "Team is already active."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        team.reactivate()
+        serializer = self.get_serializer(team)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["get"], permission_classes=[IsAdminUser])
     def coaches(self, request, **kwargs):
@@ -804,9 +832,10 @@ class SportTeamsViewSet(ReadOnlyModelViewSet):
             )
         
         if hasattr(user, "coach_profile"):
-            # Coach: Only their teams in the sport
+            # Coach: Only their active teams in the sport
             return base_queryset.filter(
-                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile),
+                is_active=True  # Only active teams for coaches
             ).select_related(
                 "sport", "head_coach__user", "assistant_coach__user"
             ).prefetch_related(
@@ -814,8 +843,11 @@ class SportTeamsViewSet(ReadOnlyModelViewSet):
             )
         
         if hasattr(user, "player_profile") and user.player_profile.team:
-            # Player: Only their own team if it's in this sport
-            return base_queryset.filter(id=user.player_profile.team.id)
+            # Player: Only their own team if it's in this sport and active
+            return base_queryset.filter(
+                id=user.player_profile.team.id,
+                is_active=True  # Only active teams for players
+            )
         
         # User doesn't have appropriate role - return empty queryset
         return Team.objects.none()
@@ -856,10 +888,14 @@ class PlayerViews(ModelViewSet):
             .order_by("user__first_name")
         )
 
-        # For admins, show all players
+        # For admins, show all players (including inactive users)
         if user.is_admin:
             return base_queryset
-            # For coaches, show only players from their teams
+            
+        # For non-admin users, only show players with active user accounts
+        base_queryset = base_queryset.filter(user__is_active=True)
+        
+        # For coaches, show only active players from their teams
         if hasattr(user, "coach_profile"):
             coach = user.coach_profile
             # Get teams where this coach is either head coach or assistant coach
@@ -868,7 +904,7 @@ class PlayerViews(ModelViewSet):
             )
             return base_queryset.filter(team__in=coached_teams)
 
-        # For players, show only teammates
+        # For players, show only active teammates
         if hasattr(user, "player_profile") and user.player_profile.team:
             player_team = user.player_profile.team
             return base_queryset.filter(team=player_team)
@@ -978,7 +1014,7 @@ class PlayerViews(ModelViewSet):
         if self.request.user.is_admin:  # Admins can update any player
             serializer.save()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
-            # Coaches can only update players from their teams
+            # Coaches can only update players from their teams (only active users)
             coach = self.request.user.coach_profile
             # Get teams where this coach is either head coach or assistant coach
             coached_teams = Team.objects.filter(
@@ -986,12 +1022,13 @@ class PlayerViews(ModelViewSet):
             )
             player = serializer.instance
 
-            # Make sure player has a team and that team is in coach's teams
-            if player.team and player.team in coached_teams:
+            # Make sure player has a team, that team is in coach's teams, and player user is active
+            if (player.team and player.team in coached_teams and 
+                player.user.is_active):
                 serializer.save()
             else:
                 raise PermissionDenied(
-                    "You can only update players from your own teams"
+                    "You can only update active players from your own teams"
                 )
 
     def update(self, request, *args, **kwargs):
@@ -1034,11 +1071,16 @@ class PlayerViews(ModelViewSet):
                 raise
 
     def perform_destroy(self, instance):
-        """Only allow coaches to delete players in their own teams"""
+        """Soft delete or hard delete player based on associated data"""
         if self.request.user.is_admin:  # Admins can delete any player
-            instance.delete()
+            if instance.has_associated_data():
+                # Soft delete if player has associated games or trainings
+                instance.soft_delete()
+            else:
+                # Hard delete if no associated data
+                instance.delete()
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
-            # Coaches can only delete players from their teams
+            # Coaches can only delete players from their teams (only active users)
             coach = self.request.user.coach_profile
             # Get teams where this coach is either head coach or assistant coach
             coached_teams = Team.objects.filter(
@@ -1046,13 +1088,42 @@ class PlayerViews(ModelViewSet):
             )
             player = instance
 
-            # Make sure player has a team and that team is in coach's teams
-            if player.team and player.team in coached_teams:
-                instance.delete()
+            # Make sure player has a team, that team is in coach's teams, and player user is active
+            if (player.team and player.team in coached_teams and 
+                player.user.is_active):
+                if instance.has_associated_data():
+                    # Soft delete if player has associated games or trainings
+                    instance.soft_delete()
+                else:
+                    # Hard delete if no associated data
+                    instance.delete()
             else:
                 raise PermissionDenied(
-                    "You can only delete players from your own teams"
+                    "You can only delete active players from your own teams"
                 )
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminUser])
+    def reactivate(self, request, **kwargs):
+        """Reactivate a soft-deleted player (admin only)"""
+        player = self.get_object()
+        
+        if player.user.is_active:
+            return Response(
+                {"detail": "Player is already active."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        player.reactivate()
+        
+        # Return updated player data
+        serializer = self.get_serializer(player)
+        return Response(
+            {
+                "detail": "Player reactivated successfully.",
+                "player": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class CoachViews(ModelViewSet):
@@ -1069,8 +1140,57 @@ class CoachViews(ModelViewSet):
         return context
 
     def get_queryset(self):
-        return Coach.objects.select_related("user").annotate(
+        """
+        Return coaches based on user role:
+        - Admin: All coaches (including inactive users)
+        - Others: Only coaches with active user accounts
+        """
+        user = self.request.user
+        
+        base_queryset = Coach.objects.select_related("user").annotate(
             first_name=F("user__first_name"),
             last_name=F("user__last_name"),
             sex=F("user__sex"),
+        )
+        
+        # For admins, show all coaches (including inactive users)
+        if user.is_admin:
+            return base_queryset
+        
+        # For non-admin users, only show coaches with active user accounts
+        return base_queryset.filter(user__is_active=True)
+
+    def perform_destroy(self, instance):
+        """Soft delete or hard delete coach based on associated data"""
+        if self.request.user.is_admin:  # Only admins can delete coaches
+            if instance.has_associated_data():
+                # Soft delete if coach has associated teams
+                instance.soft_delete()
+            else:
+                # Hard delete if no associated data
+                instance.delete()
+        else:
+            raise PermissionDenied("You don't have permission to delete coaches")
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminUser])
+    def reactivate(self, request, **kwargs):
+        """Reactivate a soft-deleted coach (admin only)"""
+        coach = self.get_object()
+        
+        if coach.user.is_active:
+            return Response(
+                {"detail": "Coach is already active."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        coach.reactivate()
+        
+        # Return updated coach data
+        serializer = self.get_serializer(coach)
+        return Response(
+            {
+                "detail": "Coach reactivated successfully.",
+                "coach": serializer.data,
+            },
+            status=status.HTTP_200_OK,
         )

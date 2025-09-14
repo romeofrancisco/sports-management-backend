@@ -2943,14 +2943,17 @@ class AttendanceAnalyticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"])
     def trends(self, request):
-        """Get attendance trends over time"""
+        """Get training sessions per month trends"""
         try:
             base_queryset = self.get_base_queryset(request)
             filters = self._get_filters(request)
+            
+            # Get period parameter from request (default to monthly)
+            period = request.query_params.get('period', 'monthly')
 
-            # Use service to calculate trends
+            # Use service to calculate session trends with specified period
             trends_data = AttendanceAnalyticsService.calculate_attendance_trends(
-                base_queryset, filters
+                base_queryset, filters, period
             )
 
             return Response(trends_data)

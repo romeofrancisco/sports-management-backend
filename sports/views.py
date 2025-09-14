@@ -21,7 +21,7 @@ from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 
 
 class SportsViewSet(ModelViewSet):
-    queryset = Sport.objects.all()
+    queryset = Sport.objects.all()  # Show all sports (active and inactive) for admin
     serializer_class = SportSerializer
     lookup_field = "slug"
     
@@ -34,6 +34,68 @@ class SportsViewSet(ModelViewSet):
         if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
             return [IsAuthenticated()]  # Any authenticated user can read
         return [IsAdminUser()]  # Admin permission required for write operations
+
+    def get_queryset(self):
+        """
+        Filter queryset based on user role and query parameters
+        """
+        queryset = super().get_queryset()
+        
+        # Add filter for showing only active sports if requested
+        show_inactive = self.request.query_params.get('show_inactive', 'false').lower() == 'true'
+        
+        if not show_inactive and self.action == 'list':
+            # For regular list view, only show active sports unless explicitly requested
+            if not self.request.user.is_admin:
+                queryset = queryset.filter(is_active=True)
+        
+        return queryset
+    
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Custom destroy method that handles soft delete for sports with associated data
+        """
+        sport = self.get_object()
+        
+        if sport.has_associated_data():
+            # Soft delete - deactivate the sport
+            sport.soft_delete()
+            return Response({
+                'message': 'Sport has been deactivated due to associated games/teams/data',
+                'status': 'deactivated',
+                'sport_name': sport.name
+            }, status=status.HTTP_200_OK)
+        else:
+            # Hard delete is safe - no associated data
+            sport_name = sport.name
+            sport.delete()
+            return Response({
+                'message': f'Sport "{sport_name}" has been permanently deleted',
+                'status': 'deleted',
+                'sport_name': sport_name
+            }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, slug=None):
+        """
+        Reactivate a deactivated sport
+        """
+        sport = self.get_object()
+        
+        if sport.is_active:
+            return Response({
+                'message': f'Sport "{sport.name}" is already active',
+                'status': 'already_active',
+                'sport_name': sport.name
+            }, status=status.HTTP_200_OK)
+        
+        sport.reactivate()
+        return Response({
+            'message': f'Sport "{sport.name}" has been reactivated successfully',
+            'status': 'reactivated',
+            'sport_name': sport.name
+        }, status=status.HTTP_200_OK)
 
 class SportStatCategoryViewSet(ModelViewSet):
     queryset = SportStatCategory.objects.all()

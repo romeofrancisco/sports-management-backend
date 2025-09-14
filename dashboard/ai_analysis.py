@@ -383,6 +383,27 @@ def collect_system_data():
     # Ensure score is between 0-100
     health_score = max(0, min(100, round(health_score)))
     
+    # Calculate players with good attendance (>80%)
+    good_attendance_players = 0
+    if total_players > 0:
+        # Get all players who have attended training sessions in the last 30 days
+        players_with_sessions = Player.objects.filter(
+            training_records__session__date__gte=last_30_days.date()
+        ).annotate(
+            total_sessions=Count('training_records'),
+            present_sessions=Count(
+                'training_records',
+                filter=Q(training_records__attendance_status='present')
+            )
+        ).filter(total_sessions__gt=0)
+        
+        # Count players with >80% attendance
+        for player in players_with_sessions:
+            if player.total_sessions > 0:
+                attendance_percentage = (player.present_sessions / player.total_sessions) * 100
+                if attendance_percentage > 80:
+                    good_attendance_players += 1
+    
     return {
         'total_teams': total_teams,
         'total_players': total_players,
@@ -398,6 +419,6 @@ def collect_system_data():
         'avg_players_per_team': avg_players_per_team,
         'games_completion_rate': games_completion_rate,
         'health_score': health_score,  # Now using the same calculation as views.py
-        'good_attendance_players': 0,  # Simplified calculation to avoid PostgreSQL issues
+        'good_attendance_players': good_attendance_players,  # Now properly calculated
         'avg_coach_effectiveness': 75.0  # Placeholder for more complex calculation
     }

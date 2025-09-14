@@ -478,10 +478,8 @@ class GameViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Filter games based on game type and user role:
-        - League and tournament games are visible to all users
-        - Normal games are visible to:
-          - Admin users: All normal games
-          - Coach/Player users: Only games for their teams
+        - League, tournament, and practice games are filtered by team ownership for coaches/players
+        - Admin users can see all games
         """
         queryset = super().get_queryset()
         user = self.request.user
@@ -490,9 +488,9 @@ class GameViewSet(viewsets.ModelViewSet):
         if user.is_admin:
             return queryset
 
-        # Filter normal games based on user role, but keep all league/tournament games
+        # Filter games based on user role - only show games for their teams
         if hasattr(user, "coach_profile"):
-            # For coaches: practice games only for teams they coach
+            # For coaches: all game types but only for teams they coach
             from django.db.models import Q
             from teams.models import Team
 
@@ -500,34 +498,16 @@ class GameViewSet(viewsets.ModelViewSet):
                 Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
             )
             return queryset.filter(
-                # Keep all league/tournament games
-                models.Q(
-                    type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
-                )  # Plus practice games only for their teams
-                | (
-                    models.Q(type=Game.Type.PRACTICE)
-                    & (
-                        models.Q(home_team__in=coach_teams)
-                        | models.Q(away_team__in=coach_teams)
-                    )
-                )
+                models.Q(home_team__in=coach_teams)
+                | models.Q(away_team__in=coach_teams)
             )
         elif hasattr(user, "player_profile"):
-            # For players: practice games only for their team
+            # For players: all game types but only for their team
             player_team = user.player_profile.team
             if player_team:
                 return queryset.filter(
-                    # Keep all league/tournament games
-                    models.Q(
-                        type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT]
-                    )  # Plus practice games only for their team
-                    | (
-                        models.Q(type=Game.Type.PRACTICE)
-                        & (
-                            models.Q(home_team=player_team)
-                            | models.Q(away_team=player_team)
-                        )
-                    )
+                    models.Q(home_team=player_team)
+                    | models.Q(away_team=player_team)
                 )
             else:
                 # Player has no team, only show league/tournament games
