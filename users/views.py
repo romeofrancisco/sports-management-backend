@@ -11,6 +11,7 @@ from django.contrib.auth.models import update_last_login
 
 from .serializers import (
     UserSerializer,
+    UserProfileUpdateSerializer,
     LoginUserSerializer,
 )
 
@@ -33,6 +34,11 @@ class UserInfoView(RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+    
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return UserProfileUpdateSerializer
+        return UserSerializer
 
 
 class LoginView(GenericAPIView):

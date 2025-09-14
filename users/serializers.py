@@ -5,9 +5,33 @@ from django.contrib.auth import authenticate
 from teams.models import Player, Team
 
 
+class UserProfileUpdateSerializer(ModelSerializer):
+    """Serializer for updating user profile information"""
+    
+    class Meta:
+        model = User
+        fields = (
+            "first_name",
+            "last_name", 
+            "email",
+            "sex",
+            "date_of_birth",
+            "phone_number",
+            "profile",
+        )
+    
+    def validate_email(self, value):
+        user = self.instance
+        if User.objects.exclude(pk=user.pk).filter(email=value).exists():
+            raise serializers.ValidationError("This email is already in use.")
+        return value
+
+
 class UserSerializer(ModelSerializer):
     profile = serializers.SerializerMethodField()
     team_slug = serializers.SerializerMethodField()
+    player_details = serializers.SerializerMethodField()
+    coach_details = serializers.SerializerMethodField()
     
     class Meta:
         model = User
@@ -20,8 +44,12 @@ class UserSerializer(ModelSerializer):
             "email",
             "role",
             "date_of_birth",
+            "phone_number",
             "team_slug",
+            "player_details",
+            "coach_details",
         )
+        read_only_fields = ("id", "role")
     
     def get_profile(self, obj):
         if obj.profile:
@@ -39,6 +67,34 @@ class UserSerializer(ModelSerializer):
         except Player.DoesNotExist:
             return None
         return None
+    
+    def get_player_details(self, obj):
+        try:
+            from teams.serializers import PlayerSerializer
+            player = Player.objects.get(user=obj)
+            return {
+                'height': player.height,
+                'weight': player.weight,
+                'jersey_number': player.jersey_number,
+                'year_level': player.year_level,
+                'course': player.course,
+                'team_id': player.team.id if player.team else None,
+                'team_name': player.team.name if player.team else None,
+                'sport_id': player.sport.id if player.sport else None,
+                'sport_name': player.sport.name if player.sport else None,
+            }
+        except Player.DoesNotExist:
+            return None
+    
+    def get_coach_details(self, obj):
+        try:
+            from teams.models import Coach
+            coach = Coach.objects.get(user=obj)
+            return {
+                'sports': [{'id': sport.id, 'name': sport.name} for sport in coach.sports.all()]
+            }
+        except Coach.DoesNotExist:
+            return None
 
 
 class PlayerSerializer(ModelSerializer):
