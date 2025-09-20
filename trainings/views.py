@@ -2674,81 +2674,101 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
             for metric in metrics_in_category:
                 metric_records = category_records.filter(metric=metric)
 
-                if metric_records.count() < 2:
+                if metric_records.count() < 1:
                     continue
+                
                 # Get first and latest records for improvement calculation
-                first_record = metric_records.first()
-                latest_record = metric_records.last()
-
+                # Use all metric records (not date-filtered) to get true first/latest
+                all_metric_records = PlayerMetricRecord.objects.filter(
+                    player_training__player=player,
+                    metric=metric,
+                    value__isnull=False
+                ).order_by("player_training__session__date", "player_training__session__start_time")
+                
+                if all_metric_records.count() < 1:
+                    continue
+                    
+                latest_record = all_metric_records.last()
+                
                 # Check for null values
-                if first_record.value is None or latest_record.value is None:
+                if latest_record.value is None:
                     continue
 
-                first_value = float(first_record.value)
                 latest_value = float(latest_record.value)
+                improvement = 0
+                performance_score = 50  # Default neutral score
+                
+                # Calculate improvement if we have multiple records
+                if all_metric_records.count() >= 2:
+                    first_record = all_metric_records.first()
+                    if first_record.value is not None:
+                        first_value = float(first_record.value)
+                        
+                        # Calculate improvement percentage
+                        if first_value != 0:
+                            raw_improvement = ((latest_value - first_value) / first_value) * 100
 
-                # Calculate improvement percentage
-                if first_value != 0:
-                    raw_improvement = ((latest_value - first_value) / first_value) * 100
+                            # Apply normalization and direction logic
+                            normalization_weight = 1.0
+                            if metric.metric_unit:
+                                normalization_weight = float(
+                                    metric.metric_unit.normalization_weight
+                                )
 
-                    # Apply normalization and direction logic
-                    normalization_weight = 1.0
-                    if metric.metric_unit:
-                        normalization_weight = float(
-                            metric.metric_unit.normalization_weight
-                        )
+                            improvement = raw_improvement * normalization_weight
 
-                    improvement = raw_improvement * normalization_weight
+                            # For metrics where lower is better, invert the improvement
+                            if metric.is_lower_better:
+                                improvement = -improvement
 
-                    # For metrics where lower is better, invert the improvement
-                    if metric.is_lower_better:
-                        improvement = -improvement
+                            # Cap extreme improvements to prevent skewing
+                            improvement = max(-500, min(500, improvement))
 
-                    total_improvement += improvement
-                    metrics_with_improvement += 1
-
-                    # Calculate performance score (0-100 scale)
-                    # More robust scoring system:
-                    # - Base score of 50 (neutral)
-                    # - Add/subtract based on improvement with diminishing returns
-                    # - Use sigmoid-like function for better scaling
-                    if improvement >= 0:
-                        # Positive improvement: scale from 50 to 100
-                        # Using logarithmic scaling to handle large improvements better
-                        improvement_factor = min(
-                            improvement / 50, 2.0
-                        )  # Cap at 200% improvement
-                        performance_score = 50 + (
-                            50 * improvement_factor / (1 + improvement_factor)
-                        )
-                    else:
-                        # Negative improvement: scale from 50 to 0
-                        # Using similar scaling for negative improvements
-                        improvement_factor = min(
-                            abs(improvement) / 50, 2.0
-                        )  # Cap at -200% improvement
-                        performance_score = 50 - (
-                            50 * improvement_factor / (1 + improvement_factor)
-                        )
-
-                    # Ensure score stays within 0-100 range
-                    performance_score = max(0, min(100, performance_score))
-                    latest_performance_score += performance_score
+                            # Calculate performance score based on improvement
+                            if improvement >= 0:
+                                # Positive improvement: scale from 50 to 100
+                                improvement_factor = min(improvement / 50, 2.0)
+                                performance_score = 50 + (
+                                    50 * improvement_factor / (1 + improvement_factor)
+                                )
+                            else:
+                                # Negative improvement: scale from 50 to 0
+                                improvement_factor = min(abs(improvement) / 50, 2.0)
+                                performance_score = 50 - (
+                                    50 * improvement_factor / (1 + improvement_factor)
+                                )
+                        else:
+                            # Handle zero baseline case
+                            # For zero baseline, use absolute value scoring
+                            if metric.is_lower_better:
+                                # For lower-is-better: any positive value is worse
+                                if latest_value > 0:
+                                    performance_score = max(20, 50 - min(latest_value * 10, 30))
+                                else:
+                                    performance_score = 80  # Zero or negative is good
+                            else:
+                                # For higher-is-better: positive values are better
+                                performance_score = min(80, 50 + min(latest_value * 10, 30))
+                            
+                            improvement = 0  # Can't calculate meaningful improvement from zero
                 else:
-                    # Handle case where first_value is 0
-                    # For zero baseline, we can't calculate percentage improvement
-                    # Instead, use a simple scoring based on latest value relative to metric type
+                    # Single record - use absolute scoring relative to typical ranges
                     if metric.is_lower_better:
-                        # For lower-is-better metrics, lower latest values get higher scores
-                        # This is a simplified approach - you might want to use domain-specific logic
-                        performance_score = max(0, min(100, 100 - latest_value))
+                        # For lower-is-better: score inversely with latest value
+                        performance_score = max(30, min(70, 60 - (latest_value * 2)))
                     else:
-                        # For higher-is-better metrics, higher latest values get higher scores
-                        # This is also simplified - you might want to use domain-specific logic
-                        performance_score = max(0, min(100, latest_value))
+                        # For higher-is-better: score directly with latest value
+                        performance_score = max(30, min(70, 40 + (latest_value * 2)))
+                    
+                    improvement = 0  # No improvement can be calculated
 
-                    latest_performance_score += performance_score
-                    metrics_with_improvement += 1
+                # Ensure score stays within reasonable bounds
+                performance_score = max(0, min(100, performance_score))
+                
+                # Add to totals
+                total_improvement += improvement
+                latest_performance_score += performance_score
+                metrics_with_improvement += 1
 
                 category_metrics.append(
                     {
@@ -2757,37 +2777,35 @@ class PlayerProgressViewSet(viewsets.ReadOnlyModelViewSet):
                             metric.metric_unit.code if metric.metric_unit else ""
                         ),
                         "latest_value": float(latest_record.value),
-                        "improvement_percentage": (
-                            improvement if first_value != 0 else 0
-                        ),
-                        "records_count": metric_records.count(),
+                        "improvement_percentage": round(improvement, 2),
+                        "performance_score": round(performance_score, 2),
+                        "records_count": all_metric_records.count(),
+                        "has_improvement_data": all_metric_records.count() >= 2,
                     }
                 )
 
-            # Calculate category averages
-            avg_improvement = (
-                (total_improvement / metrics_with_improvement)
-                if metrics_with_improvement > 0
-                else 0
-            )
-            avg_performance_score = (
-                (latest_performance_score / metrics_with_improvement)
-                if metrics_with_improvement > 0
-                else 50
-            )
+            # Calculate category averages with validation
+            if metrics_with_improvement > 0:
+                avg_improvement = total_improvement / metrics_with_improvement
+                avg_performance_score = latest_performance_score / metrics_with_improvement
+            else:
+                avg_improvement = 0
+                avg_performance_score = 50  # Neutral score when no data
 
-            categories_with_data.append(
-                {
-                    "category_id": category.id,
-                    "category_name": category.name,
-                    "description": category.description,
-                    "average_improvement": round(avg_improvement, 2),
-                    "performance_score": round(avg_performance_score, 2),
-                    "metrics_count": metrics_with_improvement,
-                    "total_records": category_records.count(),
-                    "metrics_data": category_metrics,
-                }
-            )
+            # Only include categories that have valid metrics
+            if metrics_with_improvement > 0:
+                categories_with_data.append(
+                    {
+                        "category_id": category.id,
+                        "category_name": category.name,
+                        "description": category.description,
+                        "average_improvement": round(avg_improvement, 2),
+                        "performance_score": round(avg_performance_score, 2),
+                        "metrics_count": metrics_with_improvement,
+                        "total_records": category_records.count(),
+                        "metrics_data": category_metrics,
+                    }
+                )
 
         # Prepare radar chart data
         chart_data = {
