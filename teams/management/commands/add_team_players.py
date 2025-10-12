@@ -11,12 +11,14 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--team', type=int, help='ID of a specific team to add players to')
+        parser.add_argument('--team_slug', type=str, help='Slug of a specific team to add players to')
         parser.add_argument('--sport', type=int, help='ID of a sport to add players to all its teams')
         parser.add_argument('--players', type=int, default=10, help='Number of players to add to each team')
         parser.add_argument('--min', type=int, default=5, help='Only add players if team has fewer than this number')
 
     def handle(self, *args, **options):
         team_id = options.get('team')
+        team_slug = options.get('team_slug')
         sport_id = options.get('sport')
         player_count = options.get('players')
         min_players = options.get('min')
@@ -25,6 +27,8 @@ class Command(BaseCommand):
         # Get teams to add players to
         if team_id:
             teams.append(Team.objects.get(id=team_id))
+        elif team_slug:
+            teams.append(Team.objects.get(slug=team_slug))
         elif sport_id:
             teams.extend(Team.objects.filter(sport_id=sport_id))
         else:

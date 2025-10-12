@@ -238,10 +238,21 @@ class FastStatRecordingService:
         """
         point_value = self.stat_type.point_value
         
-        if self.player.team == self.game.home_team:
-            self.game.home_team_score += point_value
-        elif self.player.team == self.game.away_team:
-            self.game.away_team_score += point_value
+        # Handle negative stats - they award points to the opposing team
+        if self.stat_type.is_negative:
+            # Negative stat (error, turnover, etc.) - opposing team gets the points
+            if self.player.team == self.game.home_team:
+                # Home team made negative play, away team gets points
+                self.game.away_team_score += point_value
+            elif self.player.team == self.game.away_team:
+                # Away team made negative play, home team gets points
+                self.game.home_team_score += point_value
+        else:
+            # Positive stat - performing team gets the points
+            if self.player.team == self.game.home_team:
+                self.game.home_team_score += point_value
+            elif self.player.team == self.game.away_team:
+                self.game.away_team_score += point_value
         
         # Save only the score fields to minimize database writes
         self.game.save(update_fields=['home_team_score', 'away_team_score'])
