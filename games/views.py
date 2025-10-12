@@ -16,7 +16,14 @@ def get_coach_teams(coach_profile):
     )
 
 
-from .models import Game, PlayerStat, Substitution, GameCoachPermission, GameSet, StartingLineup
+from .models import (
+    Game,
+    PlayerStat,
+    Substitution,
+    GameCoachPermission,
+    GameSet,
+    StartingLineup,
+)
 from teams.models import Player
 from sports.models import SportStatType, Sport
 from users.models import User
@@ -490,24 +497,29 @@ class GameViewSet(viewsets.ModelViewSet):
 
         # Filter games based on user role - only show games for their teams
         if hasattr(user, "coach_profile"):
-            # For coaches: all game types but only for teams they coach
+            # For coaches: show games for teams they coach AND games they have explicit permission to manage
             from django.db.models import Q
             from teams.models import Team
 
             coach_teams = Team.objects.filter(
                 Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
             )
-            return queryset.filter(
-                models.Q(home_team__in=coach_teams)
-                | models.Q(away_team__in=coach_teams)
-            )
+            
+            # Include games for teams they coach
+            team_games_filter = models.Q(home_team__in=coach_teams) | models.Q(away_team__in=coach_teams)
+            
+            # Also include games they have explicit permission to manage (typically league games)
+            assigned_games_filter = models.Q(coach_permissions__coach=user)
+            
+            return queryset.filter(team_games_filter | assigned_games_filter).distinct()
+        
+
         elif hasattr(user, "player_profile"):
             # For players: all game types but only for their team
             player_team = user.player_profile.team
             if player_team:
                 return queryset.filter(
-                    models.Q(home_team=player_team)
-                    | models.Q(away_team=player_team)
+                    models.Q(home_team=player_team) | models.Q(away_team=player_team)
                 )
             else:
                 # Player has no team, only show league/tournament games
@@ -553,29 +565,32 @@ class GameViewSet(viewsets.ModelViewSet):
         and ensure all related objects are deleted in correct order
         """
         from django.db import transaction
-        
+
         # Store the game ID before any deletion attempts
         game_id = instance.id
-        
+
         try:
             with transaction.atomic():
                 # For set-based games, explicitly delete GameSet records first
-                if hasattr(instance.sport, 'scoring_type') and instance.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+                if (
+                    hasattr(instance.sport, "scoring_type")
+                    and instance.sport.scoring_type == Sport.SCORING_TYPES.SETS
+                ):
                     # Delete all related GameSet records using the stored game_id
                     GameSet.objects.filter(game_id=game_id).delete()
-                
+
                 # Delete other related objects that might not cascade properly
                 # Use direct queries with game_id to avoid issues with the instance
                 PlayerStat.objects.filter(game_id=game_id).delete()
                 Substitution.objects.filter(game_id=game_id).delete()
                 GameCoachPermission.objects.filter(game_id=game_id).delete()
-                
+
                 # Use the StartingLineup model's related name
                 StartingLineup.objects.filter(game_id=game_id).delete()
-                
+
                 # Finally delete the game instance
                 instance.delete()
-                
+
         except Exception as e:
             logger.error(f"Error deleting game {game_id}: {str(e)}")
             # For database consistency issues, try to clean up orphaned records
@@ -585,9 +600,9 @@ class GameViewSet(viewsets.ModelViewSet):
                 PlayerStat.objects.filter(game_id=game_id).delete()
                 Substitution.objects.filter(game_id=game_id).delete()
                 GameCoachPermission.objects.filter(game_id=game_id).delete()
-                
+
                 StartingLineup.objects.filter(game_id=game_id).delete()
-                
+
                 # Try to get a fresh instance and delete it
                 try:
                     fresh_instance = Game.objects.get(id=game_id)
@@ -595,23 +610,43 @@ class GameViewSet(viewsets.ModelViewSet):
                 except Game.DoesNotExist:
                     # Game is already deleted, which is what we wanted
                     logger.info(f"Game {game_id} was already deleted during cleanup")
-                    
+
             except Exception as cleanup_error:
-                logger.error(f"Error during cleanup for game {game_id}: {str(cleanup_error)}")
+                logger.error(
+                    f"Error during cleanup for game {game_id}: {str(cleanup_error)}"
+                )
                 # As a last resort, try to force delete using raw SQL
                 try:
                     from django.db import connection
+
                     with connection.cursor() as cursor:
                         # Delete in correct order to avoid foreign key violations
-                        cursor.execute("DELETE FROM games_gameset WHERE game_id = %s", [game_id])
-                        cursor.execute("DELETE FROM games_playerstat WHERE game_id = %s", [game_id])
-                        cursor.execute("DELETE FROM games_substitution WHERE game_id = %s", [game_id])
-                        cursor.execute("DELETE FROM games_gamecoachpermission WHERE game_id = %s", [game_id])
-                        cursor.execute("DELETE FROM games_startinglineup WHERE game_id = %s", [game_id])
-                        cursor.execute("DELETE FROM games_game WHERE id = %s", [game_id])
+                        cursor.execute(
+                            "DELETE FROM games_gameset WHERE game_id = %s", [game_id]
+                        )
+                        cursor.execute(
+                            "DELETE FROM games_playerstat WHERE game_id = %s", [game_id]
+                        )
+                        cursor.execute(
+                            "DELETE FROM games_substitution WHERE game_id = %s",
+                            [game_id],
+                        )
+                        cursor.execute(
+                            "DELETE FROM games_gamecoachpermission WHERE game_id = %s",
+                            [game_id],
+                        )
+                        cursor.execute(
+                            "DELETE FROM games_startinglineup WHERE game_id = %s",
+                            [game_id],
+                        )
+                        cursor.execute(
+                            "DELETE FROM games_game WHERE id = %s", [game_id]
+                        )
                     logger.info(f"Force deleted game {game_id} using raw SQL")
                 except Exception as sql_error:
-                    logger.error(f"Failed to force delete game {game_id}: {str(sql_error)}")
+                    logger.error(
+                        f"Failed to force delete game {game_id}: {str(sql_error)}"
+                    )
                     raise
 
     @action(detail=True, methods=["get"])
@@ -1228,7 +1263,9 @@ class GameViewSet(viewsets.ModelViewSet):
 
         try:
             permission, created = game.assign_coach(coach, request.user)
-            serializer = GameCoachPermissionSerializer(permission, context={"request": self.request})
+            serializer = GameCoachPermissionSerializer(
+                permission, context={"request": self.request}
+            )
 
             response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
             message = (
@@ -1289,14 +1326,22 @@ class GameViewSet(viewsets.ModelViewSet):
                 "id": coach.id,
                 "name": coach.get_full_name(),
                 "email": coach.email,
-                "teams": [
-                    {
-                        "name": team.name,
-                        "abbreviation": team.abbreviation,
-                        "logo": request.build_absolute_uri(team.logo.url) if hasattr(team, "logo") and team.logo else None
-                    }
-                    for team in get_coach_teams(coach.coach_profile)
-                ] if hasattr(coach, "coach_profile") else [],
+                "teams": (
+                    [
+                        {
+                            "name": team.name,
+                            "abbreviation": team.abbreviation,
+                            "logo": (
+                                request.build_absolute_uri(team.logo.url)
+                                if hasattr(team, "logo") and team.logo
+                                else None
+                            ),
+                        }
+                        for team in get_coach_teams(coach.coach_profile)
+                    ]
+                    if hasattr(coach, "coach_profile")
+                    else []
+                ),
                 "profile": (
                     request.build_absolute_uri(coach.profile.url)
                     if hasattr(coach, "profile") and coach.profile

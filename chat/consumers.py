@@ -128,7 +128,6 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
                 try:
                     coach = Coach.objects.get(user=user)
                     from django.db.models import Q
-                    from teams.models import Team
                     return Team.objects.filter(
                         Q(head_coach=coach) | Q(assistant_coach=coach),
                         id=team.id
