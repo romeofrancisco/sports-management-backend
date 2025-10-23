@@ -76,9 +76,26 @@ class FormulaSerializer(serializers.ModelSerializer):
         return instance
 
 class SportStatCategorySerializer(serializers.ModelSerializer):
+    stats_count = serializers.SerializerMethodField()
+    sport_name = serializers.CharField(source='sport.name', read_only=True)
+    sport_slug = serializers.SlugRelatedField(
+        source='sport',
+        slug_field='slug',
+        queryset=Sport.objects.all(),
+        write_only=True
+    )
+    
     class Meta:
         model = SportStatCategory
-        fields = "__all__"
+        fields = ['id', 'name', 'description', 'sport_slug', 'sport_name', 'stats_count']
+        extra_kwargs = {
+            'sport': {'write_only': True}  # This will be set via sport_slug
+        }
+    
+    def get_stats_count(self, obj):
+        """Return the number of SportStatType records using this category"""
+        return obj.sportstattype_set.count()
+    
 
 class SportStatTypeSerializer(serializers.ModelSerializer):
     sport = serializers.SlugRelatedField(

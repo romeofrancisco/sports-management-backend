@@ -106,7 +106,7 @@ class SportStatCategoryViewSet(ModelViewSet):
         sport = self.request.query_params.get("sport")
         
         if sport:
-            sport = get_object_or_404(Sport, sport=sport)
+            sport = get_object_or_404(Sport, slug=sport)
             queryset = queryset.filter(sport=sport)
             
         return queryset
