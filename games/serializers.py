@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Game, PlayerStat, StartingLineup, Substitution, GameCoachPermission
+from .models import Game, PlayerStat, StartingLineup, Substitution, GameCoachPermission, ScoreUpdate
 from teams.serializers import TeamSerializer
 from teams.models import Team, Player
 from sports.models import SportStatType, Position, Sport
@@ -46,6 +46,63 @@ class GameCoachPermissionSerializer(serializers.ModelSerializer):
             else:
                 return image.url
         return None
+
+
+class ScoreUpdateSerializer(serializers.ModelSerializer):
+    team_name = serializers.CharField(source='team.name', read_only=True)
+    updated_by_name = serializers.CharField(source='updated_by.get_full_name', read_only=True)
+    
+    class Meta:
+        model = ScoreUpdate
+        fields = [
+            'id', 'game', 'team', 'team_name', 'points', 'period', 
+            'updated_by', 'updated_by_name', 'reason', 'timestamp'
+        ]
+        read_only_fields = ['id', 'timestamp', 'team_name', 'updated_by_name']
+
+    def validate(self, data):
+        game = data.get('game')
+        team = data.get('team')
+        
+        if game and team:
+            if team not in [game.home_team, game.away_team]:
+                raise serializers.ValidationError("Team is not part of this game")
+            
+            if game.sport.requires_stats:
+                raise serializers.ValidationError(
+                    "Manual score updates not allowed for stat-tracking sports"
+                )
+                
+        return data
+
+
+class GameScoreSerializer(serializers.ModelSerializer):
+    """Serializer for updating game scores manually"""
+    home_team_name = serializers.CharField(source='home_team.name', read_only=True)
+    away_team_name = serializers.CharField(source='away_team.name', read_only=True)
+    sport_requires_stats = serializers.BooleanField(source='sport.requires_stats', read_only=True)
+    
+    class Meta:
+        model = Game
+        fields = [
+            'id', 'home_team', 'away_team', 'home_team_name', 'away_team_name',
+            'home_team_score', 'away_team_score', 'current_period', 'status',
+            'sport_requires_stats'
+        ]
+        read_only_fields = ['id', 'home_team', 'away_team', 'status']
+
+    def validate(self, data):
+        if self.instance and self.instance.sport.requires_stats:
+            raise serializers.ValidationError(
+                "Cannot manually update scores for stat-tracking sports"
+            )
+        
+        if self.instance and self.instance.status != Game.Status.IN_PROGRESS:
+            raise serializers.ValidationError(
+                "Can only update scores for in-progress games"
+            )
+            
+        return data
 
 
 class PositionSerializer(serializers.ModelSerializer):
@@ -133,6 +190,7 @@ class GameSerializer(serializers.ModelSerializer):
     sport_scoring_type = serializers.CharField(
         source="sport.scoring_type", read_only=True
     )
+    sport_requires_stats = serializers.BooleanField(source='sport.requires_stats', read_only=True)
     sport = serializers.PrimaryKeyRelatedField(
         queryset=Sport.objects.all(), read_only=False
     )
@@ -140,6 +198,7 @@ class GameSerializer(serializers.ModelSerializer):
     league = serializers.SerializerMethodField()
     season = serializers.SerializerMethodField()
     assigned_coaches = serializers.SerializerMethodField()
+    recent_score_updates = serializers.SerializerMethodField()
 
     # For write operations
     home_team_id = serializers.PrimaryKeyRelatedField(
@@ -162,6 +221,7 @@ class GameSerializer(serializers.ModelSerializer):
             "sport",
             "sport_slug",
             "sport_scoring_type",
+            "sport_requires_stats",
             "league",
             "season",
             "is_recorded",
@@ -186,6 +246,7 @@ class GameSerializer(serializers.ModelSerializer):
             "current_period",
             "winner",
             "assigned_coaches",
+            "recent_score_updates",
             "created_at",
         ]
         read_only_fields = [
@@ -238,6 +299,14 @@ class GameSerializer(serializers.ModelSerializer):
     def get_lineup_status(self, obj):
         return obj.get_lineup_status()
 
+    def get_recent_score_updates(self, obj):
+        """Get recent score updates for scoreboard-only sports"""
+        if obj.sport.requires_stats:
+            return []
+            
+        recent_updates = obj.score_updates.all()[:10]  # Last 10 updates
+        return ScoreUpdateSerializer(recent_updates, many=True).data
+
     def validate(self, data):
         home_team = data.get("home_team") or getattr(self.instance, "home_team", None)
         away_team = data.get("away_team") or getattr(self.instance, "away_team", None)
@@ -256,6 +325,43 @@ class GameSerializer(serializers.ModelSerializer):
                 )
 
         return data
+
+
+class GameDetailSerializer(GameSerializer):
+    """Extended game serializer with more details"""
+    starting_lineup = serializers.SerializerMethodField()
+    substitutions = serializers.SerializerMethodField()
+    player_stats = serializers.SerializerMethodField()
+    score_updates = serializers.SerializerMethodField()
+    
+    class Meta(GameSerializer.Meta):
+        fields = GameSerializer.Meta.fields + [
+            'starting_lineup', 'substitutions', 'player_stats', 'score_updates'
+        ]
+
+    def get_starting_lineup(self, obj):
+        if not obj.sport.requires_stats:
+            return []
+        lineup = obj.starting_lineup.select_related('player', 'team').all()
+        return StartingLineupSerializer(lineup, many=True).data
+
+    def get_substitutions(self, obj):
+        if not obj.sport.requires_stats:
+            return []
+        subs = obj.substitutions.select_related('substitute_in', 'substitute_out').all()
+        return SubstitutionSerializer(subs, many=True).data
+
+    def get_player_stats(self, obj):
+        if not obj.sport.requires_stats:
+            return []
+        stats = obj.playerstat_set.select_related('player', 'stat_type').all()
+        return PlayerStatSerializer(stats, many=True).data
+
+    def get_score_updates(self, obj):
+        if obj.sport.requires_stats:
+            return []
+        updates = obj.score_updates.select_related('team', 'updated_by').all()
+        return ScoreUpdateSerializer(updates, many=True).data
 
 
 class GameActionSerializer(serializers.Serializer):

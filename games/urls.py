@@ -3,7 +3,8 @@ from django.urls import path, include
 from .views import (
     GameViewSet, 
     PlayerStatViewSet, 
-    SubstitutionViewSet,  # Import the new view
+    SubstitutionViewSet,
+    ScoreUpdateViewSet,
 )
 from .improvement_views import PlayerImprovementViewSet
 
@@ -11,6 +12,7 @@ router = DefaultRouter()
 router.register(r'player-stats', PlayerStatViewSet, basename='player_stat')
 router.register(r'games', GameViewSet, basename='game')
 router.register(r'substitutions', SubstitutionViewSet, basename='substitution')
+router.register(r'score-updates', ScoreUpdateViewSet, basename='score_update')
 router.register(r'player-improvements', PlayerImprovementViewSet, basename='player_improvement')
 
 urlpatterns = [
