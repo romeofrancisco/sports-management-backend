@@ -278,9 +278,63 @@ class PlayerInfoSerializer(ModelSerializer):
         ]
 
     def validate_position_ids(self, value):
-        if not value:
+        # Get the sport from the validated data to check if it requires stats
+        sport_slug = self.initial_data.get('sport_slug')
+        if sport_slug:
+            try:
+                sport = Sport.objects.get(slug=sport_slug)
+                # Only require positions for sports that require stats
+                if sport.requires_stats and not value:
+                    raise serializers.ValidationError("At least one position is required for this sport.")
+            except Sport.DoesNotExist:
+                pass
+        elif not value:
+            # Default behavior if sport not found - require positions
             raise serializers.ValidationError("At least one position is required.")
         return value
+
+    def validate(self, data):
+        """Validate team capacity and other constraints"""
+        team = data.get('team_id')
+        sport = data.get('sport_slug')
+        
+        # If we're updating, get current values if not provided
+        if self.instance:
+            team = team or self.instance.team
+            sport = sport or self.instance.sport
+        
+        # Validate team capacity
+        if team and sport:
+            # Check if adding this player would exceed the team's maximum capacity
+            current_player_count = team.players.count()
+            
+            # If we're updating, don't count the current player
+            if self.instance:
+                current_player_count -= 1
+            
+            if current_player_count >= sport.max_players_per_team:
+                raise serializers.ValidationError({
+                    'team_id': f"Team '{team.name}' has reached its maximum capacity of {sport.max_players_per_team} players for {sport.name}."
+                })
+        
+        # Validate jersey number uniqueness within the team
+        jersey_number = data.get('jersey_number')
+        if team and jersey_number:
+            existing_player = Player.objects.filter(
+                team=team, 
+                jersey_number=jersey_number
+            )
+            
+            # If updating, exclude current player
+            if self.instance:
+                existing_player = existing_player.exclude(pk=self.instance.pk)
+            
+            if existing_player.exists():
+                raise serializers.ValidationError({
+                    'jersey_number': f"Jersey number {jersey_number} is already taken by another player in team '{team.name}'."
+                })
+        
+        return data
 
     def create(self, validated_data):
         from django.db import transaction
