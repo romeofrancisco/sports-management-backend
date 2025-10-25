@@ -56,7 +56,7 @@ class ScoreUpdateSerializer(serializers.ModelSerializer):
         model = ScoreUpdate
         fields = [
             'id', 'game', 'team', 'team_name', 'points', 'period', 
-            'updated_by', 'updated_by_name', 'reason', 'timestamp'
+            'updated_by', 'updated_by_name', 'timestamp'
         ]
         read_only_fields = ['id', 'timestamp', 'team_name', 'updated_by_name']
 
