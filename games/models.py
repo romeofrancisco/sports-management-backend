@@ -831,11 +831,6 @@ class ScoreUpdate(models.Model):
     updated_by = models.ForeignKey(
         "users.User", on_delete=models.SET_NULL, null=True, related_name="score_updates"
     )
-    reason = models.CharField(
-        max_length=100, 
-        blank=True, 
-        help_text="Optional reason for score update"
-    )
     timestamp = models.DateTimeField(auto_now_add=True)
     
     class Meta:
