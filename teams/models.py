@@ -185,6 +185,15 @@ class Coach(models.Model):
     def can_be_hard_deleted(self):
         """Check if coach can be safely hard deleted"""
         return not self.has_associated_data()
+    
+    def delete(self, *args, **kwargs):
+        """Override delete to also delete the associated user account"""
+        user = self.user
+        # First delete the coach instance
+        super().delete(*args, **kwargs)
+        # Then delete the user account
+        if user:
+            user.delete()
 
 class PlayerManager(models.Manager):
     def active_in_game(self, game):
@@ -312,3 +321,12 @@ class Player(models.Model):
     def can_be_hard_deleted(self):
         """Check if player can be safely hard deleted"""
         return not self.has_associated_data()
+    
+    def delete(self, *args, **kwargs):
+        """Override delete to also delete the associated user account"""
+        user = self.user
+        # First delete the player instance
+        super().delete(*args, **kwargs)
+        # Then delete the user account
+        if user:
+            user.delete()

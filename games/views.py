@@ -1,10 +1,11 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction, models
 from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField, Q
 from rest_framework.pagination import PageNumberPagination
+from django.shortcuts import get_object_or_404
 
 
 def get_coach_teams(coach_profile):
@@ -23,12 +24,14 @@ from .models import (
     GameCoachPermission,
     GameSet,
     StartingLineup,
+    ScoreUpdate,
 )
 from teams.models import Player
 from sports.models import SportStatType, Sport
 from users.models import User
 from .serializers import (
     GameSerializer,
+    GameDetailSerializer,
     GameActionSerializer,
     PlayerStatRecordSerializer,
     RecordableStatSerializer,
@@ -38,6 +41,8 @@ from .serializers import (
     SubstitutionSerializer,
     GameCurrentPlayersSerializer,
     GameCoachPermissionSerializer,
+    ScoreUpdateSerializer,
+    GameScoreSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
 from sports_management.permissions import (
@@ -463,6 +468,13 @@ class GameViewSet(viewsets.ModelViewSet):
     filterset_class = GameFilter
     pagination_class = GamePagination
 
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return GameDetailSerializer
+        elif self.action in ['update_score', 'set_score']:
+            return GameScoreSerializer
+        return GameSerializer
+
     def get_permissions(self):
         """
         Instantiate and return the list of permissions that this view requires.
@@ -706,6 +718,136 @@ class GameViewSet(viewsets.ModelViewSet):
             send_score_update(game)
 
         return Response(GameSerializer(game).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def add_score(self, request, pk=None):
+        """Add points to a team's score (for scoreboard-only sports)"""
+        game = self.get_object()
+        
+        if game.sport.requires_stats:
+            return Response(
+                {'error': 'Use player stats for stat-tracking sports'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        team_id = request.data.get('team_id')
+        points = request.data.get('points')
+
+        if not team_id or points is None:
+            return Response(
+                {'error': 'team_id and points are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate team
+        if team_id == game.home_team.id:
+            team = game.home_team
+        elif team_id == game.away_team.id:
+            team = game.away_team
+        else:
+            return Response(
+                {'error': 'Invalid team_id'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Store old scores for WebSocket comparison
+            old_home_score = game.home_team_score
+            old_away_score = game.away_team_score
+
+            with transaction.atomic():
+                game.add_score(
+                    team=team, 
+                    points=int(points), 
+                    updated_by=request.user,
+                )
+
+            # Send WebSocket update if scores changed
+            if (
+                game.home_team_score != old_home_score
+                or game.away_team_score != old_away_score
+            ):
+                send_score_update(game)
+                
+            return Response({
+                'message': f'Added {points} points to {team.name}',
+                'game': GameSerializer(game).data
+            })
+        except ValidationError as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=True, methods=["post"])
+    def set_score(self, request, pk=None):
+        """Set exact scores for both teams (for scoreboard-only sports)"""
+        game = self.get_object()
+        
+        if game.sport.requires_stats:
+            return Response(
+                {'error': 'Use player stats for stat-tracking sports'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        home_score = request.data.get('home_score')
+        away_score = request.data.get('away_score')
+
+        if home_score is None or away_score is None:
+            return Response(
+                {'error': 'home_score and away_score are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Store old scores for WebSocket comparison
+            old_home_score = game.home_team_score
+            old_away_score = game.away_team_score
+
+            with transaction.atomic():
+                game.set_score(
+                    home_score=int(home_score), 
+                    away_score=int(away_score),
+                    updated_by=request.user
+                )
+
+            # Send WebSocket update if scores changed
+            if (
+                game.home_team_score != old_home_score
+                or game.away_team_score != old_away_score
+            ):
+                send_score_update(game)
+                
+            return Response({
+                'message': f'Set scores: {game.home_team.name} {home_score} - {game.away_team.name} {away_score}',
+                'game': GameSerializer(game).data
+            })
+        except ValidationError as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=True, methods=['get'])
+    def score_updates(self, request, pk=None):
+        """Get score update history for a game"""
+        game = self.get_object()
+        
+        if game.sport.requires_stats:
+            return Response(
+                {'error': 'Score updates not available for stat-tracking sports'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        updates = game.score_updates.select_related('team', 'updated_by').all()
+        
+        from .serializers import ScoreUpdateSerializer
+        serializer = ScoreUpdateSerializer(updates, many=True)
+        
+        return Response({
+            'score_updates': serializer.data,
+            'total_count': updates.count()
+        })
 
     @action(detail=True, methods=["get"])
     def players(self, request, pk=None):
@@ -1387,3 +1529,64 @@ class SubstitutionViewSet(viewsets.ModelViewSet):
         substitution = self.get_object()
         substitution.delete()
         return Response({"status": "Substitution undone"}, status=status.HTTP_200_OK)
+
+
+class ScoreUpdateViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing score updates (for scoreboard-only sports)"""
+    queryset = ScoreUpdate.objects.all()
+    serializer_class = ScoreUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        game_id = self.request.query_params.get('game_id')
+        if game_id:
+            queryset = queryset.filter(game_id=game_id)
+        return queryset.select_related('game', 'team', 'updated_by')
+
+    def perform_create(self, serializer):
+        game_id = self.request.query_params.get('game_id')
+        if game_id:
+            try:
+                game = Game.objects.get(id=game_id)
+                serializer.save(
+                    updated_by=self.request.user, 
+                    game=game,
+                )
+            except Game.DoesNotExist:
+                raise ValidationError("Game not found")
+        else:
+            serializer.save(updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        # Prevent updates to score updates for audit trail
+        return Response(
+            {'error': 'Score updates cannot be modified'}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    def perform_destroy(self, instance):
+        # Allow deletion but update game scores afterward
+        game = instance.game
+        super().perform_destroy(instance)
+        if not game.sport.requires_stats:
+            game.update_scores_manual()
+
+
+class ScoreUpdateCreateView(generics.CreateAPIView):
+    """Create view for score updates with game ID in URL path"""
+    serializer_class = ScoreUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        game_id = self.kwargs['game_id']
+        game = get_object_or_404(Game, id=game_id)
+        
+        # Validate that the game allows manual score updates
+        if game.sport.requires_stats:
+            raise ValidationError("Manual score updates not allowed for stat-tracking sports")
+        
+        serializer.save(
+            updated_by=self.request.user, 
+            game=game,
+        )

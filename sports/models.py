@@ -14,6 +14,10 @@ class Sport(models.Model):
         POINTS = "points", "Points"
         SETS = "sets", "Sets"
 
+    requires_stats = models.BooleanField(
+        default=True,
+        help_text="Whether this sport requires individual player statistics tracking"
+    )
     scoring_type = models.CharField(
         max_length=20, choices=SCORING_TYPES, default="points"
     )

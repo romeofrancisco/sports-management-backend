@@ -172,6 +172,98 @@ class Game(models.Model):
             setattr(self, field, value)
         self.save(update_fields=list(scores.keys()))
 
+    def update_scores_manual(self):
+        """Update scores for scoreboard-only sports based on ScoreUpdate records"""
+        if self.sport.requires_stats:
+            # Use existing stat-based calculation
+            self.update_scores()
+            return
+
+        # For scoreboard-only sports, calculate from ScoreUpdate records
+        home_score = self.score_updates.filter(
+            team=self.home_team,
+            period__lte=self.current_period
+        ).aggregate(total=Sum('points'))['total'] or 0
+
+        away_score = self.score_updates.filter(
+            team=self.away_team,
+            period__lte=self.current_period
+        ).aggregate(total=Sum('points'))['total'] or 0
+
+        # For set-based sports, update current set scores
+        if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            current_set_home = self.score_updates.filter(
+                team=self.home_team,
+                period=self.current_period
+            ).aggregate(total=Sum('points'))['total'] or 0
+
+            current_set_away = self.score_updates.filter(
+                team=self.away_team,
+                period=self.current_period
+            ).aggregate(total=Sum('points'))['total'] or 0
+
+            self.home_team_score = current_set_home
+            self.away_team_score = current_set_away
+        else:
+            self.home_team_score = home_score
+            self.away_team_score = away_score
+
+        self.save(update_fields=['home_team_score', 'away_team_score', 'updated_at'])
+
+    def add_score(self, team, points, period=None, updated_by=None):
+        """
+        Add points to a team's score
+        Args:
+            team: Team object
+            points: Number of points to add (can be negative)
+            period: Period number (defaults to current_period)
+            updated_by: User who made the update
+        """
+        if self.sport.requires_stats:
+            raise ValidationError("Use PlayerStat for stat-tracking sports")
+
+        period = period or self.current_period
+        
+        ScoreUpdate.objects.create(
+            game=self,
+            team=team,
+            points=points,
+            period=period,
+            updated_by=updated_by,
+        )
+
+    def set_score(self, home_score, away_score, updated_by=None):
+        """
+        Set exact scores for both teams (replaces current scores)
+        """
+        if self.sport.requires_stats:
+            raise ValidationError("Use PlayerStat for stat-tracking sports")
+
+        # Calculate the difference needed
+        current_home = self.home_team_score
+        current_away = self.away_team_score
+        
+        home_diff = home_score - current_home
+        away_diff = away_score - current_away
+
+        if home_diff != 0:
+            ScoreUpdate.objects.create(
+                game=self,
+                team=self.home_team,
+                points=home_diff,
+                period=self.current_period,
+                updated_by=updated_by,
+            )
+
+        if away_diff != 0:
+            ScoreUpdate.objects.create(
+                game=self,
+                team=self.away_team,
+                points=away_diff,
+                period=self.current_period,
+                updated_by=updated_by,
+            )
+
     def validate_game_state(self, action):
         """
         Validate game state before proceeding to next period or completing game
@@ -350,7 +442,9 @@ class Game(models.Model):
                 {"error": "Please specify a start date before launching the game."}
             )
 
-        self.validate_starting_lineup()
+        # Only validate lineup for stat-tracking sports
+        if self.sport.requires_stats:
+            self.validate_starting_lineup()
 
         # Initialize first set for set-based sports
         if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
@@ -497,6 +591,11 @@ class Game(models.Model):
 
     def validate_starting_lineup(self):
         sport = self.sport
+        
+        # Skip lineup validation for scoreboard-only sports
+        if not sport.requires_stats:
+            return
+        
         errors = []
 
         for team, label in [(self.home_team, "Home"), (self.away_team, "Away")]:
@@ -720,6 +819,91 @@ class GameSet(models.Model):
         unique_together = ("game", "period")
         ordering = ["period"]
 
+class ScoreUpdate(models.Model):
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="score_updates")
+    team = models.ForeignKey("teams.Team", on_delete=models.CASCADE)
+    points = models.IntegerField(help_text="Points added (can be negative for corrections)")
+    period = models.PositiveIntegerField()
+    updated_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, related_name="score_updates"
+    )
+    timestamp = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["game", "team"]),
+            models.Index(fields=["period"]),
+        ]
+
+    def clean(self):
+        if self.game.status != Game.Status.IN_PROGRESS:
+            raise ValidationError("Scores can only be updated for in-progress games")
+        if self.team not in [self.game.home_team, self.game.away_team]:
+            raise ValidationError("Team is not part of this game")
+        if self.game.sport.requires_stats:
+            raise ValidationError("Manual score updates not allowed for stat-tracking sports")
+        
+        # Validate game rules even for scoreboard-only sports
+        game = self.game
+        sport = game.sport
+        
+        # Calculate what the new scores would be after this update
+        if self.team == game.home_team:
+            new_home_score = game.home_team_score + self.points
+            new_away_score = game.away_team_score
+        else:
+            new_home_score = game.home_team_score
+            new_away_score = game.away_team_score + self.points
+            
+        # Prevent negative scores
+        if new_home_score < 0 or new_away_score < 0:
+            raise ValidationError("Score cannot be negative")
+
+        # Validate scoring rules based on sport type
+        # Check if a team has ALREADY won before this score update
+        if sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            if sport.win_points_threshold and sport.win_margin:
+                if (
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Home team has already won this set, please advance to the next set"
+                    )
+                if (
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Away team has already won this set, please advance to the next set"
+                    )
+        else:
+            # Point-based sports validation
+            if sport.win_points_threshold and sport.win_margin:
+                if (
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Home team has already won the game"
+                    )
+                if (
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Away team has already won the game"
+                    )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+        # Update game scores after saving
+        self.game.update_scores_manual()
+
+    def __str__(self):
+        return f"{self.team.name}: {'+' if self.points >= 0 else ''}{self.points} pts"
 
 class PlayerStat(models.Model):
     player = models.ForeignKey(
@@ -738,6 +922,12 @@ class PlayerStat(models.Model):
         ordering = ["-timestamp"]
 
     def clean(self):
+        # Check if sport requires stats
+        if not self.game.sport.requires_stats:
+            raise ValidationError(
+                "This sport does not support individual player statistics"
+            )
+        
         if self.game.status != Game.Status.IN_PROGRESS:
             raise ValidationError(
                 "Stats can only be recorded for in-progress games"
