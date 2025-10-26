@@ -210,7 +210,7 @@ class Game(models.Model):
 
         self.save(update_fields=['home_team_score', 'away_team_score', 'updated_at'])
 
-    def add_score(self, team, points, period=None, updated_by=None, reason=""):
+    def add_score(self, team, points, period=None, updated_by=None):
         """
         Add points to a team's score
         Args:
@@ -218,7 +218,6 @@ class Game(models.Model):
             points: Number of points to add (can be negative)
             period: Period number (defaults to current_period)
             updated_by: User who made the update
-            reason: Optional reason for the update
         """
         if self.sport.requires_stats:
             raise ValidationError("Use PlayerStat for stat-tracking sports")
@@ -231,10 +230,9 @@ class Game(models.Model):
             points=points,
             period=period,
             updated_by=updated_by,
-            reason=reason
         )
 
-    def set_score(self, home_score, away_score, updated_by=None, reason="Manual score set"):
+    def set_score(self, home_score, away_score, updated_by=None):
         """
         Set exact scores for both teams (replaces current scores)
         """
@@ -255,7 +253,6 @@ class Game(models.Model):
                 points=home_diff,
                 period=self.current_period,
                 updated_by=updated_by,
-                reason=reason
             )
 
         if away_diff != 0:
@@ -265,7 +262,6 @@ class Game(models.Model):
                 points=away_diff,
                 period=self.current_period,
                 updated_by=updated_by,
-                reason=reason
             )
 
     def validate_game_state(self, action):
@@ -845,11 +841,60 @@ class ScoreUpdate(models.Model):
             raise ValidationError("Scores can only be updated for in-progress games")
         if self.team not in [self.game.home_team, self.game.away_team]:
             raise ValidationError("Team is not part of this game")
-        if not self.game.sport.requires_stats:
-            # For scoreboard-only sports, allow manual updates
-            pass
-        else:
+        if self.game.sport.requires_stats:
             raise ValidationError("Manual score updates not allowed for stat-tracking sports")
+        
+        # Validate game rules even for scoreboard-only sports
+        game = self.game
+        sport = game.sport
+        
+        # Calculate what the new scores would be after this update
+        if self.team == game.home_team:
+            new_home_score = game.home_team_score + self.points
+            new_away_score = game.away_team_score
+        else:
+            new_home_score = game.home_team_score
+            new_away_score = game.away_team_score + self.points
+            
+        # Prevent negative scores
+        if new_home_score < 0 or new_away_score < 0:
+            raise ValidationError("Score cannot be negative")
+
+        # Validate scoring rules based on sport type
+        # Check if a team has ALREADY won before this score update
+        if sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            if sport.win_points_threshold and sport.win_margin:
+                if (
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Home team has already won this set, please advance to the next set"
+                    )
+                if (
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Away team has already won this set, please advance to the next set"
+                    )
+        else:
+            # Point-based sports validation
+            if sport.win_points_threshold and sport.win_margin:
+                if (
+                    game.home_team_score >= sport.win_points_threshold
+                    and (game.home_team_score - game.away_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Home team has already won the game"
+                    )
+                if (
+                    game.away_team_score >= sport.win_points_threshold
+                    and (game.away_team_score - game.home_team_score) >= sport.win_margin
+                ):
+                    raise ValidationError(
+                        "Away team has already won the game"
+                    )
 
     def save(self, *args, **kwargs):
         self.full_clean()

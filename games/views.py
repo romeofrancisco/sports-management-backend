@@ -1,10 +1,11 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction, models
 from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField, Q
 from rest_framework.pagination import PageNumberPagination
+from django.shortcuts import get_object_or_404
 
 
 def get_coach_teams(coach_profile):
@@ -731,7 +732,6 @@ class GameViewSet(viewsets.ModelViewSet):
 
         team_id = request.data.get('team_id')
         points = request.data.get('points')
-        reason = request.data.get('reason', '')
 
         if not team_id or points is None:
             return Response(
@@ -760,7 +760,6 @@ class GameViewSet(viewsets.ModelViewSet):
                     team=team, 
                     points=int(points), 
                     updated_by=request.user,
-                    reason=reason
                 )
 
             # Send WebSocket update if scores changed
@@ -793,7 +792,6 @@ class GameViewSet(viewsets.ModelViewSet):
 
         home_score = request.data.get('home_score')
         away_score = request.data.get('away_score')
-        reason = request.data.get('reason', 'Manual score set')
 
         if home_score is None or away_score is None:
             return Response(
@@ -810,8 +808,7 @@ class GameViewSet(viewsets.ModelViewSet):
                 game.set_score(
                     home_score=int(home_score), 
                     away_score=int(away_score),
-                    updated_by=request.user,
-                    reason=reason
+                    updated_by=request.user
                 )
 
             # Send WebSocket update if scores changed
@@ -1548,7 +1545,18 @@ class ScoreUpdateViewSet(viewsets.ModelViewSet):
         return queryset.select_related('game', 'team', 'updated_by')
 
     def perform_create(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        game_id = self.request.query_params.get('game_id')
+        if game_id:
+            try:
+                game = Game.objects.get(id=game_id)
+                serializer.save(
+                    updated_by=self.request.user, 
+                    game=game,
+                )
+            except Game.DoesNotExist:
+                raise ValidationError("Game not found")
+        else:
+            serializer.save(updated_by=self.request.user)
 
     def perform_update(self, serializer):
         # Prevent updates to score updates for audit trail
@@ -1563,3 +1571,22 @@ class ScoreUpdateViewSet(viewsets.ModelViewSet):
         super().perform_destroy(instance)
         if not game.sport.requires_stats:
             game.update_scores_manual()
+
+
+class ScoreUpdateCreateView(generics.CreateAPIView):
+    """Create view for score updates with game ID in URL path"""
+    serializer_class = ScoreUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        game_id = self.kwargs['game_id']
+        game = get_object_or_404(Game, id=game_id)
+        
+        # Validate that the game allows manual score updates
+        if game.sport.requires_stats:
+            raise ValidationError("Manual score updates not allowed for stat-tracking sports")
+        
+        serializer.save(
+            updated_by=self.request.user, 
+            game=game,
+        )

@@ -12,9 +12,12 @@ router = DefaultRouter()
 router.register(r'player-stats', PlayerStatViewSet, basename='player_stat')
 router.register(r'games', GameViewSet, basename='game')
 router.register(r'substitutions', SubstitutionViewSet, basename='substitution')
-router.register(r'score-updates', ScoreUpdateViewSet, basename='score_update')
 router.register(r'player-improvements', PlayerImprovementViewSet, basename='player_improvement')
+
+# Custom URL for score updates with game ID in path
+from .views import ScoreUpdateCreateView
 
 urlpatterns = [
     path('', include(router.urls)),
-    ]
+    path('score-updates/<int:game_id>/', ScoreUpdateCreateView.as_view(), name='score_update_create'),
+]
