@@ -2,9 +2,6 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import environ
-import cloudinary
-import cloudinary.uploader
-import cloudinary.api
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -52,6 +49,8 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "django_filters",
+    "cloudinary_storage",
+    "cloudinary",
     "users",
     "sports",
     "teams",
@@ -61,6 +60,7 @@ INSTALLED_APPS = [
     "trainings",
     "dashboard",
     "chat",
+    "documents",
 ]
 
 MIDDLEWARE = [
@@ -129,13 +129,22 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
-# Cloud Storage
+# Cloudinary Configuration
 CLOUDINARY_STORAGE = {
     "CLOUD_NAME": env("CLOUDINARY_NAME"),
     "API_KEY": env("CLOUDINARY_API_KEY"),
     "API_SECRET": env("CLOUDINARY_API_SECRET"),
 }
-DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+
+# Use Cloudinary storage (Django 4.2+ format)
+STORAGES = {
+    "default": {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 
 # Database
@@ -189,8 +198,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
-MEDIA_URL='/media/'
-MEDIA_ROOT=os.path.join(BASE_DIR,'media')
+
+# Cloudinary URLs (these will be automatically handled by Cloudinary)
+MEDIA_URL = '/media/'  # This will be overridden by Cloudinary
+# MEDIA_ROOT not needed when using Cloudinary
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

@@ -1,5 +1,4 @@
 from django.db import models
-import cloudinary.models
 from sports.models import Sport, Position
 from django.conf import settings
 from django.db.models import Q, F, Max, Exists, OuterRef
