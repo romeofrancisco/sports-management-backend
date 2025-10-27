@@ -1,7 +1,5 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
-import cloudinary.models
-from django.utils.text import slugify
 
 
 class CustomUserManager(BaseUserManager):

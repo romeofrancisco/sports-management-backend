@@ -336,6 +336,25 @@ class PlayerInfoSerializer(ModelSerializer):
         
         return data
 
+    def to_internal_value(self, data):
+        """
+        Override to properly group user fields together
+        """
+        internal_value = super().to_internal_value(data)
+        
+        # Extract user-related fields and group them
+        user_fields = ['profile', 'first_name', 'last_name', 'sex', 'email', 'password']
+        user_data = {}
+        
+        for field in user_fields:
+            if field in internal_value:
+                user_data[field] = internal_value.pop(field)
+        
+        if user_data:
+            internal_value['user'] = user_data
+            
+        return internal_value
+
     def create(self, validated_data):
         from django.db import transaction
         

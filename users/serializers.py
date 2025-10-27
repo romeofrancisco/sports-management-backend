@@ -98,7 +98,7 @@ class UserSerializer(ModelSerializer):
 
 
 class PlayerSerializer(ModelSerializer):
-    profile = serializers.SerializerMethodField()
+    profile = serializers.ImageField(required=False)
     
     class Meta:
         model = User
@@ -113,14 +113,6 @@ class PlayerSerializer(ModelSerializer):
         )
         extra_kwargs = {"password": {"write_only": True}}
         read_only_fields = ("id",)
-
-    def get_profile(self, obj):
-        if obj.profile:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.profile.url)
-            return obj.profile.url
-        return None
 
     def create(self, validated_data):
         user = User.objects.create_player(**validated_data)
