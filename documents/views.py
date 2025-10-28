@@ -351,6 +351,87 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
+    @action(detail=True, methods=['patch'])
+    def rename(self, request, pk=None):
+        """Rename a document"""
+        import cloudinary.uploader
+        import os
+        
+        document = self.get_object()
+        
+        if not document.can_edit(request.user):
+            return Response(
+                {"error": "You don't have permission to rename this document"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        new_title = request.data.get('title')
+        if not new_title:
+            return Response(
+                {"error": "New title is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get the old file and extract the public_id from the file field
+        if document.file:
+            try:
+                # Get the file name from the FileField (this is the path stored in database)
+                # Format: documents/filename.ext
+                old_file_name = document.file.name
+                
+                # Get the file extension
+                file_extension = os.path.splitext(old_file_name)[1]
+                
+                # Remove extension to get the public_id
+                # The file.name is already the correct path without 'media/' prefix
+                old_public_id = os.path.splitext(old_file_name)[0]
+                
+                # Create new public_id with the same folder structure but new filename
+                # Keep the folder path (e.g., 'documents/'), just change the filename
+                folder_path = os.path.dirname(old_public_id)
+                new_filename = new_title.replace(' ', '_')  # Replace spaces with underscores
+                new_public_id = os.path.join(folder_path, new_filename).replace('\\', '/')
+                
+                # Rename the file in Cloudinary
+                # MediaCloudinaryStorage stores files as 'image' type by default
+                # Try image first, fall back to raw if it fails
+                try:
+                    cloudinary.uploader.rename(
+                        old_public_id,
+                        new_public_id,
+                        resource_type='image',
+                        invalidate=True
+                    )
+                except Exception as img_error:
+                    # If image fails, try raw
+                    try:
+                        cloudinary.uploader.rename(
+                            old_public_id,
+                            new_public_id,
+                            resource_type='raw',
+                            invalidate=True
+                        )
+                    except Exception as raw_error:
+                        raise Exception(f"Failed with both image and raw types. Image error: {img_error}, Raw error: {raw_error}")
+                
+                # Update the document's file field with new public_id
+                document.file.name = f"{new_public_id}{file_extension}"
+                
+            except Exception as e:
+                return Response(
+                    {"error": f"Failed to rename file in storage: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        # Update the title in database
+        document.title = new_title
+        document.save()
+        
+        return Response(
+            DocumentDetailSerializer(document).data,
+            status=status.HTTP_200_OK
+        )
+    
     @action(detail=True, methods=['get'])
     def copies(self, request, pk=None):
         """Get all copies of a document"""
