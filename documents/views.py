@@ -57,43 +57,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         return FolderListSerializer
     
     def perform_create(self, serializer):
-        user = self.request.user
-        
-        # Enforce role-based creation rules server-side as well
-        folder_type = serializer.validated_data.get('folder_type')
-        parent = serializer.validated_data.get('parent')
-        owner = serializer.validated_data.get('owner')
-
-        # Root-level folders are admin-only
-        if folder_type in [Folder.FolderType.PUBLIC, Folder.FolderType.COACHES, Folder.FolderType.ADMIN_PRIVATE]:
-            if not user.is_admin:
-                raise permissions.PermissionDenied("Only admin can create root folders")
-
-        # Coach personal folders must be created by admin only (signals handle automatic creation)
-        if folder_type == Folder.FolderType.COACH_PERSONAL and not user.is_admin:
-            raise permissions.PermissionDenied("Only admin can create coach personal folders")
-
-        # Players folder: only admin or the owning coach can create
-        if folder_type == Folder.FolderType.PLAYERS:
-            if not user.is_admin:
-                if not getattr(user, 'is_coach', False) or not parent or parent.owner != user:
-                    raise permissions.PermissionDenied("Only the owning coach or admin can create a Players folder")
-
-        # Player personal folder creation rules
-        if folder_type == Folder.FolderType.PLAYER_PERSONAL:
-            # Admin allowed
-            if not user.is_admin:
-                # Coach may create player personal under their Players folder
-                if getattr(user, 'is_coach', False):
-                    if not parent or not parent.parent or parent.parent.owner != user:
-                        raise permissions.PermissionDenied("Coaches can only create player folders under their own Players folder")
-                # Player may create their own personal folder
-                elif getattr(user, 'is_player', False):
-                    if owner != user:
-                        raise permissions.PermissionDenied("Players can only create their own personal folder")
-                else:
-                    raise permissions.PermissionDenied("You don't have permission to create player personal folders")
-
+        # The serializer now handles all the logic for determining folder_type and owner
         serializer.save()
     
     @action(detail=True, methods=['get'])
@@ -193,12 +157,13 @@ class FolderViewSet(viewsets.ModelViewSet):
             'folders': FolderListSerializer(root_folders, many=True).data
         }
 
-        # If coach, include documents directly under their personal folder
+        # If coach, include documents directly under their personal folder and the folder ID
         if user.is_coach and coach_folder:
             coach_documents = coach_folder.documents.select_related('owner', 'uploaded_by').all()
             result['documents'] = DocumentListSerializer(coach_documents, many=True).data
+            result['personal_folder_id'] = coach_folder.id  # Add personal folder ID for uploads/folder creation
 
-        # If player, include documents directly under their personal folder
+        # If player, include documents directly under their personal folder and the folder ID
         if user.is_player and player_folder:
             player_documents = player_folder.documents.select_related('owner', 'uploaded_by').all()
             # Merge with any existing documents key
@@ -206,6 +171,7 @@ class FolderViewSet(viewsets.ModelViewSet):
                 result['documents'].extend(DocumentListSerializer(player_documents, many=True).data)
             else:
                 result['documents'] = DocumentListSerializer(player_documents, many=True).data
+            result['personal_folder_id'] = player_folder.id  # Add personal folder ID for uploads/folder creation
 
         return Response(result)
 

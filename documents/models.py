@@ -74,6 +74,7 @@ class Document(models.Model):
     
     title = models.CharField(max_length=255)
     file = models.FileField(upload_to='documents/')
+    file_extension = models.CharField(max_length=10, blank=True)
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents')
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_documents')
