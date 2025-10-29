@@ -66,6 +66,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         Get folder contents (subfolders and documents).
         Optimized with select_related and prefetch_related.
         Coaches only see their own folder when browsing Coaches root folder.
+        Coaches only see player folders for their assigned players.
         """
         folder = self.get_object()
         
@@ -82,6 +83,24 @@ class FolderViewSet(viewsets.ModelViewSet):
         if folder.folder_type == Folder.FolderType.COACHES and request.user.is_coach:
             # Coaches only see their own personal folder inside Coaches folder
             subfolders = subfolders.filter(owner=request.user)
+        elif folder.folder_type == Folder.FolderType.PLAYERS and request.user.is_coach:
+            # Coaches only see player folders for players in their teams
+            from teams.models import Team
+            
+            # Get teams coached by this coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach__user=request.user) | Q(assistant_coach__user=request.user)
+            )
+            
+            # Get player users from these teams
+            from users.models import User
+            player_users = User.objects.filter(
+                role=User.Role.PLAYER,
+                player_profile__team__in=coached_teams
+            ).distinct()
+            
+            # Filter subfolders to only show folders owned by these players
+            subfolders = subfolders.filter(owner__in=player_users)
         
         documents = folder.documents.select_related('folder', 'owner', 'uploaded_by').all()
         
