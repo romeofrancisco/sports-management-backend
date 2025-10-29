@@ -9,6 +9,7 @@ from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer, DocumentCreateSerializer,
     DocumentCopySerializer, DocumentPermissionSerializer
 )
+from .folder_utils import get_user_personal_folder, ensure_root_folders
 
 
 class FolderViewSet(viewsets.ModelViewSet):
@@ -116,8 +117,13 @@ class FolderViewSet(viewsets.ModelViewSet):
         Get root folders accessible by user.
         Only returns top-level folders, not nested structure.
         Optimized to avoid loading all folders.
+        
+        AUTO-RECOVERY: If personal folders are missing, they will be automatically recreated.
         """
         user = request.user
+        
+        # Ensure root folders exist (auto-recovery)
+        ensure_root_folders()
         
         root_folders = []
         
@@ -148,10 +154,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         if user.is_coach:
             # Coach sees the CONTENTS of their personal folder directly at root
             # Not the folder itself, but what's inside it (Players folder, their documents, etc.)
-            coach_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.COACH_PERSONAL,
-                owner=user
-            ).first()
+            # AUTO-RECOVERY: Get or create coach's personal folder
+            coach_folder = get_user_personal_folder(user)
             
             if coach_folder:
                 # Get subfolders inside the coach's personal folder
@@ -161,10 +165,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         if user.is_player:
             # Player sees the CONTENTS of their personal folder directly at root
             # Not the folder itself, but what's inside it (subfolders and documents)
-            player_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                owner=user
-            ).first()
+            # AUTO-RECOVERY: Get or create player's personal folder
+            player_folder = get_user_personal_folder(user)
             
             if player_folder:
                 # Get subfolders inside the player's personal folder
@@ -199,6 +201,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         """
         Get the user's personal folder for copy operations.
         Returns the folder ID that non-admin users should copy files to.
+        
+        AUTO-RECOVERY: If personal folder is missing, it will be automatically recreated.
         """
         user = request.user
         
@@ -207,18 +211,8 @@ class FolderViewSet(viewsets.ModelViewSet):
                 'error': 'Admins do not have a specific personal folder'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        personal_folder = None
-        
-        if user.is_coach:
-            personal_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.COACH_PERSONAL,
-                owner=user
-            ).first()
-        elif user.is_player:
-            personal_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                owner=user
-            ).first()
+        # Use auto-recovery utility
+        personal_folder = get_user_personal_folder(user)
         
         if not personal_folder:
             return Response({
