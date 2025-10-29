@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils.text import slugify
 from django.core.exceptions import ValidationError
+from utils.file_uploads import sport_banner_upload_path
 
 
 class ActiveSportManager(models.Manager):
@@ -23,7 +24,7 @@ class Sport(models.Model):
     )
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(unique=True, blank=True)
-    banner = models.ImageField(upload_to="sport_banner/", null=True, blank=True)
+    banner = models.ImageField(upload_to=sport_banner_upload_path, null=True, blank=True)
     max_players_per_team = models.PositiveIntegerField(
         default=12,  # Add default value
         help_text="Maximum players allowed per team roster",

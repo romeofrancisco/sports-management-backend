@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
+from utils.file_uploads import user_profile_upload_path
 
 
 class CustomUserManager(BaseUserManager):
@@ -50,7 +51,7 @@ class User(AbstractUser):
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     sex = models.CharField(max_length=10, choices=Sex.choices, default=Sex.MALE)
-    profile = models.ImageField(upload_to="users/", null=True, blank=True)
+    profile = models.ImageField(upload_to=user_profile_upload_path, null=True, blank=True)
     role = models.CharField(choices=Role, default=Role.PLAYER, max_length=10)
     date_of_birth = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)

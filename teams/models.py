@@ -5,6 +5,7 @@ from django.db.models import Q, F, Max, Exists, OuterRef
 from games.models import Game 
 from django.utils.text import slugify
 from games.models import Substitution
+from utils.file_uploads import team_logo_upload_path, player_photo_upload_path
 
 class TeamManager(models.Manager):
     def active(self):
@@ -27,7 +28,7 @@ class Team(models.Model):
     division = models.CharField(max_length=10, choices=Division.choices, default=Division.MALE)
     head_coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='head_coached_teams')
     assistant_coach = models.ForeignKey('teams.Coach', on_delete=models.SET_NULL, null=True, blank=True, related_name='assistant_coached_teams')
-    logo = models.ImageField(upload_to="team_logos/", null=True, blank=True)
+    logo = models.ImageField(upload_to=team_logo_upload_path, null=True, blank=True)
     slug = models.SlugField(unique=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
