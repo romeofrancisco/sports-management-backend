@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from documents.models import Folder
 from users.models import User
 
@@ -46,25 +47,44 @@ class Command(BaseCommand):
             if created:
                 coach_count += 1
                 self.stdout.write(self.style.SUCCESS(f'  ✓ Created folder for coach: {coach.get_full_name()}'))
-                
-                # Create Players subfolder for each coach
-                players_folder, _ = Folder.objects.get_or_create(
-                    name='Players',
-                    folder_type=Folder.FolderType.PLAYERS,
-                    parent=coach_folder,
-                    owner=coach
+            
+            # Create Players subfolder for each coach
+            players_folder, _ = Folder.objects.get_or_create(
+                name='Players',
+                folder_type=Folder.FolderType.PLAYERS,
+                parent=coach_folder,
+                owner=coach
+            )
+            
+            # Get players from teams where this coach is head coach or assistant coach
+            from teams.models import Team, Player
+            
+            # Get teams coached by this coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach__user=coach) | Q(assistant_coach__user=coach)
+            )
+            
+            # Get all players from these teams
+            player_users = User.objects.filter(
+                role=User.Role.PLAYER,
+                player_profile__team__in=coached_teams
+            ).distinct()
+            
+            player_folder_count = 0
+            for player in player_users:
+                player_folder, player_created = Folder.objects.get_or_create(
+                    name=f"{player.get_full_name()}",
+                    folder_type=Folder.FolderType.PLAYER_PERSONAL,
+                    parent=players_folder,
+                    owner=player
                 )
-                
-                # Create personal folders for coach's players
-                # You can customize this logic based on your team/player assignment
-                players = User.objects.filter(role=User.Role.PLAYER)
-                for player in players:
-                    player_folder, _ = Folder.objects.get_or_create(
-                        name=f"{player.get_full_name()}",
-                        folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                        parent=players_folder,
-                        owner=player
-                    )
+                if player_created:
+                    player_folder_count += 1
+            
+            if player_folder_count > 0:
+                self.stdout.write(self.style.SUCCESS(f'    ✓ Created {player_folder_count} player folders for {coach.get_full_name()}'))
+            elif player_users.count() == 0:
+                self.stdout.write(self.style.WARNING(f'    No players assigned to teams coached by {coach.get_full_name()}'))
         
         if coach_count > 0:
             self.stdout.write(self.style.SUCCESS(f'✓ Created {coach_count} coach folders'))

@@ -1,4 +1,8 @@
+import os
 from rest_framework import serializers
+from django.db.models import Q
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from .models import Folder, Document, DocumentPermission
 from users.models import User
 
@@ -7,7 +11,7 @@ class UserSimpleSerializer(serializers.ModelSerializer):
     """Simple user serializer for nested representations"""
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'role']
+        fields = ['id', 'email', 'profile', 'first_name', 'last_name', 'role']
 
 
 class FolderListSerializer(serializers.ModelSerializer):
@@ -48,64 +52,157 @@ class FolderDetailSerializer(serializers.ModelSerializer):
 
 
 class FolderCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating folders"""
+    """Serializer for creating folders - simplified for user-created subfolders"""
+    description = serializers.CharField(required=False, allow_blank=True)
+    folder_type = serializers.CharField(required=False, allow_blank=True)
+    
     class Meta:
         model = Folder
-        fields = ['id', 'name', 'folder_type', 'parent', 'owner']
+        fields = ['id', 'name', 'parent', 'description', 'folder_type']
     
     def validate(self, attrs):
-        folder_type = attrs.get('folder_type')
+        """Validate folder name uniqueness within the same parent"""
+        name = attrs.get('name')
         parent = attrs.get('parent')
-        owner = attrs.get('owner')
-        request = self.context.get('request')
-        user = getattr(request, 'user', None)
         
-        # Validate folder hierarchy rules
-        if folder_type == Folder.FolderType.PUBLIC and parent:
-            raise serializers.ValidationError("Public folder cannot have a parent")
+        # Check for duplicate folder names in the same parent (exact match to match DB constraint)
+        existing = Folder.objects.filter(
+            name=name,
+            parent=parent
+        )
         
-        if folder_type == Folder.FolderType.COACHES and parent:
-            raise serializers.ValidationError("Coaches folder cannot have a parent")
+        # Exclude current instance if updating (though this is create-only)
+        if self.instance:
+            existing = existing.exclude(pk=self.instance.pk)
         
-        if folder_type == Folder.FolderType.ADMIN_PRIVATE and parent:
-            raise serializers.ValidationError("Admin private folder cannot have a parent")
-        
-        if folder_type == Folder.FolderType.COACH_PERSONAL:
-            if not parent or parent.folder_type != Folder.FolderType.COACHES:
-                raise serializers.ValidationError("Coach personal folder must be inside Coaches folder")
-            if not owner or not owner.is_coach:
-                raise serializers.ValidationError("Coach personal folder must have a coach as owner")
-            # Only admins may create coach personal folders via the API
-            if user and not getattr(user, 'is_admin', False):
-                raise serializers.ValidationError("Only admins can create coach personal folders")
-        
-        if folder_type == Folder.FolderType.PLAYERS:
-            if not parent or parent.folder_type != Folder.FolderType.COACH_PERSONAL:
-                raise serializers.ValidationError("Players folder must be inside a coach personal folder")
-            # Only admin or the owning coach can create a Players folder
-            if user and not getattr(user, 'is_admin', False):
-                if not getattr(user, 'is_coach', False) or parent.owner != user:
-                    raise serializers.ValidationError("Only the owning coach or admin can create a Players folder")
-        
-        if folder_type == Folder.FolderType.PLAYER_PERSONAL:
-            if not parent or parent.folder_type != Folder.FolderType.PLAYERS:
-                raise serializers.ValidationError("Player personal folder must be inside Players folder")
-            if not owner or not owner.is_player:
-                raise serializers.ValidationError("Player personal folder must have a player as owner")
-            # Admin can create anywhere. Coaches can create player folders under their own Players folder.
-            # Players can create their own personal folder (owner must be the requesting user).
-            if user and not getattr(user, 'is_admin', False):
-                if getattr(user, 'is_coach', False):
-                    # parent.owner should be the coach user
-                    if parent.parent is None or parent.parent.owner != user:
-                        raise serializers.ValidationError("Coaches can only create player folders under their own Players folder")
-                elif getattr(user, 'is_player', False):
-                    if owner != user:
-                        raise serializers.ValidationError("Players can only create their own personal folder")
-                else:
-                    raise serializers.ValidationError("You don't have permission to create player personal folders")
+        if existing.exists():
+            raise serializers.ValidationError({
+                'name': f"A folder named '{name}' already exists."
+            })
         
         return attrs
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        parent = validated_data.get('parent')
+        description = validated_data.pop('description', None)  # Remove description since it's not a model field
+        explicit_folder_type = validated_data.pop('folder_type', None)  # Get explicit folder type if provided
+        
+        # Determine folder_type and owner based on parent and user role
+        if not parent:
+            # Creating root-level folder
+            if explicit_folder_type:
+                # User explicitly specified folder type (admin/coach creating specific types)
+                folder_type = explicit_folder_type
+                
+                # Validate permissions for explicit folder types
+                if folder_type == 'public':
+                    if not user.is_admin:
+                        raise serializers.ValidationError("Only admins can create Public folders")
+                    validated_data['folder_type'] = Folder.FolderType.PUBLIC
+                    validated_data['owner'] = user
+                    
+                elif folder_type == 'coaches':
+                    if not user.is_admin:
+                        raise serializers.ValidationError("Only admins can create Coaches folders")
+                    validated_data['folder_type'] = Folder.FolderType.COACHES
+                    validated_data['owner'] = user
+                    
+                elif folder_type == 'admin_private':
+                    if not user.is_admin:
+                        raise serializers.ValidationError("Only admins can create Admin Private folders")
+                    validated_data['folder_type'] = Folder.FolderType.ADMIN_PRIVATE
+                    validated_data['owner'] = user
+                    
+                elif folder_type == 'coach_personal':
+                    if not user.is_coach and not user.is_admin:
+                        raise serializers.ValidationError("Only coaches can create Coach Personal folders")
+                    validated_data['folder_type'] = Folder.FolderType.COACH_PERSONAL
+                    validated_data['owner'] = user
+                    
+                else:
+                    raise serializers.ValidationError(f"Invalid folder type: {folder_type}")
+            else:
+                # No explicit type - use default behavior
+                if user.is_admin:
+                    # Admin can create admin_private folders at root
+                    validated_data['folder_type'] = Folder.FolderType.ADMIN_PRIVATE
+                    validated_data['owner'] = user
+                else:
+                    raise serializers.ValidationError("Only admins can create root-level folders")
+        else:
+            # Creating subfolder - inherit type based on parent
+            parent_type = parent.folder_type
+            
+            if parent_type == Folder.FolderType.PUBLIC:
+                if not user.is_admin:
+                    raise serializers.ValidationError("Only admins can create folders in Public folder")
+                validated_data['folder_type'] = Folder.FolderType.PUBLIC
+                validated_data['owner'] = user
+            
+            elif parent_type == Folder.FolderType.ADMIN_PRIVATE:
+                if not user.is_admin:
+                    raise serializers.ValidationError("Only admins can create folders in Admin Private folder")
+                validated_data['folder_type'] = Folder.FolderType.ADMIN_PRIVATE
+                validated_data['owner'] = user
+            
+            elif parent_type == Folder.FolderType.COACH_PERSONAL:
+                # Subfolder in coach's personal folder
+                if not user.is_admin and parent.owner != user:
+                    raise serializers.ValidationError("You can only create folders in your own personal folder")
+                validated_data['folder_type'] = Folder.FolderType.COACH_PERSONAL
+                validated_data['owner'] = parent.owner
+            
+            elif parent_type == Folder.FolderType.PLAYER_PERSONAL:
+                # Subfolder in player's personal folder
+                if not user.is_admin and parent.owner != user:
+                    # Check if user is the coach who owns the parent Players folder
+                    if not (user.is_coach and parent.parent and parent.parent.parent and parent.parent.parent.owner == user):
+                        raise serializers.ValidationError("You can only create folders in your own personal folder")
+                validated_data['folder_type'] = Folder.FolderType.PLAYER_PERSONAL
+                validated_data['owner'] = parent.owner
+            
+            elif parent_type == Folder.FolderType.PLAYERS:
+                # Only admin or owning coach can create folders in Players folder
+                if not user.is_admin:
+                    if not (user.is_coach and parent.parent and parent.parent.owner == user):
+                        raise serializers.ValidationError("You can only create folders under your own Players folder")
+                validated_data['folder_type'] = Folder.FolderType.PLAYERS
+                validated_data['owner'] = parent.parent.owner if parent.parent else user
+            
+            else:
+                raise serializers.ValidationError(f"Cannot create subfolders in {parent_type} folder")
+        
+        # Try to create the folder and catch ValidationError or IntegrityError from model
+        try:
+            return super().create(validated_data)
+        except ValidationError as e:
+            # Convert Django ValidationError to DRF ValidationError
+            if hasattr(e, 'message_dict'):
+                raise serializers.ValidationError(e.message_dict)
+            else:
+                raise serializers.ValidationError(str(e))
+        except IntegrityError as e:
+            # Handle unique constraint violation at database level
+            error_message = str(e).lower()
+            folder_name = validated_data.get('name', 'this folder')
+            
+            # Check for various forms of unique constraint violations
+            if any(keyword in error_message for keyword in [
+                'unique constraint', 
+                'unique_together', 
+                'duplicate key',
+                'unique_folder_name_per_parent',
+                'must make a unique set'
+            ]):
+                raise serializers.ValidationError({
+                    'name': f"A folder named '{folder_name}' already exists."
+                })
+            else:
+                raise serializers.ValidationError({
+                    'name': "Unable to create folder. Please try a different name."
+                })
 
 
 class DocumentListSerializer(serializers.ModelSerializer):
@@ -114,12 +211,13 @@ class DocumentListSerializer(serializers.ModelSerializer):
     owner = UserSimpleSerializer(read_only=True)
     folder_name = serializers.CharField(source='folder.name', read_only=True)
     file_size = serializers.SerializerMethodField()
+    file_extension = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'file', 'folder', 'folder_name', 'uploaded_by', 
-            'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'description'
+            'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status']
     
@@ -128,6 +226,12 @@ class DocumentListSerializer(serializers.ModelSerializer):
             return obj.file.size
         except:
             return None
+    
+    def get_file_extension(self, obj):
+        """Return the stored file extension"""
+        if obj.file_extension:
+            return obj.file_extension.upper()
+        return 'FILE'
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):
@@ -138,13 +242,14 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     original_document_detail = serializers.SerializerMethodField()
     copies_count = serializers.SerializerMethodField()
     file_size = serializers.SerializerMethodField()
+    file_extension = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'file', 'folder', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
-            'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size'
+            'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 'file_extension'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status', 'original_document']
     
@@ -165,6 +270,12 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
             return obj.file.size
         except:
             return None
+    
+    def get_file_extension(self, obj):
+        """Return the stored file extension"""
+        if obj.file_extension:
+            return obj.file_extension.upper()
+        return 'FILE'
 
 
 class DocumentCreateSerializer(serializers.ModelSerializer):
@@ -172,6 +283,24 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = ['id', 'title', 'file', 'folder', 'description']
+    
+    def validate(self, attrs):
+        """Validate that document title is unique within the same folder"""
+        title = attrs.get('title')
+        folder = attrs.get('folder')
+        
+        # Check if a document with the same title exists in the same folder
+        duplicate_query = Document.objects.filter(
+            title=title,
+            folder=folder
+        )
+        
+        if duplicate_query.exists():
+            raise serializers.ValidationError({
+                'title': f"A file named '{title}' already exists."
+            })
+        
+        return attrs
     
     def validate_folder(self, value):
         user = self.context['request'].user
@@ -195,7 +324,27 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         validated_data['uploaded_by'] = user
         validated_data['owner'] = user
-        return super().create(validated_data)
+        
+        # Extract and store the file extension
+        file = validated_data.get('file')
+        if file:
+            original_name = file.name
+            _, ext = os.path.splitext(original_name)
+            
+            # Store extension without the dot (e.g., 'pdf', 'docx')
+            if ext and len(ext) > 1:
+                validated_data['file_extension'] = ext[1:].lower()
+        
+        try:
+            return super().create(validated_data)
+        except ValidationError:
+            raise
+        except IntegrityError as e:
+            title = validated_data.get('title')
+            raise serializers.ValidationError({
+                'title': f"A file named '{title}' already exists."
+            })
+
 
 
 class DocumentCopySerializer(serializers.Serializer):

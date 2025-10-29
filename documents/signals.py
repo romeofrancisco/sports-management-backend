@@ -1,8 +1,22 @@
-from django.db.models.signals import post_save, post_migrate
+from django.db.models.signals import post_save, post_migrate, pre_delete
 from django.dispatch import receiver
 from django.apps import apps
+from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from teams.models import Coach, Player
+from users.models import User
 from .models import Folder
+import threading
+
+# Thread-local storage to track when we're in a CASCADE deletion
+_thread_locals = threading.local()
+
+def set_cascade_deletion_active(active=True):
+    """Set flag to indicate CASCADE deletion is in progress"""
+    _thread_locals.cascade_deletion_active = active
+
+def is_cascade_deletion_active():
+    """Check if CASCADE deletion is in progress"""
+    return getattr(_thread_locals, 'cascade_deletion_active', False)
 
 
 @receiver(post_migrate)
@@ -170,3 +184,81 @@ def update_player_folder_on_team_change(sender, instance, created, **kwargs):
                         existing_folder.parent = players_folder
                         existing_folder.save(update_fields=['parent'])
                         print(f"✓ Moved folder for player {player_name} to coach {coach.user.get_full_name()}'s folder")
+
+
+@receiver(pre_delete, sender=User)
+def set_user_cascade_flag(sender, instance, **kwargs):
+    """Mark that we're in a CASCADE deletion when deleting a user"""
+    set_cascade_deletion_active(True)
+
+
+@receiver(pre_delete, sender=Player)
+def set_player_cascade_flag(sender, instance, **kwargs):
+    """Mark that we're in a CASCADE deletion when deleting a player"""
+    set_cascade_deletion_active(True)
+
+
+@receiver(pre_delete, sender=Coach)
+def set_coach_cascade_flag(sender, instance, **kwargs):
+    """Mark that we're in a CASCADE deletion when deleting a coach"""
+    set_cascade_deletion_active(True)
+
+
+@receiver(pre_delete, sender=Folder)
+def prevent_critical_folder_deletion(sender, instance, **kwargs):
+    """
+    Prevent deletion of critical system folders only.
+    This protects against accidental deletion of important folder structures.
+    
+    Protected folders:
+    - Root folders (Public, Coaches) - no parent
+    - System-created personal folders (direct children of Coaches or Players folder)
+    
+    User-created subfolders within personal folders CAN be deleted.
+    
+    EXCEPTION: Allow deletion during CASCADE operations (user/player/coach deletion).
+    """
+    # Allow all deletions during CASCADE (user/player/coach deletion)
+    if is_cascade_deletion_active():
+        return
+    
+    # Root folders - always protected (they have no owner anyway)
+    root_protected_types = [
+        Folder.FolderType.PUBLIC,
+        Folder.FolderType.COACHES,
+    ]
+    
+    if instance.parent is None and instance.folder_type in root_protected_types:
+        raise PermissionDenied(
+            f"Cannot delete root {instance.folder_type} folder '{instance.name}'. "
+            f"This is a protected system folder."
+        )
+    
+    # Coach personal folders (direct children of Coaches folder)
+    if (instance.folder_type == Folder.FolderType.COACH_PERSONAL and 
+        instance.parent and 
+        instance.parent.folder_type == Folder.FolderType.COACHES):
+        raise PermissionDenied(
+            f"Cannot delete coach personal folder '{instance.name}'. "
+            f"This is a protected system folder."
+        )
+    
+    # Players folders (direct children of coach personal folders)
+    if (instance.folder_type == Folder.FolderType.PLAYERS and 
+        instance.parent and 
+        instance.parent.folder_type == Folder.FolderType.COACH_PERSONAL):
+        raise PermissionDenied(
+            f"Cannot delete Players folder '{instance.name}'. "
+            f"This is a protected system folder."
+        )
+    
+    # Player personal folders (direct children of Players folder)
+    if (instance.folder_type == Folder.FolderType.PLAYER_PERSONAL and 
+        instance.parent and 
+        instance.parent.folder_type == Folder.FolderType.PLAYERS):
+        raise PermissionDenied(
+            f"Cannot delete player personal folder '{instance.name}'. "
+            f"This is a protected system folder."
+        )
+    
+    # All other folders (user-created subfolders) can be deleted

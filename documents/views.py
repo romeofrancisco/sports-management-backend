@@ -9,6 +9,7 @@ from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer, DocumentCreateSerializer,
     DocumentCopySerializer, DocumentPermissionSerializer
 )
+from .folder_utils import get_user_personal_folder, ensure_root_folders
 
 
 class FolderViewSet(viewsets.ModelViewSet):
@@ -57,43 +58,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         return FolderListSerializer
     
     def perform_create(self, serializer):
-        user = self.request.user
-        
-        # Enforce role-based creation rules server-side as well
-        folder_type = serializer.validated_data.get('folder_type')
-        parent = serializer.validated_data.get('parent')
-        owner = serializer.validated_data.get('owner')
-
-        # Root-level folders are admin-only
-        if folder_type in [Folder.FolderType.PUBLIC, Folder.FolderType.COACHES, Folder.FolderType.ADMIN_PRIVATE]:
-            if not user.is_admin:
-                raise permissions.PermissionDenied("Only admin can create root folders")
-
-        # Coach personal folders must be created by admin only (signals handle automatic creation)
-        if folder_type == Folder.FolderType.COACH_PERSONAL and not user.is_admin:
-            raise permissions.PermissionDenied("Only admin can create coach personal folders")
-
-        # Players folder: only admin or the owning coach can create
-        if folder_type == Folder.FolderType.PLAYERS:
-            if not user.is_admin:
-                if not getattr(user, 'is_coach', False) or not parent or parent.owner != user:
-                    raise permissions.PermissionDenied("Only the owning coach or admin can create a Players folder")
-
-        # Player personal folder creation rules
-        if folder_type == Folder.FolderType.PLAYER_PERSONAL:
-            # Admin allowed
-            if not user.is_admin:
-                # Coach may create player personal under their Players folder
-                if getattr(user, 'is_coach', False):
-                    if not parent or not parent.parent or parent.parent.owner != user:
-                        raise permissions.PermissionDenied("Coaches can only create player folders under their own Players folder")
-                # Player may create their own personal folder
-                elif getattr(user, 'is_player', False):
-                    if owner != user:
-                        raise permissions.PermissionDenied("Players can only create their own personal folder")
-                else:
-                    raise permissions.PermissionDenied("You don't have permission to create player personal folders")
-
+        # The serializer now handles all the logic for determining folder_type and owner
         serializer.save()
     
     @action(detail=True, methods=['get'])
@@ -102,6 +67,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         Get folder contents (subfolders and documents).
         Optimized with select_related and prefetch_related.
         Coaches only see their own folder when browsing Coaches root folder.
+        Coaches only see player folders for their assigned players.
         """
         folder = self.get_object()
         
@@ -118,6 +84,24 @@ class FolderViewSet(viewsets.ModelViewSet):
         if folder.folder_type == Folder.FolderType.COACHES and request.user.is_coach:
             # Coaches only see their own personal folder inside Coaches folder
             subfolders = subfolders.filter(owner=request.user)
+        elif folder.folder_type == Folder.FolderType.PLAYERS and request.user.is_coach:
+            # Coaches only see player folders for players in their teams
+            from teams.models import Team
+            
+            # Get teams coached by this coach
+            coached_teams = Team.objects.filter(
+                Q(head_coach__user=request.user) | Q(assistant_coach__user=request.user)
+            )
+            
+            # Get player users from these teams
+            from users.models import User
+            player_users = User.objects.filter(
+                role=User.Role.PLAYER,
+                player_profile__team__in=coached_teams
+            ).distinct()
+            
+            # Filter subfolders to only show folders owned by these players
+            subfolders = subfolders.filter(owner__in=player_users)
         
         documents = folder.documents.select_related('folder', 'owner', 'uploaded_by').all()
         
@@ -133,8 +117,13 @@ class FolderViewSet(viewsets.ModelViewSet):
         Get root folders accessible by user.
         Only returns top-level folders, not nested structure.
         Optimized to avoid loading all folders.
+        
+        AUTO-RECOVERY: If personal folders are missing, they will be automatically recreated.
         """
         user = request.user
+        
+        # Ensure root folders exist (auto-recovery)
+        ensure_root_folders()
         
         root_folders = []
         
@@ -165,10 +154,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         if user.is_coach:
             # Coach sees the CONTENTS of their personal folder directly at root
             # Not the folder itself, but what's inside it (Players folder, their documents, etc.)
-            coach_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.COACH_PERSONAL,
-                owner=user
-            ).first()
+            # AUTO-RECOVERY: Get or create coach's personal folder
+            coach_folder = get_user_personal_folder(user)
             
             if coach_folder:
                 # Get subfolders inside the coach's personal folder
@@ -178,10 +165,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         if user.is_player:
             # Player sees the CONTENTS of their personal folder directly at root
             # Not the folder itself, but what's inside it (subfolders and documents)
-            player_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                owner=user
-            ).first()
+            # AUTO-RECOVERY: Get or create player's personal folder
+            player_folder = get_user_personal_folder(user)
             
             if player_folder:
                 # Get subfolders inside the player's personal folder
@@ -193,12 +178,13 @@ class FolderViewSet(viewsets.ModelViewSet):
             'folders': FolderListSerializer(root_folders, many=True).data
         }
 
-        # If coach, include documents directly under their personal folder
+        # If coach, include documents directly under their personal folder and the folder ID
         if user.is_coach and coach_folder:
             coach_documents = coach_folder.documents.select_related('owner', 'uploaded_by').all()
             result['documents'] = DocumentListSerializer(coach_documents, many=True).data
+            result['personal_folder_id'] = coach_folder.id  # Add personal folder ID for uploads/folder creation
 
-        # If player, include documents directly under their personal folder
+        # If player, include documents directly under their personal folder and the folder ID
         if user.is_player and player_folder:
             player_documents = player_folder.documents.select_related('owner', 'uploaded_by').all()
             # Merge with any existing documents key
@@ -206,6 +192,7 @@ class FolderViewSet(viewsets.ModelViewSet):
                 result['documents'].extend(DocumentListSerializer(player_documents, many=True).data)
             else:
                 result['documents'] = DocumentListSerializer(player_documents, many=True).data
+            result['personal_folder_id'] = player_folder.id  # Add personal folder ID for uploads/folder creation
 
         return Response(result)
 
@@ -214,6 +201,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         """
         Get the user's personal folder for copy operations.
         Returns the folder ID that non-admin users should copy files to.
+        
+        AUTO-RECOVERY: If personal folder is missing, it will be automatically recreated.
         """
         user = request.user
         
@@ -222,18 +211,8 @@ class FolderViewSet(viewsets.ModelViewSet):
                 'error': 'Admins do not have a specific personal folder'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        personal_folder = None
-        
-        if user.is_coach:
-            personal_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.COACH_PERSONAL,
-                owner=user
-            ).first()
-        elif user.is_player:
-            personal_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                owner=user
-            ).first()
+        # Use auto-recovery utility
+        personal_folder = get_user_personal_folder(user)
         
         if not personal_folder:
             return Response({
@@ -350,6 +329,87 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+    
+    @action(detail=True, methods=['patch'])
+    def rename(self, request, pk=None):
+        """Rename a document"""
+        import cloudinary.uploader
+        import os
+        
+        document = self.get_object()
+        
+        if not document.can_edit(request.user):
+            return Response(
+                {"error": "You don't have permission to rename this document"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        new_title = request.data.get('title')
+        if not new_title:
+            return Response(
+                {"error": "New title is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get the old file and extract the public_id from the file field
+        if document.file:
+            try:
+                # Get the file name from the FileField (this is the path stored in database)
+                # Format: documents/filename.ext
+                old_file_name = document.file.name
+                
+                # Get the file extension
+                file_extension = os.path.splitext(old_file_name)[1]
+                
+                # Remove extension to get the public_id
+                # The file.name is already the correct path without 'media/' prefix
+                old_public_id = os.path.splitext(old_file_name)[0]
+                
+                # Create new public_id with the same folder structure but new filename
+                # Keep the folder path (e.g., 'documents/'), just change the filename
+                folder_path = os.path.dirname(old_public_id)
+                new_filename = new_title.replace(' ', '_')  # Replace spaces with underscores
+                new_public_id = os.path.join(folder_path, new_filename).replace('\\', '/')
+                
+                # Rename the file in Cloudinary
+                # MediaCloudinaryStorage stores files as 'image' type by default
+                # Try image first, fall back to raw if it fails
+                try:
+                    cloudinary.uploader.rename(
+                        old_public_id,
+                        new_public_id,
+                        resource_type='image',
+                        invalidate=True
+                    )
+                except Exception as img_error:
+                    # If image fails, try raw
+                    try:
+                        cloudinary.uploader.rename(
+                            old_public_id,
+                            new_public_id,
+                            resource_type='raw',
+                            invalidate=True
+                        )
+                    except Exception as raw_error:
+                        raise Exception(f"Failed with both image and raw types. Image error: {img_error}, Raw error: {raw_error}")
+                
+                # Update the document's file field with new public_id
+                document.file.name = f"{new_public_id}{file_extension}"
+                
+            except Exception as e:
+                return Response(
+                    {"error": f"Failed to rename file in storage: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        # Update the title in database
+        document.title = new_title
+        document.save()
+        
+        return Response(
+            DocumentDetailSerializer(document).data,
+            status=status.HTTP_200_OK
+        )
     
     @action(detail=True, methods=['get'])
     def copies(self, request, pk=None):
