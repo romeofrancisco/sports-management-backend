@@ -20,10 +20,33 @@ class Folder(models.Model):
     
     class Meta:
         ordering = ['name']
-        unique_together = [['name', 'parent', 'owner']]
+        unique_together = [['name', 'parent']]
     
     def __str__(self):
         return f"{self.name} ({self.folder_type})"
+    
+    def clean(self):
+        """Validate folder name uniqueness within the same parent"""
+        # Check for duplicate folder names in the same parent
+        existing = Folder.objects.filter(
+            name__iexact=self.name,
+            parent=self.parent
+        ).exclude(pk=self.pk)
+        
+        if existing.exists():
+            if self.parent:
+                raise ValidationError({
+                    'name': f"A folder with the name '{self.name}' already exists in this location."
+                })
+            else:
+                raise ValidationError({
+                    'name': f"A folder with the name '{self.name}' already exists at the root level."
+                })
+    
+    def save(self, *args, **kwargs):
+        """Override save to call clean validation"""
+        self.clean()
+        super().save(*args, **kwargs)
     
     def get_full_path(self):
         """Returns the full path of the folder"""
