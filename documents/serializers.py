@@ -1,5 +1,8 @@
 import os
 from rest_framework import serializers
+from django.db.models import Q
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from .models import Folder, Document, DocumentPermission
 from users.models import User
 
@@ -56,6 +59,28 @@ class FolderCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Folder
         fields = ['id', 'name', 'parent', 'description', 'folder_type']
+    
+    def validate(self, attrs):
+        """Validate folder name uniqueness within the same parent"""
+        name = attrs.get('name')
+        parent = attrs.get('parent')
+        
+        # Check for duplicate folder names in the same parent (exact match to match DB constraint)
+        existing = Folder.objects.filter(
+            name=name,
+            parent=parent
+        )
+        
+        # Exclude current instance if updating (though this is create-only)
+        if self.instance:
+            existing = existing.exclude(pk=self.instance.pk)
+        
+        if existing.exists():
+            raise serializers.ValidationError({
+                'name': f"A folder named '{name}' already exists."
+            })
+        
+        return attrs
     
     def create(self, validated_data):
         request = self.context.get('request')
@@ -149,7 +174,35 @@ class FolderCreateSerializer(serializers.ModelSerializer):
             else:
                 raise serializers.ValidationError(f"Cannot create subfolders in {parent_type} folder")
         
-        return super().create(validated_data)
+        # Try to create the folder and catch ValidationError or IntegrityError from model
+        try:
+            return super().create(validated_data)
+        except ValidationError as e:
+            # Convert Django ValidationError to DRF ValidationError
+            if hasattr(e, 'message_dict'):
+                raise serializers.ValidationError(e.message_dict)
+            else:
+                raise serializers.ValidationError(str(e))
+        except IntegrityError as e:
+            # Handle unique constraint violation at database level
+            error_message = str(e).lower()
+            folder_name = validated_data.get('name', 'this folder')
+            
+            # Check for various forms of unique constraint violations
+            if any(keyword in error_message for keyword in [
+                'unique constraint', 
+                'unique_together', 
+                'duplicate key',
+                'unique_folder_name_per_parent',
+                'must make a unique set'
+            ]):
+                raise serializers.ValidationError({
+                    'name': f"A folder named '{folder_name}' already exists."
+                })
+            else:
+                raise serializers.ValidationError({
+                    'name': "Unable to create folder. Please try a different name."
+                })
 
 
 class DocumentListSerializer(serializers.ModelSerializer):
@@ -231,6 +284,24 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
         model = Document
         fields = ['id', 'title', 'file', 'folder', 'description']
     
+    def validate(self, attrs):
+        """Validate that document title is unique within the same folder"""
+        title = attrs.get('title')
+        folder = attrs.get('folder')
+        
+        # Check if a document with the same title exists in the same folder
+        duplicate_query = Document.objects.filter(
+            title=title,
+            folder=folder
+        )
+        
+        if duplicate_query.exists():
+            raise serializers.ValidationError({
+                'title': f"A file named '{title}' already exists."
+            })
+        
+        return attrs
+    
     def validate_folder(self, value):
         user = self.context['request'].user
         
@@ -264,7 +335,16 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
             if ext and len(ext) > 1:
                 validated_data['file_extension'] = ext[1:].lower()
         
-        return super().create(validated_data)
+        try:
+            return super().create(validated_data)
+        except ValidationError:
+            raise
+        except IntegrityError as e:
+            title = validated_data.get('title')
+            raise serializers.ValidationError({
+                'title': f"A file named '{title}' already exists."
+            })
+
 
 
 class DocumentCopySerializer(serializers.Serializer):

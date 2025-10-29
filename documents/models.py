@@ -20,28 +20,23 @@ class Folder(models.Model):
     
     class Meta:
         ordering = ['name']
-        unique_together = [['name', 'parent']]
+        # No database-level unique constraint - we handle validation in serializer and model clean()
     
     def __str__(self):
         return f"{self.name} ({self.folder_type})"
     
     def clean(self):
         """Validate folder name uniqueness within the same parent"""
-        # Check for duplicate folder names in the same parent
+        # Check for duplicate folder names in the same parent (exact match)
         existing = Folder.objects.filter(
-            name__iexact=self.name,
+            name=self.name,
             parent=self.parent
         ).exclude(pk=self.pk)
         
         if existing.exists():
-            if self.parent:
-                raise ValidationError({
-                    'name': f"A folder with the name '{self.name}' already exists in this location."
-                })
-            else:
-                raise ValidationError({
-                    'name': f"A folder with the name '{self.name}' already exists at the root level."
-                })
+            raise ValidationError({
+                'name': f"A folder named '{self.name}' already exists."
+            })
     
     def save(self, *args, **kwargs):
         """Override save to call clean validation"""
@@ -112,6 +107,30 @@ class Document(models.Model):
     
     def __str__(self):
         return f"{self.title} - {self.status}"
+    
+    def clean(self):
+        """Validate that document title is unique within the same folder"""
+        super().clean()
+        
+        # Check for duplicate document title in the same folder
+        duplicate_query = Document.objects.filter(
+            title=self.title,
+            folder=self.folder
+        )
+        
+        # Exclude current instance if updating
+        if self.pk:
+            duplicate_query = duplicate_query.exclude(pk=self.pk)
+        
+        if duplicate_query.exists():
+            raise ValidationError({
+                'title': f"A file named '{self.title}' already exists."
+            })
+    
+    def save(self, *args, **kwargs):
+        """Override save to call clean() before saving"""
+        self.clean()
+        super().save(*args, **kwargs)
     
     def delete(self, *args, **kwargs):
         """Override delete to remove the file from filesystem or cloud storage"""
