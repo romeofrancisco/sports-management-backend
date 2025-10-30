@@ -280,6 +280,12 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
 
 class DocumentCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating/uploading documents"""
+    folder = serializers.PrimaryKeyRelatedField(
+        queryset=Folder.objects.all(),
+        required=False,
+        allow_null=True
+    )
+    
     class Meta:
         model = Document
         fields = ['id', 'title', 'file', 'folder', 'description']
@@ -288,6 +294,13 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
         """Validate that document title is unique within the same folder"""
         title = attrs.get('title')
         folder = attrs.get('folder')
+        user = self.context['request'].user
+        
+        # Folder is required for non-admin users
+        if not user.is_admin and not folder:
+            raise serializers.ValidationError({
+                'folder': 'Folder is required for non-admin users.'
+            })
         
         # Check if a document with the same title exists in the same folder
         duplicate_query = Document.objects.filter(
@@ -303,6 +316,13 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
         return attrs
     
     def validate_folder(self, value):
+        # Allow null folder for admins
+        if value is None:
+            user = self.context['request'].user
+            if user.is_admin:
+                return value
+            raise serializers.ValidationError("Folder is required for non-admin users")
+        
         user = self.context['request'].user
         
         # Check if user can upload to this folder

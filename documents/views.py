@@ -178,6 +178,12 @@ class FolderViewSet(viewsets.ModelViewSet):
             'folders': FolderListSerializer(root_folders, many=True).data
         }
 
+        # If admin, include root-level documents (documents without a folder)
+        if user.is_admin:
+            admin_root_documents = Document.objects.filter(folder__isnull=True).select_related('owner', 'uploaded_by').all()
+            if admin_root_documents.exists():
+                result['documents'] = DocumentListSerializer(admin_root_documents, many=True).data
+
         # If coach, include documents directly under their personal folder and the folder ID
         if user.is_coach and coach_folder:
             coach_documents = coach_folder.documents.select_related('owner', 'uploaded_by').all()
@@ -223,6 +229,58 @@ class FolderViewSet(viewsets.ModelViewSet):
             'id': personal_folder.id,
             'name': personal_folder.name,
             'folder_type': personal_folder.folder_type
+        })
+    
+    @action(detail=False, methods=['get'])
+    def search(self, request):
+        """
+        Search for folders by name and return results with their full path.
+        Query parameter: q (search query)
+        """
+        user = request.user
+        query = request.GET.get('q', '').strip()
+        
+        if not query:
+            return Response({
+                'folders': [],
+                'message': 'Please provide a search query'
+            })
+        
+        # Get accessible folders based on user role
+        if user.is_admin:
+            folders = Folder.objects.all()
+        else:
+            # Build query based on user role
+            folder_query = Q(folder_type=Folder.FolderType.PUBLIC)
+            
+            if user.is_coach:
+                folder_query |= Q(folder_type=Folder.FolderType.COACH_PERSONAL, owner=user)
+                folder_query |= Q(folder_type=Folder.FolderType.PLAYERS, parent__owner=user)
+                folder_query |= Q(folder_type=Folder.FolderType.PLAYER_PERSONAL, parent__parent__owner=user)
+                folder_query |= Q(folder_type=Folder.FolderType.COACHES)
+            
+            if user.is_player:
+                folder_query |= Q(folder_type=Folder.FolderType.PLAYER_PERSONAL, owner=user)
+            
+            folders = Folder.objects.filter(folder_query).distinct()
+        
+        # Filter by search query (case-insensitive)
+        folders = folders.filter(name__icontains=query).select_related('owner', 'parent')
+        
+        # Build results with full path
+        results = []
+        for folder in folders:
+            results.append({
+                'id': folder.id,
+                'name': folder.name,
+                'folder_type': folder.folder_type,
+                'location': folder.get_full_path(),
+                'type': 'folder'
+            })
+        
+        return Response({
+            'results': results,
+            'count': len(results)
         })
 
 
@@ -430,6 +488,61 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """Get documents owned by the current user"""
         documents = Document.objects.filter(owner=request.user)
         return Response(DocumentListSerializer(documents, many=True).data)
+    
+    @action(detail=False, methods=['get'])
+    def search(self, request):
+        """
+        Search for documents by title and return results with their folder location.
+        Query parameter: q (search query)
+        """
+        user = request.user
+        query = request.GET.get('q', '').strip()
+        
+        if not query:
+            return Response({
+                'documents': [],
+                'message': 'Please provide a search query'
+            })
+        
+        # Get accessible documents based on user role
+        if user.is_admin:
+            documents = Document.objects.select_related('folder', 'owner', 'uploaded_by').all()
+        else:
+            # Build query based on user role
+            doc_query = Q(folder__folder_type=Folder.FolderType.PUBLIC)
+            
+            if user.is_coach:
+                doc_query |= Q(folder__folder_type=Folder.FolderType.COACH_PERSONAL, folder__owner=user)
+                doc_query |= Q(folder__folder_type=Folder.FolderType.PLAYERS, folder__parent__owner=user)
+                doc_query |= Q(folder__folder_type=Folder.FolderType.PLAYER_PERSONAL, folder__parent__parent__owner=user)
+            
+            if user.is_player:
+                doc_query |= Q(folder__folder_type=Folder.FolderType.PLAYER_PERSONAL, folder__owner=user)
+            
+            documents = Document.objects.select_related('folder', 'owner', 'uploaded_by').filter(doc_query).distinct()
+        
+        # Filter by search query (case-insensitive)
+        documents = documents.filter(title__icontains=query)
+        
+        # Build results with folder location
+        results = []
+        for doc in documents:
+            results.append({
+                'id': doc.id,
+                'title': doc.title,
+                'file_extension': doc.file_extension,
+                'folder_id': doc.folder.id,
+                'folder_name': doc.folder.name,
+                'location': doc.folder.get_full_path(),
+                'uploaded_at': doc.uploaded_at,
+                'uploaded_by': doc.uploaded_by.get_full_name() if doc.uploaded_by else None,
+                'type': 'document'
+            })
+        
+        return Response({
+            'results': results,
+            'count': len(results)
+        })
 
 
 class DocumentPermissionViewSet(viewsets.ModelViewSet):

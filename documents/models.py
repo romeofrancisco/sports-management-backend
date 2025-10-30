@@ -44,9 +44,9 @@ class Folder(models.Model):
         super().save(*args, **kwargs)
     
     def get_full_path(self):
-        """Returns the full path of the folder"""
+        """Returns the full path of the folder using a special separator that won't conflict with folder names"""
         if self.parent:
-            return f"{self.parent.get_full_path()}/{self.name}"
+            return f"{self.parent.get_full_path()} > {self.name}"
         return self.name
     
     def can_access(self, user):
@@ -93,7 +93,7 @@ class Document(models.Model):
     title = models.CharField(max_length=255)
     file = models.FileField(upload_to='documents/')
     file_extension = models.CharField(max_length=10, blank=True)
-    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents')
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_documents')
     status = models.CharField(max_length=10, choices=DocumentStatus.choices, default=DocumentStatus.ORIGINAL)
@@ -200,6 +200,7 @@ class Document(models.Model):
         copy = Document.objects.create(
             title=f"{self.title} (Copy)",
             file=new_file,
+            file_extension=self.file_extension,
             folder=target_folder,
             uploaded_by=user,
             owner=user,
