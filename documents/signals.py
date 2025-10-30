@@ -1,8 +1,8 @@
-from django.db.models.signals import post_save, post_migrate, pre_delete
+from django.db.models.signals import post_save, post_migrate, pre_delete, pre_save
 from django.dispatch import receiver
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
-from teams.models import Coach, Player
+from teams.models import Coach, Player, Team
 from users.models import User
 from .models import Folder
 import threading
@@ -146,44 +146,137 @@ def _create_standalone_player_folder(player_instance, player_name):
         print(f"✓ Created standalone folder for player: {player_name}")
 
 
+@receiver(pre_save, sender=Player)
+def track_player_team_change(sender, instance, **kwargs):
+    """Track the old team before saving to detect changes"""
+    if instance.pk:  # Only for existing players
+        try:
+            old_instance = Player.objects.get(pk=instance.pk)
+            instance._old_team_id = old_instance.team_id
+        except Player.DoesNotExist:
+            instance._old_team_id = None
+    else:
+        instance._old_team_id = None
+
+
 @receiver(post_save, sender=Player)
 def update_player_folder_on_team_change(sender, instance, created, **kwargs):
     """
-    When a player's team changes, move their folder to the new coach's Players folder.
-    This runs after the player is saved (not just created).
+    When a player's team changes, move their folder to the appropriate location:
+    - If player has a coach: move to coach's Players folder
+    - If player has no coach: move to root as standalone folder
     """
-    if not created and instance.team:  # Only for updates, not creation
-        # Check if the player has a coach now
-        if instance.team.head_coach:
-            coach = instance.team.head_coach
-            player_name = instance.user.get_full_name()
-            
-            # Find existing player folder
-            existing_folder = Folder.objects.filter(
-                folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                owner=instance.user
-            ).first()
-            
-            if existing_folder:
-                # Find the coach's Players folder
-                coach_folder = Folder.objects.filter(
-                    folder_type=Folder.FolderType.COACH_PERSONAL,
-                    owner=coach.user
-                ).first()
-                
-                if coach_folder:
-                    players_folder, _ = Folder.objects.get_or_create(
-                        name='Players',
-                        folder_type=Folder.FolderType.PLAYERS,
-                        parent=coach_folder,
-                        owner=coach.user
-                    )
-                    
-                    # Move player folder under coach's Players folder if not already there
-                    if existing_folder.parent != players_folder:
-                        existing_folder.parent = players_folder
-                        existing_folder.save(update_fields=['parent'])
-                        print(f"✓ Moved folder for player {player_name} to coach {coach.user.get_full_name()}'s folder")
+    if created:
+        return  # Skip for new players - they'll get folders created in create_player_folder
+    
+    # Check if team actually changed
+    old_team_id = getattr(instance, '_old_team_id', None)
+    if old_team_id == instance.team_id:
+        return  # Team hasn't changed, nothing to do
+    
+    # Team has changed, reorganize folder
+    _move_player_folder(instance)
+
+
+@receiver(pre_save, sender=Team)
+def track_team_coach_change(sender, instance, **kwargs):
+    """Track the old head_coach before saving to detect changes"""
+    if instance.pk:  # Only for existing teams
+        try:
+            old_instance = Team.objects.get(pk=instance.pk)
+            instance._old_head_coach_id = old_instance.head_coach_id
+        except Team.DoesNotExist:
+            instance._old_head_coach_id = None
+    else:
+        instance._old_head_coach_id = None
+
+
+@receiver(post_save, sender=Team)
+def update_players_folders_on_coach_change(sender, instance, created, **kwargs):
+    """
+    When a team's head_coach changes, move all player folders in that team
+    to the appropriate location (under new coach or to root if no coach)
+    """
+    if created:
+        return  # Skip for new teams
+    
+    # Check if coach actually changed
+    old_coach_id = getattr(instance, '_old_head_coach_id', None)
+    if old_coach_id == instance.head_coach_id:
+        return  # Coach hasn't changed, nothing to do
+    
+    # Coach has changed, reorganize all player folders in this team
+    players = Player.objects.filter(team=instance)
+    for player in players:
+        _move_player_folder(player)
+
+
+
+def _move_player_folder(player):
+    """
+    Helper function to move a player's folder to the correct location
+    based on their current team and coach.
+    """
+    player_name = player.user.get_full_name()
+    
+    # Find existing player folder
+    existing_folder = Folder.objects.filter(
+        folder_type=Folder.FolderType.PLAYER_PERSONAL,
+        owner=player.user
+    ).first()
+    
+    if not existing_folder:
+        return  # No folder to move
+    
+    # Determine target parent based on team/coach
+    target_parent = None
+    coach = None
+    
+    if player.team and player.team.head_coach:
+        # Player has a coach - move under coach's Players folder
+        coach = player.team.head_coach
+        
+        # Find or create coach's folder structure
+        coach_folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.COACH_PERSONAL,
+            owner=coach.user
+        ).first()
+        
+        if coach_folder:
+            players_folder, _ = Folder.objects.get_or_create(
+                name='Players',
+                folder_type=Folder.FolderType.PLAYERS,
+                parent=coach_folder,
+                owner=coach.user
+            )
+            target_parent = players_folder
+    else:
+        # Player has no coach - move to root
+        target_parent = None
+    
+    # Only move if parent actually changed
+    if existing_folder.parent != target_parent:
+        # Check for name conflicts in target location
+        folder_name = player_name
+        counter = 2
+        while Folder.objects.filter(name=folder_name, parent=target_parent).exclude(pk=existing_folder.pk).exists():
+            folder_name = f"{player_name} {counter}"
+            counter += 1
+        
+        # Update folder name if it changed to avoid conflict
+        if folder_name != existing_folder.name:
+            existing_folder.name = folder_name
+        
+        # Move the folder
+        existing_folder.parent = target_parent
+        existing_folder.save(update_fields=['parent', 'name'])
+        
+        if target_parent:
+            print(f"✓ Moved folder for player {player_name} to coach {coach.user.get_full_name()}'s folder")
+        else:
+            print(f"✓ Moved folder for player {player_name} to root (no coach)")
+
+
 
 
 @receiver(pre_delete, sender=User)
