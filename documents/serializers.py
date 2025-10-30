@@ -369,10 +369,20 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
 
 class DocumentCopySerializer(serializers.Serializer):
     """Serializer for copying documents"""
-    target_folder = serializers.PrimaryKeyRelatedField(queryset=Folder.objects.all())
+    target_folder = serializers.PrimaryKeyRelatedField(
+        queryset=Folder.objects.all(),
+        required=False,
+        allow_null=True
+    )
     
     def validate_target_folder(self, value):
         user = self.context['request'].user
+        
+        # Admin can copy to null (root level)
+        if value is None:
+            if not user.is_admin:
+                raise serializers.ValidationError("Only admins can copy to root level")
+            return value
         
         if not value.can_access(user):
             raise serializers.ValidationError("You cannot access the target folder")

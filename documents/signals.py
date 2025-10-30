@@ -42,7 +42,7 @@ def create_root_folders(sender, **kwargs):
     # Create Coaches folder
     coaches_folder, created = Folder.objects.get_or_create(
         name='Coaches',
-        folder_type=Folder.FolderType.COACHES,
+        folder_type=Folder.FolderType.ADMIN_PRIVATE,
         parent=None,
         defaults={'owner': None}
     )
@@ -211,10 +211,11 @@ def prevent_critical_folder_deletion(sender, instance, **kwargs):
     This protects against accidental deletion of important folder structures.
     
     Protected folders:
-    - Root folders (Public, Coaches) - no parent
+    - THE system-created root folders (Public, Coaches) with specific names and no owner
     - System-created personal folders (direct children of Coaches or Players folder)
     
     User-created subfolders within personal folders CAN be deleted.
+    Admin-created additional folders with same types CAN be deleted.
     
     EXCEPTION: Allow deletion during CASCADE operations (user/player/coach deletion).
     """
@@ -222,22 +223,31 @@ def prevent_critical_folder_deletion(sender, instance, **kwargs):
     if is_cascade_deletion_active():
         return
     
-    # Root folders - always protected (they have no owner anyway)
-    root_protected_types = [
-        Folder.FolderType.PUBLIC,
-        Folder.FolderType.COACHES,
-    ]
-    
-    if instance.parent is None and instance.folder_type in root_protected_types:
-        raise PermissionDenied(
-            f"Cannot delete root {instance.folder_type} folder '{instance.name}'. "
-            f"This is a protected system folder."
-        )
+    # Protect ONLY THE system root folders (by name and no owner)
+    # Admin-created folders with same types but different names can be deleted
+    if instance.parent is None:
+        # Protect THE "Public" root folder
+        if (instance.folder_type == Folder.FolderType.PUBLIC and 
+            instance.name == 'Public' and 
+            instance.owner is None):
+            raise PermissionDenied(
+                f"Cannot delete the system 'Public' folder. "
+                f"This is a protected system folder."
+            )
+        
+        # Protect THE "Coaches" root folder (now ADMIN_PRIVATE type)
+        if (instance.folder_type == Folder.FolderType.ADMIN_PRIVATE and 
+            instance.name == 'Coaches' and 
+            instance.owner is None):
+            raise PermissionDenied(
+                f"Cannot delete the system 'Coaches' folder. "
+                f"This is a protected system folder."
+            )
     
     # Coach personal folders (direct children of Coaches folder)
     if (instance.folder_type == Folder.FolderType.COACH_PERSONAL and 
         instance.parent and 
-        instance.parent.folder_type == Folder.FolderType.COACHES):
+        instance.parent.name == 'Coaches'):
         raise PermissionDenied(
             f"Cannot delete coach personal folder '{instance.name}'. "
             f"This is a protected system folder."
