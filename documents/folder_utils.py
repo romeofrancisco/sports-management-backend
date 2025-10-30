@@ -15,7 +15,7 @@ def ensure_coach_folder_structure(coach):
     # Get or create the Coaches root folder
     coaches_folder, _ = Folder.objects.get_or_create(
         name='Coaches',
-        folder_type=Folder.FolderType.COACHES,
+        folder_type=Folder.FolderType.ADMIN_PRIVATE,
         parent=None,
         defaults={'owner': None}
     )
@@ -48,6 +48,7 @@ def ensure_player_folder_structure(player):
     """
     Ensure a player has their personal folder.
     Creates missing folder if it doesn't exist.
+    Handles duplicate names by appending email or counter.
     
     Returns: (player_folder, created)
     """
@@ -60,13 +61,34 @@ def ensure_player_folder_structure(player):
         # Ensure coach folder structure exists first
         coach_folder, players_folder, _ = ensure_coach_folder_structure(coach)
         
+        # Check if player already has a folder (by owner)
+        existing_folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.PLAYER_PERSONAL,
+            parent=players_folder,
+            owner=player.user
+        ).first()
+        
+        if existing_folder:
+            return existing_folder, False
+        
+        # Create unique folder name to avoid conflicts
+        folder_name = player_name
+        
+        # Check if a folder with this name already exists under this Players folder
+        counter = 2
+        while Folder.objects.filter(name=folder_name, parent=players_folder).exists():
+            folder_name = f"{player_name} {counter}"
+            counter += 1
+        
         # Create player's personal folder inside the Players folder
-        player_folder, folder_created = Folder.objects.get_or_create(
-            name=player_name,
+        player_folder = Folder.objects.create(
+            name=folder_name,
             folder_type=Folder.FolderType.PLAYER_PERSONAL,
             parent=players_folder,
             owner=player.user
         )
+        
+        folder_created = True
         
         if folder_created:
             print(f"✓ Restored folder for player {player_name} under coach {coach.user.get_full_name()}")

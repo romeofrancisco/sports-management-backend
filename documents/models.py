@@ -44,9 +44,9 @@ class Folder(models.Model):
         super().save(*args, **kwargs)
     
     def get_full_path(self):
-        """Returns the full path of the folder"""
+        """Returns the full path of the folder using a special separator that won't conflict with folder names"""
         if self.parent:
-            return f"{self.parent.get_full_path()}/{self.name}"
+            return f"{self.parent.get_full_path()} > {self.name}"
         return self.name
     
     def can_access(self, user):
@@ -58,8 +58,8 @@ class Folder(models.Model):
             return True
         
         if self.folder_type == self.FolderType.COACHES:
-            # Only admin can access the Coaches root folder
-            return user.is_admin
+            # Admin and coaches can access Coaches type folders
+            return user.is_admin or user.is_coach
         
         if self.folder_type == self.FolderType.COACH_PERSONAL and user.is_coach:
             # Coach can only access their own personal folder
@@ -93,7 +93,7 @@ class Document(models.Model):
     title = models.CharField(max_length=255)
     file = models.FileField(upload_to='documents/')
     file_extension = models.CharField(max_length=10, blank=True)
-    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents')
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_documents')
     status = models.CharField(max_length=10, choices=DocumentStatus.choices, default=DocumentStatus.ORIGINAL)
@@ -175,7 +175,11 @@ class Document(models.Model):
         from django.core.files.storage import default_storage
         import os
         
-        if not target_folder.can_access(user):
+        # Check if user can access target folder (null folder is admin-only)
+        if target_folder is None:
+            if not user.is_admin:
+                raise ValidationError("Only admins can copy to root level")
+        elif not target_folder.can_access(user):
             raise ValidationError("User cannot access target folder")
         
         # Create a physical copy of the file using Django's file field methods
@@ -200,6 +204,7 @@ class Document(models.Model):
         copy = Document.objects.create(
             title=f"{self.title} (Copy)",
             file=new_file,
+            file_extension=self.file_extension,
             folder=target_folder,
             uploaded_by=user,
             owner=user,

@@ -25,7 +25,7 @@ class Command(BaseCommand):
         # Create Coaches folder (root)
         coaches_folder, created = Folder.objects.get_or_create(
             name='Coaches',
-            folder_type=Folder.FolderType.COACHES,
+            folder_type=Folder.FolderType.ADMIN_PRIVATE,
             parent=None,
             defaults={'owner': None}
         )
@@ -72,14 +72,38 @@ class Command(BaseCommand):
             
             player_folder_count = 0
             for player in player_users:
-                player_folder, player_created = Folder.objects.get_or_create(
-                    name=f"{player.get_full_name()}",
+                # First check if player already has a folder (by owner)
+                existing_folder = Folder.objects.filter(
                     folder_type=Folder.FolderType.PLAYER_PERSONAL,
                     parent=players_folder,
                     owner=player
-                )
-                if player_created:
+                ).first()
+                
+                if existing_folder:
+                    continue  # Skip if folder already exists
+                
+                # Create unique folder name to avoid conflicts
+                player_name = player.get_full_name()
+                folder_name = player_name
+                
+                # Check if a folder with this name already exists
+                counter = 2
+                while Folder.objects.filter(name=folder_name, parent=players_folder).exists():
+                    folder_name = f"{player_name} {counter}"
+                    counter += 1
+                
+                # Create the folder with unique name
+                try:
+                    player_folder = Folder.objects.create(
+                        name=folder_name,
+                        folder_type=Folder.FolderType.PLAYER_PERSONAL,
+                        parent=players_folder,
+                        owner=player
+                    )
                     player_folder_count += 1
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f'    Error creating folder for {player_name}: {e}'))
+                    continue
             
             if player_folder_count > 0:
                 self.stdout.write(self.style.SUCCESS(f'    ✓ Created {player_folder_count} player folders for {coach.get_full_name()}'))
@@ -102,15 +126,28 @@ class Command(BaseCommand):
             ).exists()
             
             if not existing:
-                # Create standalone player folder if not already in a coach's structure
-                player_folder, created = Folder.objects.get_or_create(
-                    name=f"{player.get_full_name()}",
-                    folder_type=Folder.FolderType.PLAYER_PERSONAL,
-                    parent=None,
-                    owner=player
-                )
-                if created:
+                # Create unique folder name for standalone player folder
+                player_name = player.get_full_name()
+                folder_name = player_name
+                
+                # Check if name exists at root level
+                counter = 2
+                while Folder.objects.filter(name=folder_name, parent=None).exists():
+                    folder_name = f"{player_name} {counter}"
+                    counter += 1
+                
+                # Create standalone player folder
+                try:
+                    player_folder = Folder.objects.create(
+                        name=folder_name,
+                        folder_type=Folder.FolderType.PLAYER_PERSONAL,
+                        parent=None,
+                        owner=player
+                    )
                     player_count += 1
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f'Error creating standalone folder for {player_name}: {e}'))
+                    continue
         
         if player_count > 0:
             self.stdout.write(self.style.SUCCESS(f'✓ Created {player_count} standalone player folders'))
