@@ -41,14 +41,30 @@ class FolderDetailSerializer(serializers.ModelSerializer):
     owner = UserSimpleSerializer(read_only=True)
     subfolders = FolderListSerializer(many=True, read_only=True)
     full_path = serializers.CharField(source='get_full_path', read_only=True)
+    breadcrumbs = serializers.SerializerMethodField()
     
     class Meta:
         model = Folder
         fields = [
             'id', 'name', 'folder_type', 'parent', 'owner', 
-            'created_at', 'subfolders', 'full_path'
+            'created_at', 'subfolders', 'full_path', 'breadcrumbs'
         ]
         read_only_fields = ['created_at']
+    
+    def get_breadcrumbs(self, obj):
+        """Build breadcrumb trail from root to current folder"""
+        breadcrumbs = []
+        current = obj
+        
+        while current:
+            breadcrumbs.insert(0, {
+                'id': current.id,
+                'name': current.name,
+                'folder_type': current.folder_type,
+            })
+            current = current.parent
+        
+        return breadcrumbs
 
 
 class FolderCreateSerializer(serializers.ModelSerializer):
