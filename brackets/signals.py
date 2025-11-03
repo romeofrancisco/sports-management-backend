@@ -29,66 +29,183 @@ def update_match_winner(sender, instance, **kwargs):
         if match.winner == winner:
             return
 
-        # First, ensure the teams in the match match the teams in the game
-        update_fields = []
-        if match.home_team != instance.home_team:
-            match.home_team = instance.home_team
-            update_fields.append("home_team")
-            logger.info(f"Updated match {match.id} home team to {instance.home_team.id} to sync with game")
-        
-        if match.away_team != instance.away_team:
-            match.away_team = instance.away_team
-            update_fields.append("away_team")
-            logger.info(f"Updated match {match.id} away team to {instance.away_team.id} to sync with game")
-
-        # Validate that winner is one of the participating teams
-        if winner and winner not in [match.home_team, match.away_team]:
-            logger.error(f"Game {instance.id} has winner ID {winner.id} which is not one of the teams in match {match.id} " +
-                        f"(home: {match.home_team.id if match.home_team else 'None'}, " +
-                        f"away: {match.away_team.id if match.away_team else 'None'})")
-            
-            # Determine the correct winner based on scores
-            if instance.home_team_score > instance.away_team_score:
-                winner = instance.home_team
-                logger.info(f"Corrected winner to home team {winner.id} based on scores")
-            elif instance.away_team_score > instance.home_team_score:
-                winner = instance.away_team
-                logger.info(f"Corrected winner to away team {winner.id} based on scores")
-            else:
-                logger.error(f"Cannot determine winner for tied game {instance.id}")
-                return
-        
-        # Update the match winner
-        match.winner = winner
-        update_fields.append("winner")
-        match.save(update_fields=update_fields)
-
-        # Wait for next round creation with a maximum of 3 attempts
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                match.refresh_from_db()
-                if match.next_match:
-                    break
-            except Exception:
-                if attempt == max_attempts - 1:
-                    raise
-            sleep(0.2)  # Small delay to allow transaction to complete
-
-        # Update the next match if it exists
-        if match.next_match:
-            next_match = match.next_match
+        # Use transaction to ensure atomicity
+        with transaction.atomic():
+            # First, ensure the teams in the match match the teams in the game
             update_fields = []
-            
-            if not next_match.home_team:
-                next_match.home_team = winner
+            if match.home_team != instance.home_team:
+                match.home_team = instance.home_team
                 update_fields.append("home_team")
-            elif not next_match.away_team:
-                next_match.away_team = winner
-                update_fields.append("away_team")
+                logger.info(f"Updated match {match.id} home team to {instance.home_team.id} to sync with game")
             
-            if update_fields:
-                next_match.save(update_fields=update_fields)
+            if match.away_team != instance.away_team:
+                match.away_team = instance.away_team
+                update_fields.append("away_team")
+                logger.info(f"Updated match {match.id} away team to {instance.away_team.id} to sync with game")
+
+            # Validate that winner is one of the participating teams
+            if winner and winner not in [match.home_team, match.away_team]:
+                logger.error(f"Game {instance.id} has winner ID {winner.id} which is not one of the teams in match {match.id} " +
+                            f"(home: {match.home_team.id if match.home_team else 'None'}, " +
+                            f"away: {match.away_team.id if match.away_team else 'None'})")
+                
+                # Determine the correct winner based on scores
+                if instance.home_team_score > instance.away_team_score:
+                    winner = instance.home_team
+                    logger.info(f"Corrected winner to home team {winner.id} based on scores")
+                elif instance.away_team_score > instance.home_team_score:
+                    winner = instance.away_team
+                    logger.info(f"Corrected winner to away team {winner.id} based on scores")
+                else:
+                    logger.error(f"Cannot determine winner for tied game {instance.id}")
+                    return
+            
+            # Update the match winner
+            match.winner = winner
+            update_fields.append("winner")
+            match.save(update_fields=update_fields)
+
+            # Update the next match if it exists (advance winner)
+            if match.next_match:
+                # Refresh from DB with select_for_update to lock the row
+                next_match = BracketMatch.objects.select_for_update().get(id=match.next_match.id)
+                update_fields = []
+                
+                # FIXED: Determine slot based on parent match order
+                # Find all parent matches that feed into this next_match
+                parent_matches = BracketMatch.objects.filter(
+                    next_match=next_match
+                ).order_by('id')  # Order by ID for consistent positioning
+                
+                parent_match_ids = list(parent_matches.values_list('id', flat=True))
+                
+                try:
+                    # Find this match's position among parent matches
+                    position = parent_match_ids.index(match.id)
+                    
+                    if position == 0:
+                        # First parent match → home team slot
+                        if next_match.home_team and next_match.home_team.id != winner.id:
+                            logger.warning(f"Overwriting home team {next_match.home_team.name} with {winner.name} in match {next_match.id}")
+                        next_match.home_team = winner
+                        update_fields.append("home_team")
+                        logger.info(f"Advanced winner {winner.name} to next match {next_match.id} as home team (position {position})")
+                    elif position == 1:
+                        # Second parent match → away team slot
+                        if next_match.away_team and next_match.away_team.id != winner.id:
+                            logger.warning(f"Overwriting away team {next_match.away_team.name} with {winner.name} in match {next_match.id}")
+                        next_match.away_team = winner
+                        update_fields.append("away_team")
+                        logger.info(f"Advanced winner {winner.name} to next match {next_match.id} as away team (position {position})")
+                    else:
+                        logger.error(f"Unexpected position {position} for match {match.id} feeding into {next_match.id}")
+                        
+                except ValueError:
+                    # Fallback to old logic if position can't be determined
+                    logger.warning(f"Could not determine position for match {match.id}, using fallback logic")
+                    if not next_match.home_team:
+                        next_match.home_team = winner
+                        update_fields.append("home_team")
+                        logger.info(f"Advanced winner {winner.name} to next match {next_match.id} as home team (fallback)")
+                    elif not next_match.away_team:
+                        next_match.away_team = winner
+                        update_fields.append("away_team")
+                        logger.info(f"Advanced winner {winner.name} to next match {next_match.id} as away team (fallback)")
+                    else:
+                        logger.error(f"Both slots filled in next match {next_match.id}. Cannot assign {winner.name}")
+                
+                if update_fields:
+                    next_match.save(update_fields=update_fields)
+            
+            # Handle double elimination: move loser to lower bracket
+            if match.next_loser_match and winner:
+                # Determine the loser
+                loser = None
+                if match.home_team and match.away_team:
+                    loser = match.away_team if winner == match.home_team else match.home_team
+                
+                if loser:
+                    # Refresh from DB with select_for_update to lock the row
+                    loser_match = BracketMatch.objects.select_for_update().get(id=match.next_loser_match.id)
+                    update_fields = []
+                    
+                    # CRITICAL FIX: Check if this match receives teams from BOTH sources
+                    # (winners via next_match AND losers via next_loser_match)
+                    has_winner_parents = BracketMatch.objects.filter(next_match=loser_match).exists()
+                    has_loser_parents = BracketMatch.objects.filter(next_loser_match=loser_match).count() > 0
+                    
+                    if has_winner_parents and has_loser_parents:
+                        # This match receives from both sources!
+                        # Strategy: winners from next_match → home_team, losers → away_team
+                        # Find all loser parent matches
+                        loser_parents = BracketMatch.objects.filter(
+                            next_loser_match=loser_match
+                        ).order_by('id')
+                        
+                        loser_parent_ids = list(loser_parents.values_list('id', flat=True))
+                        
+                        try:
+                            position = loser_parent_ids.index(match.id)
+                            
+                            # Losers always go to away_team when there are also winner parents
+                            if position == 0:
+                                # First loser parent → away_team
+                                if loser_match.away_team and loser_match.away_team.id != loser.id:
+                                    logger.warning(f"Overwriting away team {loser_match.away_team.name} with {loser.name} in loser match {loser_match.id}")
+                                loser_match.away_team = loser
+                                update_fields.append("away_team")
+                                logger.info(f"Moved loser {loser.name} to lower bracket match {loser_match.id} as away team (mixed source, position {position})")
+                            else:
+                                # Additional losers beyond first one - this shouldn't happen in normal double elim
+                                logger.error(f"Unexpected loser position {position} for match {match.id} feeding into {loser_match.id}")
+                        except ValueError:
+                            logger.error(f"Could not find match {match.id} in loser parents for {loser_match.id}")
+                    else:
+                        # Standard case: only one source type
+                        # Find all parent matches that feed into this next_loser_match
+                        parent_matches = BracketMatch.objects.filter(
+                            next_loser_match=loser_match
+                        ).order_by('id')
+                        
+                        parent_match_ids = list(parent_matches.values_list('id', flat=True))
+                        
+                        try:
+                            # Find this match's position among parent matches
+                            position = parent_match_ids.index(match.id)
+                            
+                            if position == 0:
+                                # First parent match → home team slot
+                                if loser_match.home_team and loser_match.home_team.id != loser.id:
+                                    logger.warning(f"Overwriting home team {loser_match.home_team.name} with {loser.name} in loser match {loser_match.id}")
+                                loser_match.home_team = loser
+                                update_fields.append("home_team")
+                                logger.info(f"Moved loser {loser.name} to lower bracket match {loser_match.id} as home team (position {position})")
+                            elif position == 1:
+                                # Second parent match → away team slot
+                                if loser_match.away_team and loser_match.away_team.id != loser.id:
+                                    logger.warning(f"Overwriting away team {loser_match.away_team.name} with {loser.name} in loser match {loser_match.id}")
+                                loser_match.away_team = loser
+                                update_fields.append("away_team")
+                                logger.info(f"Moved loser {loser.name} to lower bracket match {loser_match.id} as away team (position {position})")
+                            else:
+                                logger.error(f"Unexpected position {position} for match {match.id} feeding into loser match {loser_match.id}")
+                                
+                        except ValueError:
+                            # Fallback to old logic if position can't be determined
+                            logger.warning(f"Could not determine position for match {match.id}, using fallback logic")
+                            if not loser_match.home_team:
+                                loser_match.home_team = loser
+                                update_fields.append("home_team")
+                                logger.info(f"Moved loser {loser.name} to lower bracket match {loser_match.id} as home team (fallback)")
+                            elif not loser_match.away_team:
+                                loser_match.away_team = loser
+                                update_fields.append("away_team")
+                                logger.info(f"Moved loser {loser.name} to lower bracket match {loser_match.id} as away team (fallback)")
+                            else:
+                                logger.error(f"Both slots filled in loser match {loser_match.id}. Cannot assign {loser.name}")
+                    
+                    if update_fields:
+                        loser_match.save(update_fields=update_fields)
 
     except Exception as e:
         # Log the error but don't prevent the game from completing
@@ -233,7 +350,7 @@ def create_or_assign_game(sender, instance, **kwargs):
             instance.game = game
             instance.save(update_fields=["game"])
             logger.info(
-                f"Game created for match {instance.id} scheduled at {scheduled_datetime}"
+                f"Game {game.id} created for match {instance.id} (Round {instance.round.round_number}) scheduled at {scheduled_datetime}"
             )
         except Exception as e:
             logger.error(f"Failed to create game for match {instance.id}: {str(e)}")
