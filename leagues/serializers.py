@@ -84,6 +84,7 @@ class SeasonSerializer(serializers.ModelSerializer):
     league_name = serializers.SerializerMethodField()
     league = LeagueSerializer(read_only=True)
     has_bracket = serializers.SerializerMethodField()
+    bracket_type = serializers.CharField(source='bracket.elimination_type', read_only=True, allow_null=True)
     games_count = serializers.IntegerField(read_only=True)
     games_played = serializers.IntegerField(read_only=True)
     avg_points_per_game = serializers.FloatField(read_only=True)
@@ -101,6 +102,7 @@ class SeasonSerializer(serializers.ModelSerializer):
             "games_count",
             "games_played",
             "avg_points_per_game",
+            "bracket_type",
             "teams",
             "is_recorded",
             "league_name",

@@ -39,7 +39,9 @@ class BracketMatch(models.Model):
     away_team = models.ForeignKey("teams.Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="away_matches")
     winner = models.ForeignKey("teams.Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="match_wins")
     next_match = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='previous_matches')
-    game = models.OneToOneField("games.Game", null=True, blank=True, on_delete=models.SET_NULL, related_name="bracket_match")
+    next_loser_match = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='previous_loser_matches')
+    game = models.OneToOneField("games.Game", null=True, blank=True, on_delete=models.CASCADE, related_name="bracket_match")
+    is_filler = models.BooleanField(default=False)  # True if this is a placeholder match for visual balance
 
     def __str__(self):
         return f"{self.home_team} vs {self.away_team} (Round {self.round.round_number})"
