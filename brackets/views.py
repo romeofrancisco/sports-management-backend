@@ -6,12 +6,15 @@ from .models import Bracket, BracketRound, BracketMatch
 from .serializers import BracketSerializer
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
+from django_filters.rest_framework import DjangoFilterBackend
 import random
 
 
 class BracketViewSet(viewsets.ModelViewSet):
     queryset = Bracket.objects.all()
     serializer_class = BracketSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['season', 'tournament', 'elimination_type']
     
     def perform_create(self, serializer):
         bracket = serializer.save()
@@ -32,6 +35,9 @@ class BracketViewSet(viewsets.ModelViewSet):
     
     def _update_season_end_date(self, bracket):
         """Update season end date to the latest game date if season end date is null"""
+        if not bracket.season:
+            return  # Only update for season brackets, not tournament brackets
+            
         season = bracket.season
         
         # Only update if season end_date is null
@@ -53,7 +59,14 @@ class BracketViewSet(viewsets.ModelViewSet):
                 season.save(update_fields=['end_date'])
                 
     def _generate_single_elimination(self, bracket):
-        teams = list(bracket.season.teams.all())
+        # Get teams from either season or tournament
+        if bracket.season:
+            teams = list(bracket.season.teams.all())
+        elif bracket.tournament:
+            teams = list(bracket.tournament.teams.all())
+        else:
+            raise ValidationError("Bracket must be associated with either a season or tournament")
+            
         if not teams:
             raise ValidationError("No teams found")
 
@@ -183,7 +196,14 @@ class BracketViewSet(viewsets.ModelViewSet):
         - Subsequent matches get games created when their parent matches complete
         - Handles non-power-of-2 team counts with byes
         """
-        teams = list(bracket.season.teams.all())
+        # Get teams from either season or tournament
+        if bracket.season:
+            teams = list(bracket.season.teams.all())
+        elif bracket.tournament:
+            teams = list(bracket.tournament.teams.all())
+        else:
+            raise ValidationError("Bracket must be associated with either a season or tournament")
+            
         if not teams:
             raise ValidationError("No teams found")
 
@@ -492,7 +512,14 @@ class BracketViewSet(viewsets.ModelViewSet):
             lower_bracket_structure[-1][0].save(update_fields=['next_match'])
     
     def _generate_round_robin(self, bracket):
-        teams = list(bracket.season.teams.all())
+        # Get teams from either season or tournament
+        if bracket.season:
+            teams = list(bracket.season.teams.all())
+        elif bracket.tournament:
+            teams = list(bracket.tournament.teams.all())
+        else:
+            raise ValidationError("Bracket must be associated with either a season or tournament")
+            
         if not teams:
             raise ValidationError("No teams found")
 

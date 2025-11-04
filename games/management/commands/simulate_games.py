@@ -163,8 +163,15 @@ class Command(BaseCommand):
             
         self.stdout.write(f'Simulating games for bracket: {bracket}')
         
-        # Get the sport and stat types
-        sport = bracket.season.league.sport
+        # Get the sport from either season or tournament
+        if bracket.season:
+            sport = bracket.season.league.sport
+        elif bracket.tournament:
+            sport = bracket.tournament.sport
+        else:
+            self.stdout.write(self.style.ERROR('Bracket is not associated with a season or tournament'))
+            return
+            
         stat_types = SportStatType.objects.filter(sport=sport)
         
         if not stat_types:

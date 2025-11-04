@@ -640,16 +640,17 @@ class Season(models.Model):
                 # Sort by match points, then set ratio, then sets won
                 return (
                     -team["points"],
+                    -team.get("win_percentage", 0),
                     -team.get("set_ratio", 0),
                     -team.get("sets_won", 0),
                 )
-            elif scoring_type == Sport.SCORING_TYPES.GOALS:
-                # Sort by points, then goal difference, then goals scored
-                return (
-                    -team["points"],
-                    -team.get("goal_difference", 0),
-                    -team.get("goals_scored", 0),
-                )
+            # elif scoring_type == Sport.SCORING_TYPES.GOALS:
+            #     # Sort by points, then goal difference, then goals scored
+            #     return (
+            #         -team["points"],
+            #         -team.get("goal_difference", 0),
+            #         -team.get("goals_scored", 0),
+            #     )
             return (-team.get("wins", 0),)
 
         sorted_standings = sorted(standings, key=sort_key)
