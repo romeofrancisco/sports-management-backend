@@ -7,7 +7,8 @@ class Bracket(models.Model):
         DOUBLE = "double", "Double Elimination"
         ROUND_ROBIN = "round_robin", "Round Robin"
 
-    season = models.OneToOneField("leagues.Season", on_delete=models.CASCADE, related_name="bracket")
+    season = models.OneToOneField("leagues.Season", on_delete=models.CASCADE, related_name="bracket", null=True, blank=True)
+    tournament = models.OneToOneField("tournaments.Tournament", on_delete=models.CASCADE, related_name="bracket", null=True, blank=True)
     elimination_type = models.CharField(max_length=20, choices=ELIMINATION_TYPES)
     current_round = models.PositiveIntegerField(default=1)  # Track progress
     is_complete = models.BooleanField(default=False)
@@ -16,11 +17,19 @@ class Bracket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.season.league.sport} - {self.season} ({self.elimination_type})"
+        if self.season:
+            return f"{self.season.league.sport} - {self.season} ({self.elimination_type})"
+        elif self.tournament:
+            return f"{self.tournament.sport} - {self.tournament.name} ({self.elimination_type})"
+        return f"Bracket ({self.elimination_type})"
     
     def team_count(self):
         """Return the number of teams in the bracket."""
-        return self.season.teams.count()
+        if self.season:
+            return self.season.teams.count()
+        elif self.tournament:
+            return self.tournament.teams.count()
+        return 0
  
 class BracketRound(models.Model):
     bracket = models.ForeignKey(Bracket, on_delete=models.CASCADE, related_name="rounds")

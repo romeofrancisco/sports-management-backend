@@ -55,19 +55,65 @@ class BracketRoundSerializer(serializers.ModelSerializer):
 
 class BracketSerializer(serializers.ModelSerializer):
     rounds = BracketRoundSerializer(many=True, read_only=True)
-    season_name = serializers.CharField(source="season.name", read_only=True)
+    season_name = serializers.SerializerMethodField()
+    tournament_name = serializers.SerializerMethodField()
     league = serializers.SerializerMethodField()
-    league_name = serializers.CharField(source="season.league.name", read_only=True)
+    league_name = serializers.SerializerMethodField()
     team_count = serializers.SerializerMethodField()
     matches = serializers.SerializerMethodField()
 
     class Meta:
         model = Bracket
-        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'team_count', 'elimination_type', 'winner', 'is_complete', 'created_at', 'updated_at', 'rounds', 'matches']
+        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'tournament', 'tournament_name', 'team_count', 'elimination_type', 'winner', 'is_complete', 'created_at', 'updated_at', 'rounds', 'matches']
         read_only_fields = ["winner", "team_count", "is_complete"]
 
+    def get_season_name(self, obj):
+        return obj.season.name if obj.season else None
+
+    def get_tournament_name(self, obj):
+        return obj.tournament.name if obj.tournament else None
+
+    def get_league_name(self, obj):
+        if obj.season and obj.season.league:
+            return obj.season.league.name
+        elif obj.tournament:
+            return None  # Tournaments don't have leagues
+        return None
+
     def get_league(self, obj):
-        return obj.season.league.id
+        if obj.season and obj.season.league:
+            return obj.season.league.id
+        elif obj.tournament:
+            return None  # Tournaments don't have leagues
+        return None
+    
+    def create(self, validated_data):
+        """Create bracket and trigger generation in the viewset"""
+        # Validate that only one of season or tournament is provided
+        season = validated_data.get('season')
+        tournament = validated_data.get('tournament')
+        
+        if season and tournament:
+            raise serializers.ValidationError("A bracket cannot be associated with both a season and a tournament. Please provide only one.")
+        
+        if not season and not tournament:
+            raise serializers.ValidationError("A bracket must be associated with either a season or a tournament.")
+        
+        bracket = Bracket.objects.create(**validated_data)
+        return bracket
+    
+    def validate(self, data):
+        """Validate that only one of season or tournament is provided"""
+        season = data.get('season')
+        tournament = data.get('tournament')
+        
+        if season and tournament:
+            raise serializers.ValidationError("A bracket cannot be associated with both a season and a tournament. Please provide only one.")
+        
+        if not season and not tournament:
+            raise serializers.ValidationError("A bracket must be associated with either a season or a tournament.")
+        
+        return data
     
     def get_team_count(self, obj):
         return obj.team_count()

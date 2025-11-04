@@ -230,27 +230,55 @@ def handle_match_completion(sender, instance, **kwargs):
             # Stop here for round robin tournaments if we've reached the expected number of rounds
             if bracket.elimination_type == 'round_robin':
                 # Get total teams to calculate expected rounds
-                teams_count = bracket.season.teams.count()
+                teams_count = bracket.season.teams.count() if bracket.season else bracket.tournament.teams.count()
                 expected_rounds = teams_count - 1 if teams_count > 1 else 0
                 
                 # If we've completed all rounds for round robin, mark as complete and exit
                 if current_round_number >= expected_rounds:
                     logger.info(f"Round robin tournament completed with {current_round_number} rounds.")
                     bracket.is_complete = True
-                    # Determine the bracket winner based on team with most wins
-                    from django.db.models import Count
-                    winner_team = BracketMatch.objects.filter(
-                        bracket=bracket, 
-                        winner__isnull=False
-                    ).values('winner').annotate(
-                        win_count=Count('winner')
-                    ).order_by('-win_count').first()
                     
-                    if winner_team:
-                        bracket.winner_id = winner_team['winner']
+                    # Determine the bracket winner using standings logic with proper tiebreakers
+                    # This handles ties by using match points, win ratio, and point differential
+                    if bracket.season:
+                        standings = bracket.season.standings()
+                    elif bracket.tournament:
+                        standings = bracket.tournament.standings()
+                    else:
+                        standings = []
+                    
+                    # Get the top team from standings (already sorted with tiebreakers)
+                    if standings and len(standings) > 0:
+                        winner_team_id = standings[0]['team_id']
+                        bracket.winner_id = winner_team_id
                         bracket.save(update_fields=["is_complete", "winner"])
+                        logger.info(f"Round robin winner: Team ID {winner_team_id}")
                     else:
                         bracket.save(update_fields=["is_complete"])
+                        logger.warning(f"No standings found for round robin bracket {bracket.id}")
+                    return
+            
+            # Handle double elimination completion - check if this is the grand final
+            if bracket.elimination_type == 'double':
+                # Check if there's a next round
+                has_next_round = bracket.rounds.filter(
+                    round_number=current_round_number + 1
+                ).exists()
+                
+                if not has_next_round:
+                    # This is the grand final (last round) - tournament is complete
+                    logger.info(f"Double elimination grand final completed for bracket {bracket.id}")
+                    bracket.is_complete = True
+                    
+                    # The winner of the grand final (current round) is the bracket winner
+                    grand_final_match = current_round.matches.first()
+                    if grand_final_match and grand_final_match.winner:
+                        bracket.winner = grand_final_match.winner
+                        bracket.save(update_fields=["is_complete", "winner"])
+                        logger.info(f"Bracket {bracket.id} winner is {grand_final_match.winner.name}")
+                    else:
+                        bracket.save(update_fields=["is_complete"])
+                        logger.warning(f"Grand final completed but no winner found for bracket {bracket.id}")
                     return
             
             viewset = BracketViewSet()
@@ -316,10 +344,25 @@ def create_or_assign_game(sender, instance, **kwargs):
     # Only create game if both teams have been assigned
     if instance.home_team and instance.away_team:
         try:
-            # Retrieve the season start datetime from the bracket's season
-            season_start = instance.bracket.season.start_date
-            if not season_start:
-                raise ValueError("Season start date is not defined.")
+            # Get start date from either season or tournament
+            if instance.bracket.season:
+                start_date = instance.bracket.season.start_date
+                if not start_date:
+                    raise ValueError("Season start date is not defined.")
+                sport = instance.home_team.sport
+                league = instance.bracket.season.league
+                season = instance.bracket.season
+                game_type = Game.Type.LEAGUE
+            elif instance.bracket.tournament:
+                start_date = instance.bracket.tournament.start_date
+                if not start_date:
+                    raise ValueError("Tournament start date is not defined.")
+                sport = instance.bracket.tournament.sport
+                league = None
+                season = None
+                game_type = Game.Type.TOURNAMENT
+            else:
+                raise ValueError("Bracket is not associated with a season or tournament")
 
             # Calculate day offset: each round is on a new day.
             round_offset = timedelta(days=instance.round.round_number - 1)
@@ -333,18 +376,17 @@ def create_or_assign_game(sender, instance, **kwargs):
                 match_index = 0
             time_offset = timedelta(hours=2 * match_index)
 
-            scheduled_datetime = season_start + round_offset + time_offset
+            scheduled_datetime = start_date + round_offset + time_offset
 
             game = Game.objects.create(
-                sport=instance.home_team.sport,
+                sport=sport,
                 home_team=instance.home_team,
                 away_team=instance.away_team,
                 status=Game.Status.SCHEDULED,
-                type=Game.Type.LEAGUE,
-                season=instance.bracket.season,
-                league=(
-                    instance.bracket.season.league if instance.bracket.season else None
-                ),
+                type=game_type,
+                season=season,
+                league=league,
+                tournament=instance.bracket.tournament if instance.bracket.tournament else None,
                 date=scheduled_datetime,
             )
             instance.game = game

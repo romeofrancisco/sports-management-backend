@@ -53,6 +53,9 @@ class Game(models.Model):
     season = models.ForeignKey(
         Season, on_delete=models.CASCADE, null=True, related_name="games"
     )
+    tournament = models.ForeignKey(
+        "tournaments.Tournament", on_delete=models.CASCADE, null=True, blank=True, related_name="games"
+    )
     type = models.CharField(max_length=20, choices=Type.choices, default=Type.PRACTICE)
     is_recorded = models.BooleanField(default=False)
     creator = models.ForeignKey(
