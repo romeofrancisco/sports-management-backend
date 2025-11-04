@@ -450,6 +450,99 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["patch"])
+    def move(self, request, pk=None):
+        """Move a document to a different folder"""
+        document = self.get_object()
+
+        if not document.can_edit(request.user):
+            return Response(
+                {"error": "You don't have permission to move this document"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        target_folder_id = request.data.get("target_folder")
+        
+        # target_folder can be null for moving to root (admin only) or needs to be resolved for coach/player
+        if target_folder_id is None:
+            # Moving to root level
+            if request.user.is_admin:
+                # Admin can move to root (null folder)
+                document.folder = None
+                document.save()
+                
+                return Response(
+                    DocumentDetailSerializer(document, context={'request': request}).data,
+                    status=status.HTTP_200_OK
+                )
+            elif request.user.is_coach or request.user.is_player:
+                # Coach/Player should move to their personal folder
+                from .models import Folder
+                try:
+                    # Get user's personal folder
+                    if request.user.is_coach:
+                        personal_folder = Folder.objects.filter(
+                            folder_type=Folder.FolderType.COACH_PERSONAL,
+                            owner=request.user
+                        ).first()
+                    else:  # is_player
+                        personal_folder = Folder.objects.filter(
+                            folder_type=Folder.FolderType.PLAYER_PERSONAL,
+                            owner=request.user
+                        ).first()
+                    
+                    if not personal_folder:
+                        return Response(
+                            {"error": "Your personal folder could not be found"},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+                    
+                    # Move to personal folder
+                    document.folder = personal_folder
+                    document.save()
+                    
+                    return Response(
+                        DocumentDetailSerializer(document, context={'request': request}).data,
+                        status=status.HTTP_200_OK
+                    )
+                except Exception as e:
+                    return Response(
+                        {"error": f"Error finding personal folder: {str(e)}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+            else:
+                return Response(
+                    {"error": "You don't have permission to move files to root level"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        try:
+            from .models import Folder
+            target_folder = Folder.objects.get(pk=target_folder_id)
+            
+            # Check if user has permission to add to target folder
+            if not target_folder.can_edit(request.user):
+                return Response(
+                    {"error": "You don't have permission to add files to this folder"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            
+            # Move the document
+            document.folder = target_folder
+            document.save()
+            
+            return Response(
+                DocumentDetailSerializer(document, context={'request': request}).data,
+                status=status.HTTP_200_OK
+            )
+        except Folder.DoesNotExist:
+            return Response(
+                {"error": "Target folder not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["patch"])
     def rename(self, request, pk=None):
         """Rename a document"""
         import cloudinary.uploader
@@ -494,27 +587,27 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 )
 
                 # Rename the file in Cloudinary
-                # MediaCloudinaryStorage stores files as 'image' type by default
-                # Try image first, fall back to raw if it fails
+                # Documents use 'raw' resource type by default
+                # Try raw first, fall back to image if needed (for old image files)
                 try:
                     cloudinary.uploader.rename(
                         old_public_id,
                         new_public_id,
-                        resource_type="image",
+                        resource_type="raw",
                         invalidate=True,
                     )
-                except Exception as img_error:
-                    # If image fails, try raw
+                except Exception as raw_error:
+                    # If raw fails, try image (for backwards compatibility)
                     try:
                         cloudinary.uploader.rename(
                             old_public_id,
                             new_public_id,
-                            resource_type="raw",
+                            resource_type="image",
                             invalidate=True,
                         )
-                    except Exception as raw_error:
+                    except Exception as img_error:
                         raise Exception(
-                            f"Failed with both image and raw types. Image error: {img_error}, Raw error: {raw_error}"
+                            f"Failed with both raw and image types. Raw error: {raw_error}, Image error: {img_error}"
                         )
 
                 # Update the document's file field with new public_id

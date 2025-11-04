@@ -1,6 +1,7 @@
 from django.db import models
 from users.models import User
 from django.core.exceptions import ValidationError
+from .storage import DocumentCloudinaryStorage
 
 class Folder(models.Model):
     """Represents a folder in the hierarchy"""
@@ -82,6 +83,25 @@ class Folder(models.Model):
             return user.is_admin
         
         return False
+    
+    def can_edit(self, user):
+        """Check if user can edit/add files to this folder"""
+        if user.is_admin:
+            return True
+        
+        # Public folders - no one can add files
+        if self.folder_type == self.FolderType.PUBLIC:
+            return False
+        
+        # Owner can edit their own folders
+        if self.owner == user:
+            return True
+        
+        # Coach can add files to player folders under their Players folder
+        if self.folder_type == self.FolderType.PLAYER_PERSONAL and user.is_coach:
+            return self.parent and self.parent.parent and self.parent.parent.owner == user
+        
+        return False
 
 
 class Document(models.Model):
@@ -91,7 +111,7 @@ class Document(models.Model):
         COPY = "copy", "Copy"
     
     title = models.CharField(max_length=255)
-    file = models.FileField(upload_to='documents/')
+    file = models.FileField(upload_to='documents/', storage=DocumentCloudinaryStorage())
     file_extension = models.CharField(max_length=10, blank=True)
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
@@ -150,7 +170,7 @@ class Document(models.Model):
         return self.folder.can_access(user)
     
     def can_edit(self, user):
-        """Check if user can edit this document (original file)"""
+        """Check if user can edit this document (save changes to original file)"""
         if user.is_admin:
             return True
         
@@ -160,6 +180,18 @@ class Document(models.Model):
         
         # Users can edit their copies
         return self.owner == user
+    
+    def can_open_in_editor(self, user):
+        """Check if user can open this document in the editor (view/edit mode)"""
+        # Anyone who can view the document can open it in the editor
+        # But saving changes depends on can_edit permission
+        return self.can_view(user)
+    
+    def is_in_public_folder(self):
+        """Check if document is in a public folder"""
+        if not self.folder:
+            return False
+        return self.folder.folder_type == Folder.FolderType.PUBLIC
     
     def can_delete(self, user):
         """Check if user can delete this document"""

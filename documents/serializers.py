@@ -259,15 +259,32 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     copies_count = serializers.SerializerMethodField()
     file_size = serializers.SerializerMethodField()
     file_extension = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'file', 'folder', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
-            'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 'file_extension'
+            'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 
+            'file_extension', 'can_edit', 'can_delete'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status', 'original_document']
+    
+    def get_can_edit(self, obj):
+        """Check if current user can edit this document"""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return obj.can_edit(request.user)
+        return False
+    
+    def get_can_delete(self, obj):
+        """Check if current user can delete this document"""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return obj.can_delete(request.user)
+        return False
     
     def get_original_document_detail(self, obj):
         if obj.original_document:
