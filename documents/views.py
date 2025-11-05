@@ -15,6 +15,7 @@ from .serializers import (
     DocumentPermissionSerializer,
 )
 from .folder_utils import get_user_personal_folder, ensure_root_folders
+import cloudinary
 
 
 class FolderViewSet(viewsets.ModelViewSet):
@@ -423,7 +424,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        file_url = str(document.file)
+        if "res.cloudinary.com" in file_url:
+            try:
+                # Extract Cloudinary public_id
+                path = file_url.split("/upload/")[1]
+                public_id = "/".join(path.split("/")[1:]).rsplit(".", 1)[0]
+                cloudinary.uploader.destroy(public_id, resource_type="raw")
+            except Exception as e:
+                print(f"⚠️ Cloudinary deletion failed: {e}")
+
         return super().destroy(request, *args, **kwargs)
+
 
     @action(detail=True, methods=["post"])
     def copy(self, request, pk=None):
@@ -544,10 +556,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["patch"])
     def rename(self, request, pk=None):
-        """Rename a document"""
-        import cloudinary.uploader
-        import os
-
+        """Rename a document - only updates the title in database, not the physical file"""
         document = self.get_object()
 
         if not document.can_edit(request.user):
@@ -562,64 +571,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {"error": "New title is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get the old file and extract the public_id from the file field
-        if document.file:
-            try:
-                # Get the file name from the FileField (this is the path stored in database)
-                # Format: documents/filename.ext
-                old_file_name = document.file.name
-
-                # Get the file extension
-                file_extension = os.path.splitext(old_file_name)[1]
-
-                # Remove extension to get the public_id
-                # The file.name is already the correct path without 'media/' prefix
-                old_public_id = os.path.splitext(old_file_name)[0]
-
-                # Create new public_id with the same folder structure but new filename
-                # Keep the folder path (e.g., 'documents/'), just change the filename
-                folder_path = os.path.dirname(old_public_id)
-                new_filename = new_title.replace(
-                    " ", "_"
-                )  # Replace spaces with underscores
-                new_public_id = os.path.join(folder_path, new_filename).replace(
-                    "\\", "/"
-                )
-
-                # Rename the file in Cloudinary
-                # Documents use 'raw' resource type by default
-                # Try raw first, fall back to image if needed (for old image files)
-                try:
-                    cloudinary.uploader.rename(
-                        old_public_id,
-                        new_public_id,
-                        resource_type="raw",
-                        invalidate=True,
-                    )
-                except Exception as raw_error:
-                    # If raw fails, try image (for backwards compatibility)
-                    try:
-                        cloudinary.uploader.rename(
-                            old_public_id,
-                            new_public_id,
-                            resource_type="image",
-                            invalidate=True,
-                        )
-                    except Exception as img_error:
-                        raise Exception(
-                            f"Failed with both raw and image types. Raw error: {raw_error}, Image error: {img_error}"
-                        )
-
-                # Update the document's file field with new public_id
-                document.file.name = f"{new_public_id}{file_extension}"
-
-            except Exception as e:
-                return Response(
-                    {"error": f"Failed to rename file in storage: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
         # Update the title in database
+        # Note: We're only updating the display title, not renaming the physical file in storage
+        # This is safer and faster, and the physical filename doesn't need to match the title
         document.title = new_title
         document.save()
 
