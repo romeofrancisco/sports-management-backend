@@ -1,10 +1,14 @@
+import os
 from django.db import models
 from users.models import User
 from django.core.exceptions import ValidationError
 from .storage import DocumentCloudinaryStorage
+from cloudinary.utils import cloudinary_url
+
 
 class Folder(models.Model):
     """Represents a folder in the hierarchy"""
+
     class FolderType(models.TextChoices):
         PUBLIC = "public", "Public"
         COACHES = "coaches", "Coaches"
@@ -12,107 +16,126 @@ class Folder(models.Model):
         PLAYERS = "players", "Players"
         PLAYER_PERSONAL = "player_personal", "Player Personal"
         ADMIN_PRIVATE = "admin_private", "Admin Private"
-    
+
     name = models.CharField(max_length=255)
     folder_type = models.CharField(max_length=20, choices=FolderType.choices)
-    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subfolders')
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='owned_folders')
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="subfolders",
+    )
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="owned_folders",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
-        ordering = ['name']
+        ordering = ["name"]
         # No database-level unique constraint - we handle validation in serializer and model clean()
-    
+
     def __str__(self):
         return f"{self.name} ({self.folder_type})"
-    
+
     def clean(self):
         """Validate folder name uniqueness within the same parent"""
         # Check for duplicate folder names in the same parent (exact match)
-        existing = Folder.objects.filter(
-            name=self.name,
-            parent=self.parent
-        ).exclude(pk=self.pk)
-        
+        existing = Folder.objects.filter(name=self.name, parent=self.parent).exclude(
+            pk=self.pk
+        )
+
         if existing.exists():
-            raise ValidationError({
-                'name': f"A folder named '{self.name}' already exists."
-            })
-    
+            raise ValidationError(
+                {"name": f"A folder named '{self.name}' already exists."}
+            )
+
     def save(self, *args, **kwargs):
         """Override save to call clean validation"""
         self.clean()
         super().save(*args, **kwargs)
-    
+
     def get_full_path(self):
         """Returns the full path of the folder using a special separator that won't conflict with folder names"""
         if self.parent:
             return f"{self.parent.get_full_path()} > {self.name}"
         return self.name
-    
+
     def can_access(self, user):
         """Check if user can access this folder"""
         if user.is_admin:
             return True
-        
+
         if self.folder_type == self.FolderType.PUBLIC:
             return True
-        
+
         if self.folder_type == self.FolderType.COACHES:
             # Admin and coaches can access Coaches type folders
             return user.is_admin or user.is_coach
-        
+
         if self.folder_type == self.FolderType.COACH_PERSONAL and user.is_coach:
             # Coach can only access their own personal folder
             return self.owner == user
-        
+
         if self.folder_type == self.FolderType.PLAYER_PERSONAL:
             if user.is_player:
                 # Player can access their own folder
                 return self.owner == user
             if user.is_coach:
                 # Coach can access player folders under their Players folder
-                return self.parent and self.parent.parent and self.parent.parent.owner == user
-        
+                return (
+                    self.parent
+                    and self.parent.parent
+                    and self.parent.parent.owner == user
+                )
+
         if self.folder_type == self.FolderType.PLAYERS and user.is_coach:
             # Coach can access their players' folder
             return self.parent and self.parent.owner == user
-        
+
         if self.folder_type == self.FolderType.ADMIN_PRIVATE:
             # Only admin can access private folders
             return user.is_admin
-        
+
         return False
-    
+
     def can_edit(self, user):
         """Check if user can edit/add files to this folder"""
         if user.is_admin:
             return True
-        
+
         # Public folders - no one can add files
         if self.folder_type == self.FolderType.PUBLIC:
             return False
-        
+
         # Owner can edit their own folders
         if self.owner == user:
             return True
-        
+
         # Coach can add files to player folders under their Players folder
         if self.folder_type == self.FolderType.PLAYER_PERSONAL and user.is_coach:
-            return self.parent and self.parent.parent and self.parent.parent.owner == user
-        
+            return (
+                self.parent and self.parent.parent and self.parent.parent.owner == user
+            )
+
         return False
 
 
 class Document(models.Model):
     """Represents a document in the system"""
+
     class DocumentStatus(models.TextChoices):
         ORIGINAL = "original", "Original"
         COPY = "copy", "Copy"
-    
+
     title = models.CharField(max_length=255)
-    file = models.FileField(upload_to='documents/', storage=DocumentCloudinaryStorage())
+    file = models.FileField(upload_to="documents/", storage=DocumentCloudinaryStorage(), max_length=255)
     file_extension = models.CharField(max_length=10, blank=True)
+    version = models.CharField(max_length=50, blank=True, null=True)
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_documents')
@@ -121,37 +144,70 @@ class Document(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     description = models.TextField(blank=True)
-    
+
     class Meta:
-        ordering = ['-uploaded_at']
-    
+        ordering = ["-uploaded_at"]
+
     def __str__(self):
         return f"{self.title} - {self.status}"
-    
+
     def clean(self):
         """Validate that document title is unique within the same folder"""
         super().clean()
-        
+
         # Check for duplicate document title in the same folder
-        duplicate_query = Document.objects.filter(
-            title=self.title,
-            folder=self.folder
-        )
-        
+        duplicate_query = Document.objects.filter(title=self.title, folder=self.folder)
+
         # Exclude current instance if updating
         if self.pk:
             duplicate_query = duplicate_query.exclude(pk=self.pk)
-        
+
         if duplicate_query.exists():
-            raise ValidationError({
-                'title': f"A file named '{self.title}' already exists."
-            })
-    
+            raise ValidationError(
+                {"title": f"A file named '{self.title}' already exists."}
+            )
+
     def save(self, *args, **kwargs):
-        """Override save to call clean() before saving"""
+        """Override save to update version info after upload"""
         self.clean()
+
+        # Extract file extension if missing
+        if not self.file_extension and self.file:
+            _, ext = os.path.splitext(self.file.name)
+            self.file_extension = ext.lower()
+
         super().save(*args, **kwargs)
+
+        # If uploaded through Cloudinary storage, store the latest version
+        storage = getattr(self.file, "storage", None)
+        if storage and hasattr(storage, "_last_result"):
+            result = storage._last_result
+            if result:
+                version = str(result.get("version", "")) or None
+                if version and version != self.version:
+                    self.version = version
+                    super().save(update_fields=["version"])
     
+    def get_latest_url(self):
+        """
+        Return the current Cloudinary URL with the correct version.
+        This ensures the frontend always gets the updated file.
+        """
+        public_id = os.path.splitext(self.file.name)[0]
+        version = self.version
+        url, _ = cloudinary_url(
+            public_id,
+            resource_type="raw",
+            version=version if version else None,
+        )
+        return url
+
+    @property
+    def file_url(self):
+        """Shortcut for templates or API responses"""
+        return self.get_latest_url()
+        
+
     def delete(self, *args, **kwargs):
         """Override delete to remove the file from filesystem or cloud storage"""
         # Delete the file from storage (works with local and cloud storage)
@@ -161,78 +217,78 @@ class Document(models.Model):
             except Exception as e:
                 # Log the error but don't prevent deletion
                 print(f"Error deleting file: {e}")
-        
+
         # Call the parent delete method
         super().delete(*args, **kwargs)
-    
+
     def can_view(self, user):
         """Check if user can view this document"""
         return self.folder.can_access(user)
-    
+
     def can_edit(self, user):
         """Check if user can edit this document (save changes to original file)"""
         if user.is_admin:
             return True
-        
+
         # Only owner can edit their original files
         if self.status == self.DocumentStatus.ORIGINAL:
             return self.owner == user
-        
+
         # Users can edit their copies
         return self.owner == user
-    
+
     def can_open_in_editor(self, user):
         """Check if user can open this document in the editor (view/edit mode)"""
         # Anyone who can view the document can open it in the editor
         # But saving changes depends on can_edit permission
         return self.can_view(user)
-    
+
     def is_in_public_folder(self):
         """Check if document is in a public folder"""
         if not self.folder:
             return False
         return self.folder.folder_type == Folder.FolderType.PUBLIC
-    
+
     def can_delete(self, user):
         """Check if user can delete this document"""
         if user.is_admin:
             return True
-        
+
         # Users can delete their own files
         return self.owner == user
-    
+
     def create_copy(self, user, target_folder):
         """Create a copy of this document for a user"""
         from django.core.files.base import ContentFile
         from django.core.files.storage import default_storage
         import os
-        
+
         # Check if user can access target folder (null folder is admin-only)
         if target_folder is None:
             if not user.is_admin:
                 raise ValidationError("Only admins can copy to root level")
         elif not target_folder.can_access(user):
             raise ValidationError("User cannot access target folder")
-        
+
         # Create a physical copy of the file using Django's file field methods
         new_file = None
         if self.file:
             try:
                 # Use the file field's open method which handles storage correctly
-                self.file.open('rb')
+                self.file.open("rb")
                 original_content = self.file.read()
                 self.file.close()
-                
+
                 # Get the original filename and create a new name for the copy
                 original_name = os.path.basename(self.file.name)
                 name, ext = os.path.splitext(original_name)
                 new_filename = f"{name}_copy{ext}"
-                
+
                 # Create a new file with the copied content
                 new_file = ContentFile(original_content, name=new_filename)
             except Exception as e:
                 raise ValidationError(f"Error copying file: {str(e)}")
-        
+
         copy = Document.objects.create(
             title=f"{self.title} (Copy)",
             file=new_file,
@@ -241,24 +297,33 @@ class Document(models.Model):
             uploaded_by=user,
             owner=user,
             status=self.DocumentStatus.COPY,
-            original_document=self if self.status == self.DocumentStatus.ORIGINAL else self.original_document,
-            description=self.description
+            original_document=(
+                self
+                if self.status == self.DocumentStatus.ORIGINAL
+                else self.original_document
+            ),
+            description=self.description,
         )
         return copy
 
 
 class DocumentPermission(models.Model):
     """Additional permissions for documents"""
-    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='permissions')
+
+    document = models.ForeignKey(
+        Document, on_delete=models.CASCADE, related_name="permissions"
+    )
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     can_view = models.BooleanField(default=True)
     can_edit = models.BooleanField(default=False)
     can_delete = models.BooleanField(default=False)
-    granted_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='granted_permissions')
+    granted_by = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="granted_permissions"
+    )
     granted_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
-        unique_together = [['document', 'user']]
-    
+        unique_together = [["document", "user"]]
+
     def __str__(self):
         return f"{self.user.email} - {self.document.title}"
