@@ -323,12 +323,7 @@ def spreadsheet_open(request):
                 print(f"Error deleting temp file: {e}")
 
 
-SYNCFUSION_SAVE_URLS = [
-    # Primary
-    "https://document.syncfusion.com/web-services/spreadsheet-editor/api/spreadsheet/save",
-    # Fallback
-    "https://ej2services.syncfusion.com/production/web-services/api/spreadsheet/save",
-]
+SYNCFUSION_SAVE_URL = "https://document.syncfusion.com/web-services/spreadsheet-editor/api/spreadsheet/save"
 
 
 def save_excel_local(file_path, data):
@@ -341,117 +336,54 @@ def save_excel_local(file_path, data):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def spreadsheet_save(request):
-    """
-    Convert spreadsheet JSON back to Excel and replace Cloudinary file.
-    """
     document_id = request.data.get("documentId")
-    json_data = request.data.get("JSONData")
-    file_name = request.data.get("FileName", "Spreadsheet.xlsx")
-    save_type = request.data.get("saveType", "Xlsx")
+    file_name = request.data.get("fileName", "Spreadsheet.xlsx")
+    workbook_json = request.data.get("file")
 
-    if not all([document_id, json_data]):
-        return JsonResponse({"error": "Missing required data"}, status=400)
+    if not all([document_id, workbook_json]):
+        return JsonResponse({"error": "Missing documentId or workbookJson"}, status=400)
 
+    document = Document.objects.filter(id=document_id).first()
+    if not document or not document.can_edit(request.user):
+        return JsonResponse({"error": "No permission or document not found"}, status=403)
+
+    # Step 1: Send JSON to Syncfusion save endpoint
     try:
-        document = Document.objects.get(id=document_id)
-    except Document.DoesNotExist:
-        return JsonResponse({"error": "Document not found"}, status=404)
-
-    # Permission check: must be allowed to edit original
-    if not document.can_edit(request.user):
-        if document.is_in_public_folder():
-            return JsonResponse(
-                {
-                    "error": "Cannot save public documents",
-                    "message": "This document is public. Please make a copy to save changes.",
-                    "isPublic": True,
-                },
-                status=403,
-            )
-        return JsonResponse(
-            {
-                "error": "No edit permission",
-                "message": "Only the owner or admin can edit this document.",
-            },
-            status=403,
+        syncfusion_response = requests.post(
+            SYNCFUSION_SAVE_URL,
+            json=workbook_json,
+            timeout=30  # adjust if large files
         )
+        syncfusion_response.raise_for_status()
+    except requests.RequestException as e:
+        return JsonResponse({"error": f"Syncfusion save failed: {str(e)}"}, status=500)
 
-    try:
-        # Normalize filename to ensure .xlsx extension
-        base_name, ext = os.path.splitext(
-            file_name or document.title or "Spreadsheet.xlsx"
-        )
-        if ext.lower() not in [".xlsx", ".xls"]:
-            file_name = f"{base_name}.xlsx"
-        else:
-            file_name = f"{base_name}{ext}"
+    # Step 2: Receive Excel file as binary
+    excel_bytes = syncfusion_response.content
 
-        # JSONData may arrive as a string or object; ensure it's a string (per Syncfusion save API)
-        try:
-            if isinstance(json_data, str):
-                # Keep as-is (already a JSON string of the Workbook)
-                workbook_json_str = json_data
-            else:
-                # Convert dict/object to string
-                workbook_json_str = json.dumps(json_data)
-        except Exception:
-            # As a last resort, cast to string
-            workbook_json_str = str(json_data)
+    # Step 3: Save to temp file
+    tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx").name
+    with open(tmp_path, "wb") as f:
+        f.write(excel_bytes)
 
-        last_error = None
-        content_bytes = None
+    # Step 4: Upload to Cloudinary
+    upload_result = cloudinary.uploader.upload(
+        tmp_path,
+        resource_type="raw",
+        public_id=document.file.name,
+        overwrite=True
+    )
 
-        # Try multiple Syncfusion endpoints (primary then fallback)
-        for url in SYNCFUSION_SAVE_URLS:
-            try:
-                # Syncfusion save API expects form body fields (not JSON)
-                payload = {
-                    "FileName": file_name,
-                    "saveType": save_type,
-                    "JSONData": workbook_json_str,
-                    "PdfLayoutSettings": "{}",
-                }
-                resp = requests.post(url, data=payload, timeout=30)
-                if resp.status_code == 200:
-                    content_bytes = resp.content
-                    break
-                else:
-                    last_error = f"{resp.status_code}: {resp.text[:500]}"
-            except requests.Timeout:
-                last_error = "Syncfusion save timed out"
-            except Exception as e:
-                last_error = str(e)
+    document.version = str(upload_result["version"])
+    document.file.name = upload_result["public_id"]
+    document.save(update_fields=["file", "version"])
 
-        if content_bytes is None:
-            return JsonResponse(
-                {
-                    "error": "Syncfusion conversion failed",
-                    "details": last_error,
-                },
-                status=500,
-            )
+    # Clean up
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
-        # Delete the old file from storage to avoid duplicates
-        if document.file:
-            try:
-                document.file.delete(save=False)
-            except Exception as e:
-                # Log but continue, we'll overwrite metadata anyway
-                print(f"Error deleting old file: {e}")
-
-        # Save new content to Cloudinary via Django storage backend
-        document.title = file_name
-        document.file.save(file_name, ContentFile(content_bytes), save=False)
-        document.save(update_fields=["title", "file"])
-
-        return JsonResponse(
-            {
-                "success": True,
-                "message": f"{file_name} saved successfully",
-                "documentId": document.id,
-                "fileUrl": document.file.url,
-            }
-        )
-
-    except Exception as e:
-        return JsonResponse({"error": f"Error saving spreadsheet: {e}"}, status=500)
+    return JsonResponse({
+        "success": True,
+        "fileUrl": upload_result["secure_url"],
+        "documentId": document.id
+    })
