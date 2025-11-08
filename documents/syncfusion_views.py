@@ -2,7 +2,8 @@
 Syncfusion Document Editor API endpoints for document operations
 Handles loading documents from Cloudinary and saving back to Cloudinary
 """
-from django.http import JsonResponse, HttpResponse
+
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view, permission_classes
@@ -15,9 +16,16 @@ import requests
 from io import BytesIO
 from .models import Document
 import cloudinary.uploader
+from cloudinary.uploader import upload as cloudinary_upload
+from cloudinary.uploader import destroy as cloudinary_destroy
+import io
 import os
-import subprocess
 import tempfile
+from django.core.files.base import ContentFile
+from .utils import get_cloudinary_public_id_regex
+from openpyxl import load_workbook
+from cloudinary.utils import cloudinary_url
+import cloudinary.api
 
 
 @csrf_exempt
@@ -32,72 +40,70 @@ def import_document(request):
     """
     try:
         data = json.loads(request.body)
-        document_id = data.get('documentId')
-        
+        document_id = data.get("documentId")
+
         if not document_id:
-            return JsonResponse({
-                'error': 'Document ID is required'
-            }, status=400)
-        
+            return JsonResponse({"error": "Document ID is required"}, status=400)
+
         # Get the document from database
         try:
             document = Document.objects.get(id=document_id)
         except Document.DoesNotExist:
-            return JsonResponse({
-                'error': 'Document not found'
-            }, status=404)
-        
-        # Check if user has permission to open in editor
+            return JsonResponse({"error": "Document not found"}, status=404)
+
+        # Check user permissions
         if not document.can_open_in_editor(request.user):
-            return JsonResponse({
-                'error': 'You do not have permission to view this document'
-            }, status=403)
-        
-        # Check if user can edit (save changes to) this document
+            return JsonResponse(
+                {"error": "You do not have permission to view this document"}, status=403
+            )
+
         can_edit = document.can_edit(request.user)
         is_public = document.is_in_public_folder()
-        
-        # Download document from Cloudinary
-        file_url = document.file.url
-        response = requests.get(file_url)
-        
+
+        # ✅ Build Cloudinary URL manually with version to force fresh load
+        public_id = document.file.name.replace("\\", "/")
+
+        # (Optional) ensure consistent pathing if using "media/documents/"
+        if not public_id.startswith("media/"):
+            public_id = f"media/{public_id}"
+
+        file_url, _ = cloudinary_url(
+            public_id,
+            resource_type="raw",
+            version=document.version,  # ✅ Force specific version (bypasses CDN cache)
+        )
+
+        # ✅ Download the *exact* version from Cloudinary
+        response = requests.get(file_url, timeout=30)
         if response.status_code != 200:
-            return JsonResponse({
-                'error': 'Failed to download document from storage'
-            }, status=500)
-        
-        # Convert DOCX to SFDT using Syncfusion's web service
+            return JsonResponse(
+                {"error": "Failed to download document from storage"}, status=500
+            )
+
         file_content = response.content
-        
-        # Get file extension to determine format
         file_extension = os.path.splitext(document.title)[1].lower()
-        
-        # Prepare multipart form data with proper content type
+
+        # Prepare form data for Syncfusion import
         files = {
-            'files': (
+            "files": (
                 document.title,
                 BytesIO(file_content),
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         }
-        
-        # Try different Syncfusion conversion endpoints
+
+        # Try multiple Syncfusion endpoints
         conversion_urls = [
-            'https://services.syncfusion.com/react/production/api/documenteditor/Import',
-            'https://ej2services.syncfusion.com/production/web-services/api/documenteditor/Import'
+            "https://services.syncfusion.com/react/production/api/documenteditor/Import",
+            "https://ej2services.syncfusion.com/production/web-services/api/documenteditor/Import",
         ]
-        
+
         sfdt_data = None
         last_error = None
-        
+
         for conversion_url in conversion_urls:
             try:
-                conversion_response = requests.post(
-                    conversion_url, 
-                    files=files,
-                    timeout=30
-                )
-                
+                conversion_response = requests.post(conversion_url, files=files, timeout=30)
                 if conversion_response.status_code == 200:
                     sfdt_data = conversion_response.text
                     break
@@ -106,29 +112,31 @@ def import_document(request):
             except Exception as e:
                 last_error = str(e)
                 continue
-        
-        if not sfdt_data:
-            return JsonResponse({
-                'error': f'Failed to convert document to SFDT format. Last error: {last_error}'
-            }, status=500)
-        
-        # Return SFDT JSON with permission info
-        return JsonResponse({
-            'sfdt': sfdt_data,
-            'fileName': document.title,
-            'documentId': document.id,
-            'canEdit': can_edit,
-            'isPublic': is_public
-        })
-        
-    except Exception as e:
-        return JsonResponse({
-            'error': f'Error loading document: {str(e)}'
-        }, status=500)
 
+        if not sfdt_data:
+            return JsonResponse(
+                {
+                    "error": f"Failed to convert document to SFDT format. Last error: {last_error}"
+                },
+                status=500,
+            )
+
+        # ✅ Return SFDT data + permission flags
+        return JsonResponse(
+            {
+                "sfdt": sfdt_data,
+                "fileName": document.title,
+                "documentId": document.id,
+                "canEdit": can_edit,
+                "isPublic": is_public,
+            }
+        )
+
+    except Exception as e:
+        return JsonResponse({"error": f"Error loading document: {str(e)}"}, status=500)
 
 @csrf_exempt
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def export_document(request):
     """
@@ -137,85 +145,90 @@ def export_document(request):
     """
     try:
         data = json.loads(request.body)
-        document_id = data.get('documentId')
-        content = data.get('content')
-        file_name = data.get('fileName')
-        
+        document_id = data.get("documentId")
+        content = data.get("content")
+        file_name = data.get("fileName")
+
         if not all([document_id, content]):
-            return JsonResponse({
-                'error': 'Document ID and content are required'
-            }, status=400)
-        
+            return JsonResponse(
+                {"error": "Document ID and content are required"}, status=400
+            )
+
         # Get the document from database
-        try:
-            document = Document.objects.get(id=document_id)
-        except Document.DoesNotExist:
-            return JsonResponse({
-                'error': 'Document not found'
-            }, status=404)
-        
-        # Check if user has permission to edit (save changes to original)
+        document = Document.objects.filter(id=document_id).first()
+        if not document:
+            return JsonResponse({"error": "Document not found"}, status=404)
+
+        # Check edit permission
         if not document.can_edit(request.user):
-            # If it's a public document, suggest making a copy
             if document.is_in_public_folder():
-                return JsonResponse({
-                    'error': 'Cannot save changes to public documents',
-                    'message': 'This is a public document. Please make a copy to save your changes.',
-                    'isPublic': True
-                }, status=403)
-            else:
-                return JsonResponse({
-                    'error': 'You do not have permission to edit this document',
-                    'message': 'Only the document owner or admin can save changes to this file.'
-                }, status=403)
-        
-        # Decode base64 content
+                return JsonResponse(
+                    {
+                        "error": "Cannot save changes to public documents",
+                        "message": "This is a public document. Please make a copy to save your changes.",
+                        "isPublic": True,
+                    },
+                    status=403,
+                )
+            return JsonResponse(
+                {
+                    "error": "You do not have permission to edit this document",
+                    "message": "Only the document owner or admin can save changes to this file.",
+                },
+                status=403,
+            )
+
+        # Decode base64 -> bytes
         file_content = base64.b64decode(content)
+        file_extension = document.file_extension or ".docx"
+
+        # Write to a temporary file with the correct extension
+        with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+
+        # Upload updated file to Cloudinary (overwrite old one)
+        public_id = document.file.name
+
+        upload_result = cloudinary.uploader.upload(
+            tmp_file_path,
+            public_id=public_id,
+            resource_type="raw",
+            type="upload",
+            overwrite=True,
+            invalidate=True,
+        )
+
+        # Clean up temporary file
+        os.remove(tmp_file_path)
         
-        # Get the old file information
-        old_file_name = document.file.name
-        file_extension = os.path.splitext(document.title)[1] or '.docx'
-        
-        # Ensure the filename has the correct extension
-        if not file_name:
-            file_name = document.title
-        if not file_name.endswith(file_extension):
-            file_name = f"{os.path.splitext(file_name)[0]}{file_extension}"
-        
-        # Create a temporary file-like object
-        from django.core.files.base import ContentFile
-        file_obj = ContentFile(file_content, name=file_name)
-        
-        # Delete old file from Cloudinary
-        if document.file:
-            try:
-                # Extract public_id from the file name
-                public_id = os.path.splitext(document.file.name)[0]
-                cloudinary.uploader.destroy(public_id, resource_type="raw", invalidate=True)
-            except Exception as e:
-                print(f"Error deleting old file: {e}")
-        
-        # Save the new file (this will upload to Cloudinary via the storage backend)
-        document.file.save(file_name, file_obj, save=False)
-        
-        # Update document title if needed
-        if file_name and file_name != document.title:
-            document.title = file_name
-        
-        # Save the document model
-        document.save()
-        
-        return JsonResponse({
-            'success': True,
-            'message': 'Document saved successfully',
-            'documentId': document.id,
-            'fileUrl': document.file.url
-        })
-        
+        print(f"Upload result: {upload_result}")
+
+        new_version = upload_result.get("version")
+        file_url, _ = cloudinary_url(
+            upload_result["public_id"],
+            resource_type="raw",
+            version=new_version,
+        )
+
+        # Update the document model
+        document.file.name = upload_result["public_id"]
+        document.version = str(new_version)
+        document.save(update_fields=["file", "version"])
+
+        return JsonResponse(
+            {
+                "success": True,
+                "message": "Document saved successfully",
+                "documentId": document.id,
+                "fileUrl": file_url,
+                "version": new_version,
+            }
+        )
+
     except Exception as e:
-        return JsonResponse({
-            'error': f'Error saving document: {str(e)}'
-        }, status=500)
+        return JsonResponse({"error": f"Error saving document: {str(e)}"}, status=500)
+
 
 
 @csrf_exempt
@@ -227,15 +240,11 @@ def systemClipboard(request):
     """
     try:
         data = json.loads(request.body)
-        content = data.get('content', '')
-        
-        return JsonResponse({
-            'content': content
-        })
+        content = data.get("content", "")
+
+        return JsonResponse({"content": content})
     except Exception as e:
-        return JsonResponse({
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 @csrf_exempt
@@ -247,10 +256,134 @@ def restrictediting(request):
     try:
         # For now, return empty response
         # You can implement user-specific editing restrictions here
-        return JsonResponse({
-            'canEdit': True
-        })
+        return JsonResponse({"canEdit": True})
     except Exception as e:
-        return JsonResponse({
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+SYNCFUSION_OPEN_URL = "https://document.syncfusion.com/web-services/spreadsheet-editor/api/spreadsheet/open"
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def spreadsheet_open(request):
+    file = request.FILES.get("file")
+    if not file:
+        return HttpResponseBadRequest("Missing file")
+
+    tmp_path = None
+
+    try:
+        # Write uploaded file to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            for chunk in file.chunks():
+                tmp.write(chunk)
+            tmp.flush()
+            tmp_path = tmp.name
+
+        print(f"Temp file created: {tmp_path}")
+
+        # Open file and send to Syncfusion with shorter timeout
+        with open(tmp_path, "rb") as file_handle:
+            files = {"file": file_handle}
+            print("Sending request to Syncfusion...")
+            r = requests.post(
+                SYNCFUSION_OPEN_URL, files=files, timeout=15
+            )  # Reduced timeout
+            print(f"Syncfusion response status: {r.status_code}")
+
+        if r.status_code != 200:
+            print(f"Syncfusion error: {r.text}")
+            return JsonResponse({"error": "Syncfusion conversion failed"}, status=500)
+
+        # r.json() already returns workbook JSON
+        json_data = r.json()
+        print(f"Successfully converted spreadsheet")
+        print(f"Response data keys: {list(json_data.keys())}")
+        return JsonResponse(json_data)
+
+    except requests.Timeout:
+        print("Request to Syncfusion timed out")
+        return JsonResponse(
+            {"error": "Request timeout - file conversion took too long"}, status=504
+        )
+    except requests.RequestException as e:
+        print(f"Request error: {str(e)}")
+        return JsonResponse({"error": f"Network error: {str(e)}"}, status=500)
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return JsonResponse({"error": f"Error processing file: {str(e)}"}, status=500)
+    finally:
+        # Clean up temporary file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+                print(f"Cleaned up temp file: {tmp_path}")
+            except Exception as e:
+                print(f"Error deleting temp file: {e}")
+
+
+SYNCFUSION_SAVE_URL = "https://document.syncfusion.com/web-services/spreadsheet-editor/api/spreadsheet/save"
+
+
+def save_excel_local(file_path, data):
+    wb = load_workbook(file_path)
+    ws = wb.active
+    ws["A1"] = "Updated locally!"
+    wb.save(file_path)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def spreadsheet_save(request):
+    document_id = request.data.get("documentId")
+    file_name = request.data.get("fileName", "Spreadsheet.xlsx")
+    workbook_json = request.data.get("file")
+
+    if not all([document_id, workbook_json]):
+        return JsonResponse({"error": "Missing documentId or workbookJson"}, status=400)
+
+    document = Document.objects.filter(id=document_id).first()
+    if not document or not document.can_edit(request.user):
+        return JsonResponse({"error": "No permission or document not found"}, status=403)
+
+    # Step 1: Send JSON to Syncfusion save endpoint
+    try:
+        syncfusion_response = requests.post(
+            SYNCFUSION_SAVE_URL,
+            json=workbook_json,
+            timeout=30  # adjust if large files
+        )
+        syncfusion_response.raise_for_status()
+    except requests.RequestException as e:
+        return JsonResponse({"error": f"Syncfusion save failed: {str(e)}"}, status=500)
+
+    # Step 2: Receive Excel file as binary
+    excel_bytes = syncfusion_response.content
+
+    # Step 3: Save to temp file
+    tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx").name
+    with open(tmp_path, "wb") as f:
+        f.write(excel_bytes)
+
+    # Step 4: Upload to Cloudinary
+    upload_result = cloudinary.uploader.upload(
+        tmp_path,
+        resource_type="raw",
+        public_id=document.file.name,
+        overwrite=True
+    )
+
+    document.version = str(upload_result["version"])
+    document.file.name = upload_result["public_id"]
+    document.save(update_fields=["file", "version"])
+
+    # Clean up
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
+    return JsonResponse({
+        "success": True,
+        "fileUrl": upload_result["secure_url"],
+        "documentId": document.id
+    })

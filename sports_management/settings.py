@@ -30,7 +30,14 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DEBUG")
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOW_CREDENTIALS = True
+
+# Allow Railway domains in production
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS_LIST", default=["localhost", "127.0.0.1"])
+
+# Railway-specific: Add Railway domain if available
+RAILWAY_STATIC_URL = env("RAILWAY_STATIC_URL", default=None)
+if RAILWAY_STATIC_URL:
+    ALLOWED_HOSTS.append(RAILWAY_STATIC_URL)
 
 
 # Application definition
@@ -97,21 +104,26 @@ WSGI_APPLICATION = "sports_management.wsgi.application"
 ASGI_APPLICATION = "sports_management.asgi.application"
 
 # Channel Layers Configuration
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
-    },
-}
+# Use Redis in production (Railway), in-memory for development
+REDIS_URL = env("REDIS_URL", default=None)
 
-# Uncomment below and comment above when Redis is installed
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels_redis.core.RedisChannelLayer",
-#         "CONFIG": {
-#             "hosts": [("127.0.0.1", 6379)],
-#         },
-#     },
-# }
+if REDIS_URL:
+    # Production: Use Redis for WebSocket channel layers
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+            },
+        },
+    }
+else:
+    # Development: Use in-memory channel layer
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer"
+        },
+    }
 
 # Rest framework Config
 REST_FRAMEWORK = {
@@ -151,16 +163,32 @@ STORAGES = {
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("DB_NAME"),
-        "USER": env("DB_USER"),
-        "PASSWORD": env("DB_PASSWORD"),
-        "HOST": env("DB_HOST"),
-        "PORT": env("DB_PORT"),
+import dj_database_url
+
+# Check for Fly.io DATABASE_URL (preferred) or use individual env vars
+DATABASE_URL = env("DATABASE_URL", default=None)
+
+if DATABASE_URL:
+    # Fly.io/Railway: Use DATABASE_URL
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    # Local development: Use individual env vars
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": env("DB_NAME"),
+            "USER": env("DB_USER"),
+            "PASSWORD": env("DB_PASSWORD"),
+            "HOST": env("DB_HOST"),
+            "PORT": env("DB_PORT"),
+        }
+    }
 
 
 # Password validation
@@ -209,18 +237,33 @@ MEDIA_URL = '/media/'  # This will be overridden by Cloudinary
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Cache settings
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-player-progress',
-        'TIMEOUT': 300,  # 5 minutes in seconds
-        'OPTIONS': {
-            'MAX_ENTRIES': 1000,
-            'CULL_FREQUENCY': 3,  # Fraction of entries to cull when max is reached
+# Cache settings - Use Redis if available for better performance
+if REDIS_URL:
+    # Production: Use Redis cache for better performance
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+            'TIMEOUT': 300,  # 5 minutes
+            'OPTIONS': {
+                'MAX_ENTRIES': 1000,
+                'CULL_FREQUENCY': 3,
+            }
         }
     }
-}
+else:
+    # Development: Use in-memory cache
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'unique-player-progress',
+            'TIMEOUT': 300,  # 5 minutes in seconds
+            'OPTIONS': {
+                'MAX_ENTRIES': 1000,
+                'CULL_FREQUENCY': 3,  # Fraction of entries to cull when max is reached
+            }
+        }
+    }
 
 # Production-specific security settings
 if not DEBUG:

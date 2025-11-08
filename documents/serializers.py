@@ -232,7 +232,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'folder', 'folder_name', 'uploaded_by', 
+            'id', 'title', 'file', 'version', 'folder', 'folder_name', 'uploaded_by', 
             'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status']
@@ -265,7 +265,7 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'folder', 'folder_detail', 'uploaded_by', 
+            'id', 'title', 'file', 'folder', 'version', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
             'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 
             'file_extension', 'can_edit', 'can_delete'
@@ -377,26 +377,19 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         validated_data['uploaded_by'] = user
         validated_data['owner'] = user
-        
-        # Extract and store the file extension
+
         file = validated_data.get('file')
         if file:
-            original_name = file.name
-            _, ext = os.path.splitext(original_name)
-            
-            # Store extension without the dot (e.g., 'pdf', 'docx')
-            if ext and len(ext) > 1:
-                validated_data['file_extension'] = ext[1:].lower()
-        
-        try:
-            return super().create(validated_data)
-        except ValidationError:
-            raise
-        except IntegrityError as e:
-            title = validated_data.get('title')
-            raise serializers.ValidationError({
-                'title': f"A file named '{title}' already exists."
-            })
+            # Extract extension from the uploaded file
+            _, ext = os.path.splitext(file.name)
+            ext = ext.lstrip(".").lower()
+            validated_data['file_extension'] = ext
+
+            # Ensure title does not already include the extension
+            if validated_data['title'].endswith(f".{ext}"):
+                validated_data['title'] = validated_data['title'][:-(len(ext)+1)]
+
+        return super().create(validated_data)
 
 
 
