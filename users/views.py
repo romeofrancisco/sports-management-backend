@@ -8,6 +8,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from datetime import timedelta, datetime, timezone
 from django.contrib.auth.models import update_last_login
+from django.conf import settings
 
 from .serializers import (
     UserSerializer,
@@ -16,10 +17,15 @@ from .serializers import (
 )
 
 # Central cookie settings to avoid repetition.
+# Use Django settings to determine secure/samesite behavior.
+# Note: modern browsers require SameSite=None to be paired with Secure=True.
 COOKIE_SETTINGS = {
     "httponly": True,
-    "secure": False,  # Set to False for development, True for production
-    "samesite": "Lax",  # Changed from "None" to "Lax" for development
+    # Use secure cookies in production (SESSION_COOKIE_SECURE is set in settings.py)
+    "secure": bool(getattr(settings, "SESSION_COOKIE_SECURE", False)),
+    # If secure cookies are enabled, allow cross-site cookies (needed when frontend is on a different origin).
+    # Otherwise fall back to Lax for local development where Secure cannot be used over HTTP.
+    "samesite": "None" if getattr(settings, "SESSION_COOKIE_SECURE", False) else "Lax",
 }
 
 def set_auth_cookies(response, access_token, refresh_token):
@@ -54,10 +60,10 @@ class LoginView(GenericAPIView):
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
-        access_token = str(refresh.access_token)        # Build response with user data and set tokens as cookies.
+        access_token = str(refresh.access_token)
+        
+        # Build response with user data and set tokens as cookies.
         response = Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
-        response.set_cookie(key="access_token", value=access_token, **COOKIE_SETTINGS)
-        response.set_cookie(key="refresh_token", value=str(refresh), **COOKIE_SETTINGS)
         set_auth_cookies(response, access_token, str(refresh))
         return response
 
