@@ -1,17 +1,20 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from utils.file_uploads import user_profile_upload_path
-from django.core.mail import send_mail
+from utils.email import send_set_password_email
 
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError("The Email must be set")
+
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
-        user.set_password(password)
+        user.set_unusable_password()  # user must set their own password
         user.save(using=self._db)
+        send_set_password_email(user)
+        
         return user
 
     def create_superuser(self, email, password=None, **extra_fields):

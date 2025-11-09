@@ -9,6 +9,12 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 from datetime import timedelta, datetime, timezone
 from django.contrib.auth.models import update_last_login
 from django.conf import settings
+from rest_framework.decorators import api_view, permission_classes
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth import get_user_model, update_session_auth_hash
+
+User = get_user_model()
 
 from .serializers import (
     UserSerializer,
@@ -120,3 +126,38 @@ class CookieTokenRefreshView(TokenRefreshView):
             return Response(
                 {"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED
             )
+            
+
+@api_view(["POST"])
+def set_password(request):
+    uid = request.data.get("uid")
+    token = request.data.get("token")
+    password = request.data.get("password")
+
+    try:
+        uid = urlsafe_base64_decode(uid).decode()
+        user = User.objects.get(pk=uid)
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        return Response({"error": "Invalid link"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not default_token_generator.check_token(user, token):
+        return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(password)
+    user.save()
+    return Response({"message": "Password has been set successfully"})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    user = request.user
+    old_password = request.data.get('old_password')
+    new_password = request.data.get('new_password')
+
+    if not user.check_password(old_password):
+        return Response({'error': 'Incorrect current password'}, status=400)
+
+    user.set_password(new_password)
+    user.save()
+    update_session_auth_hash(request, user)  # keep session active
+    return Response({'message': 'Password changed successfully'})
