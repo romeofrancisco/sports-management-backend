@@ -35,6 +35,9 @@ from .services import (
     GameSummaryService,
     AnalyticsService,
 )
+from trainings.services.attendance_analytics_service import (
+    AttendanceAnalyticsService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +280,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "training_analytics": {
                         "overall_attendance_rate": round(training_attendance_rate, 2),
                         "training_trend": "stable",
+                        "monthly_trend": self._build_monthly_trend(request),
                     },
                     "performance_analytics": {
                         "team_utilization_rate": round(team_utilization_rate, 2)
@@ -520,6 +524,8 @@ class DashboardViewSet(viewsets.ViewSet):
                     "monthly_sessions": monthly_training_sessions,
                     "training_trend": training_trend,
                     "active_players_month": active_players,
+                    # Add monthly trend data for charts (labels and values)
+                    "monthly_trend": self._build_monthly_trend(request),
                 },
                 "game_analytics": {
                     "completed_games": completed_games,
@@ -555,6 +561,42 @@ class DashboardViewSet(viewsets.ViewSet):
                 {"error": "An error occurred while fetching admin analytics data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    def _build_monthly_trend(self, request, months=6):
+        """Helper to build monthly labels and values for charts using AttendanceAnalyticsService
+
+        Returns: { labels: [...], values: [...] }
+        """
+        try:
+            # Prefer session-based counts to ensure the chart has values even when
+            # attendance records (PlayerTraining) are sparse or missing.
+            from trainings.models import TrainingSession
+            from django.utils import timezone
+            from dateutil.relativedelta import relativedelta
+
+            now = timezone.now().date()
+            labels = []
+            values = []
+
+            # Build last `months` months labels and counts (oldest -> newest)
+            for i in range(months - 1, -1, -1):
+                month_date = (now - relativedelta(months=i)).replace(day=1)
+                month_label = month_date.strftime("%b %Y")
+                # Count training sessions within this month
+                start = month_date
+                # end is first day of next month
+                end = (month_date + relativedelta(months=1))
+                count = (
+                    TrainingSession.objects.filter(date__gte=start, date__lt=end)
+                    .count()
+                )
+                labels.append(month_label)
+                values.append(count)
+
+            return {"labels": labels, "values": values}
+        except Exception as e:
+            logger.exception(f"Error building monthly trend: {e}")
+            return {"labels": [], "values": []}
 
     @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def coach_overview(self, request):

@@ -33,7 +33,7 @@ CORS_ORIGIN_ALLOW_ALL = False
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_ORIGINS = [
-    "https://sports-management-frontend.vercel.app",
+    "https://uphsdsportsmanagement.vercel.app",
     "http://127.0.0.1:5173",  # Vite dev default
     "http://localhost:5173",
 ]
@@ -43,7 +43,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "sports-management.fly.dev",
-    "sports-management-frontend.vercel.app",
+    "uphsdsportsmanagement.vercel.app",
 ]
 
 

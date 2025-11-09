@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from utils.file_uploads import user_profile_upload_path
+from django.core.mail import send_mail
 
 
 class CustomUserManager(BaseUserManager):

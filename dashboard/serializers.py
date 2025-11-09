@@ -65,6 +65,8 @@ class TrainingAnalyticsSerializer(serializers.Serializer):
     overall_attendance_rate = serializers.FloatField()
     monthly_sessions = serializers.IntegerField()
     training_trend = serializers.CharField()
+    # Optional monthly trend payload for charts: { labels: [...], values: [...] }
+    monthly_trend = serializers.DictField(required=False)
     active_players_month = serializers.IntegerField()
 
 
