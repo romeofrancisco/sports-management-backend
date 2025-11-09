@@ -38,6 +38,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]
 
+# CSRF Trusted Origins for cross-origin requests
+CSRF_TRUSTED_ORIGINS = [
+    "https://uphsdsportsmanagement.vercel.app",
+    "https://sports-management.fly.dev",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+
 # Allow your Fly hostname
 ALLOWED_HOSTS = [
     "localhost",
