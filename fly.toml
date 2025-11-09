@@ -3,7 +3,7 @@
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = "sports-management-backend"
+app = "sports-management"
 primary_region = "sin"  # Singapore region (closest to Philippines)
 
 [build]
@@ -19,11 +19,11 @@ primary_region = "sin"  # Singapore region (closest to Philippines)
   force_https = true
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ["app"]
 
   [http_service.concurrency]
-    type = "requests"
+    type = "connections"
     hard_limit = 250
     soft_limit = 200
 

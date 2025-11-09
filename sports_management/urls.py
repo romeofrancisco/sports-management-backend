@@ -8,7 +8,11 @@ def health_check(request):
     """Simple health check endpoint"""
     return JsonResponse({"status": "ok", "message": "Server is running"})
 
+def root(request):
+    return JsonResponse({"message": "Welcome to Sports Management API"})
+
 urlpatterns = [
+    path('', root),
     path('admin/', admin.site.urls),
     path('api/health/', health_check, name='health_check'),
     path('api/', include('users.urls')),

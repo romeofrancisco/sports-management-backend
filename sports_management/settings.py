@@ -26,19 +26,43 @@ environ.Env.read_env(env_file)
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env("DJANGO_SECRET_KEY")
-DEBUG = env.bool("DEBUG")
-CORS_ORIGIN_ALLOW_ALL = True
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+DEBUG = os.environ.get("DEBUG", "False") == "True"
+
+CORS_ORIGIN_ALLOW_ALL = False
 CORS_ALLOW_CREDENTIALS = True
 
-# Allow Railway domains in production
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS_LIST", default=["localhost", "127.0.0.1"])
+CORS_ALLOWED_ORIGINS = [
+    "https://uphsdsportsmanagement.vercel.app",
+    "http://127.0.0.1:5173",  # Vite dev default
+    "http://localhost:5173",
+]
 
-# Railway-specific: Add Railway domain if available
-RAILWAY_STATIC_URL = env("RAILWAY_STATIC_URL", default=None)
-if RAILWAY_STATIC_URL:
-    ALLOWED_HOSTS.append(RAILWAY_STATIC_URL)
+# CSRF Trusted Origins for cross-origin requests
+CSRF_TRUSTED_ORIGINS = [
+    "https://uphsdsportsmanagement.vercel.app",
+    "https://sports-management.fly.dev",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
 
+# Allow your Fly hostname
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "sports-management.fly.dev",
+    "uphsdsportsmanagement.vercel.app",
+]
+
+FRONTEND_URL = os.environ.get("FRONTEND_URL")
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 # Application definition
 
@@ -87,7 +111,7 @@ ROOT_URLCONF = "sports_management.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -104,8 +128,7 @@ WSGI_APPLICATION = "sports_management.wsgi.application"
 ASGI_APPLICATION = "sports_management.asgi.application"
 
 # Channel Layers Configuration
-# Use Redis in production (Railway), in-memory for development
-REDIS_URL = env("REDIS_URL", default=None)
+REDIS_URL = os.environ.get("REDIS_URL")
 
 if REDIS_URL:
     # Production: Use Redis for WebSocket channel layers
@@ -120,9 +143,7 @@ if REDIS_URL:
 else:
     # Development: Use in-memory channel layer
     CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels.layers.InMemoryChannelLayer"
-        },
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
     }
 
 # Rest framework Config
@@ -216,7 +237,7 @@ AUTH_USER_MODEL = "users.User"
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'Asia/Manila'
+TIME_ZONE = "Asia/Manila"
 
 USE_I18N = True
 
@@ -229,7 +250,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 
 # Cloudinary URLs (these will be automatically handled by Cloudinary)
-MEDIA_URL = '/media/'  # This will be overridden by Cloudinary
+MEDIA_URL = "/media/"  # This will be overridden by Cloudinary
 # MEDIA_ROOT not needed when using Cloudinary
 
 # Default primary key field type
@@ -241,38 +262,45 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 if REDIS_URL:
     # Production: Use Redis cache for better performance
     CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': REDIS_URL,
-            'TIMEOUT': 300,  # 5 minutes
-            'OPTIONS': {
-                'MAX_ENTRIES': 1000,
-                'CULL_FREQUENCY': 3,
-            }
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "TIMEOUT": 300,  # 5 minutes
+            "OPTIONS": {
+                "MAX_ENTRIES": 1000,
+                "CULL_FREQUENCY": 3,
+            },
         }
     }
 else:
     # Development: Use in-memory cache
     CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'unique-player-progress',
-            'TIMEOUT': 300,  # 5 minutes in seconds
-            'OPTIONS': {
-                'MAX_ENTRIES': 1000,
-                'CULL_FREQUENCY': 3,  # Fraction of entries to cull when max is reached
-            }
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-player-progress",
+            "TIMEOUT": 300,  # 5 minutes in seconds
+            "OPTIONS": {
+                "MAX_ENTRIES": 1000,
+                "CULL_FREQUENCY": 3,  # Fraction of entries to cull when max is reached
+            },
         }
     }
 
-# Production-specific security settings
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+if os.environ.get("FLY_APP_NAME"):  # Fly.io sets this env automatically
+    SECURE_SSL_REDIRECT = False
+else:
+    SECURE_SSL_REDIRECT = not DEBUG
+
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+# HSTS (optional for Fly.io)
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 3600
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
 # Google AI API Configuration
-GOOGLE_AI_API_KEY = env("GOOGLE_AI_API_KEY")
+GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")

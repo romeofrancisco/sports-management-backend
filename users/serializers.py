@@ -7,19 +7,19 @@ from teams.models import Player, Team
 
 class UserProfileUpdateSerializer(ModelSerializer):
     """Serializer for updating user profile information"""
-    
+
     class Meta:
         model = User
         fields = (
             "first_name",
-            "last_name", 
+            "last_name",
             "email",
             "sex",
             "date_of_birth",
             "phone_number",
             "profile",
         )
-    
+
     def validate_email(self, value):
         user = self.instance
         if User.objects.exclude(pk=user.pk).filter(email=value).exists():
@@ -32,7 +32,7 @@ class UserSerializer(ModelSerializer):
     team_slug = serializers.SerializerMethodField()
     player_details = serializers.SerializerMethodField()
     coach_details = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = User
         fields = (
@@ -50,10 +50,10 @@ class UserSerializer(ModelSerializer):
             "coach_details",
         )
         read_only_fields = ("id", "role")
-    
+
     def get_profile(self, obj):
         if obj.profile:
-            request = self.context.get('request')
+            request = self.context.get("request")
             if request:
                 return request.build_absolute_uri(obj.profile.url)
             return obj.profile.url
@@ -67,31 +67,35 @@ class UserSerializer(ModelSerializer):
         except Player.DoesNotExist:
             return None
         return None
-    
+
     def get_player_details(self, obj):
         try:
             from teams.serializers import PlayerSerializer
+
             player = Player.objects.get(user=obj)
             return {
-                'height': player.height,
-                'weight': player.weight,
-                'jersey_number': player.jersey_number,
-                'year_level': player.year_level,
-                'course': player.course,
-                'team_id': player.team.id if player.team else None,
-                'team_name': player.team.name if player.team else None,
-                'sport_id': player.sport.id if player.sport else None,
-                'sport_name': player.sport.name if player.sport else None,
+                "height": player.height,
+                "weight": player.weight,
+                "jersey_number": player.jersey_number,
+                "year_level": player.year_level,
+                "course": player.course,
+                "team_id": player.team.id if player.team else None,
+                "team_name": player.team.name if player.team else None,
+                "sport_id": player.sport.id if player.sport else None,
+                "sport_name": player.sport.name if player.sport else None,
             }
         except Player.DoesNotExist:
             return None
-    
+
     def get_coach_details(self, obj):
         try:
             from teams.models import Coach
+
             coach = Coach.objects.get(user=obj)
             return {
-                'sports': [{'id': sport.id, 'name': sport.name} for sport in coach.sports.all()]
+                "sports": [
+                    {"id": sport.id, "name": sport.name} for sport in coach.sports.all()
+                ]
             }
         except Coach.DoesNotExist:
             return None
@@ -99,7 +103,6 @@ class UserSerializer(ModelSerializer):
 
 class PlayerSerializer(ModelSerializer):
     profile = serializers.ImageField(required=False)
-    
     class Meta:
         model = User
         fields = (
@@ -109,9 +112,7 @@ class PlayerSerializer(ModelSerializer):
             "last_name",
             "sex",
             "email",
-            "password",
         )
-        extra_kwargs = {"password": {"write_only": True}}
         read_only_fields = ("id",)
 
     def create(self, validated_data):
@@ -121,7 +122,7 @@ class PlayerSerializer(ModelSerializer):
 
 class CoachSerializer(ModelSerializer):
     profile = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = User
         fields = (
@@ -131,13 +132,11 @@ class CoachSerializer(ModelSerializer):
             "last_name",
             "sex",
             "email",
-            "password",
         )
-        extra_kwargs = {"password": {"write_only": True}}
 
     def get_profile(self, obj):
         if obj.profile:
-            request = self.context.get('request')
+            request = self.context.get("request")
             if request:
                 return request.build_absolute_uri(obj.profile.url)
             return obj.profile.url
