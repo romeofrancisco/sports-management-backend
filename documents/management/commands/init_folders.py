@@ -25,7 +25,7 @@ class Command(BaseCommand):
         # Create Coaches folder (root)
         coaches_folder, created = Folder.objects.get_or_create(
             name='Coaches',
-            folder_type=Folder.FolderType.ADMIN_PRIVATE,
+            folder_type=Folder.FolderType.COACHES,
             parent=None,
             defaults={'owner': None}
         )
