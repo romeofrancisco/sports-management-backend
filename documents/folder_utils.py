@@ -13,12 +13,20 @@ def ensure_coach_folder_structure(coach):
     Returns: (coach_folder, players_folder, created)
     """
     # Get or create the Coaches root folder
-    coaches_folder, _ = Folder.objects.get_or_create(
-        name='Coaches',
-        folder_type=Folder.FolderType.ADMIN_PRIVATE,
-        parent=None,
-        defaults={'owner': None}
-    )
+    # Be tolerant of an existing Coaches folder with an older/incorrect folder_type
+    coaches_folder = Folder.objects.filter(name='Coaches', parent=None).first()
+    if coaches_folder:
+        # If an existing folder has a different type, normalize it to COACHES
+        if coaches_folder.folder_type != Folder.FolderType.COACHES:
+            coaches_folder.folder_type = Folder.FolderType.COACHES
+            coaches_folder.save(update_fields=['folder_type'])
+    else:
+        coaches_folder, _ = Folder.objects.get_or_create(
+            name='Coaches',
+            folder_type=Folder.FolderType.COACHES,
+            parent=None,
+            defaults={'owner': None}
+        )
     
     # Create personal folder for the coach
     coach_folder, coach_created = Folder.objects.get_or_create(

@@ -42,7 +42,7 @@ def create_root_folders(sender, **kwargs):
     # Create Coaches folder
     coaches_folder, created = Folder.objects.get_or_create(
         name='Coaches',
-        folder_type=Folder.FolderType.ADMIN_PRIVATE,
+        folder_type=Folder.FolderType.COACHES,
         parent=None,
         defaults={'owner': None}
     )
@@ -57,13 +57,20 @@ def create_coach_folder(sender, instance, created, **kwargs):
     The folder is created inside the Coaches folder.
     """
     if created:
-        # Get or create the Coaches root folder
-        coaches_folder, _ = Folder.objects.get_or_create(
-            name='Coaches',
-            folder_type=Folder.FolderType.COACHES,
-            parent=None,
-            defaults={'owner': None}
-        )
+        # Get the Coaches root folder (tolerate older incorrect folder_type)
+        coaches_folder = Folder.objects.filter(name='Coaches', parent=None).first()
+        if not coaches_folder:
+            coaches_folder, _ = Folder.objects.get_or_create(
+                name='Coaches',
+                folder_type=Folder.FolderType.COACHES,
+                parent=None,
+                defaults={'owner': None}
+            )
+        else:
+            # Normalize folder_type if needed
+            if coaches_folder.folder_type != Folder.FolderType.COACHES:
+                coaches_folder.folder_type = Folder.FolderType.COACHES
+                coaches_folder.save(update_fields=['folder_type'])
         
         # Create personal folder for the coach
         coach_folder, folder_created = Folder.objects.get_or_create(
@@ -328,8 +335,8 @@ def prevent_critical_folder_deletion(sender, instance, **kwargs):
                 f"This is a protected system folder."
             )
         
-        # Protect THE "Coaches" root folder (now ADMIN_PRIVATE type)
-        if (instance.folder_type == Folder.FolderType.ADMIN_PRIVATE and 
+        # Protect THE "Coaches" root folder
+        if (instance.folder_type == Folder.FolderType.COACHES and 
             instance.name == 'Coaches' and 
             instance.owner is None):
             raise PermissionDenied(
