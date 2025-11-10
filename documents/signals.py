@@ -39,15 +39,22 @@ def create_root_folders(sender, **kwargs):
     if created:
         print("✓ Created Public root folder")
     
-    # Create Coaches folder
-    coaches_folder, created = Folder.objects.get_or_create(
-        name='Coaches',
-        folder_type=Folder.FolderType.COACHES,
-        parent=None,
-        defaults={'owner': None}
-    )
-    if created:
-        print("✓ Created Coaches root folder")
+    # Create Coaches folder (tolerant of an existing folder with wrong type)
+    coaches_folder = Folder.objects.filter(name='Coaches', parent=None).first()
+    if coaches_folder:
+        # Normalize folder_type if needed
+        if coaches_folder.folder_type != Folder.FolderType.COACHES:
+            coaches_folder.folder_type = Folder.FolderType.COACHES
+            coaches_folder.save(update_fields=['folder_type'])
+    else:
+        coaches_folder, created = Folder.objects.get_or_create(
+            name='Coaches',
+            folder_type=Folder.FolderType.COACHES,
+            parent=None,
+            defaults={'owner': None}
+        )
+        if created:
+            print("✓ Created Coaches root folder")
 
 
 @receiver(post_save, sender=Coach)
