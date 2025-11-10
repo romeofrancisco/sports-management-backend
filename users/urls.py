@@ -6,6 +6,8 @@ from .views import (
     CookieTokenRefreshView,
     change_password,
     set_password,
+    reset_password,
+    forgot_password,
 )
 
 urlpatterns = [
@@ -16,4 +18,6 @@ urlpatterns = [
     path("refresh/", CookieTokenRefreshView.as_view(), name="token-refresh"),
     path("set-password/", set_password, name="set-password"),
     path("change-password/", change_password, name="change-password"),
+    path("reset-password/", reset_password, name="reset-password"),
+    path("forgot-password/", forgot_password, name="forgot-password"),
 ]
