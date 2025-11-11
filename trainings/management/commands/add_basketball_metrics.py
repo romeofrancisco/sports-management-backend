@@ -3,6 +3,10 @@ This script adds new training metrics to the database for simulations.
 """
 from django.core.management.base import BaseCommand
 from trainings.models import TrainingCategory, TrainingMetric, MetricUnit
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
 
 class Command(BaseCommand):
     help = 'Add new basketball metrics to the database'
@@ -18,13 +22,17 @@ class Command(BaseCommand):
 
     def _ensure_basketball_categories(self):
         """Ensure we have the required training categories for basketball"""
+        # find an admin user to attribute created_by
+        admin = User.objects.filter(is_superuser=True).first()
+        admin_id = admin.pk if admin else None
+
         categories_data = [
-            {"name": "Endurance", "description": "Activities focused on stamina and cardiovascular fitness"},
-            {"name": "Agility", "description": "Quick movements and direction changes"},
-            {"name": "Speed", "description": "Sprint and acceleration training"},
-            {"name": "Technique", "description": "Sport-specific skill development"},
-            {"name": "Explosiveness", "description": "Power and explosive strength development"},
-            {"name": "Strength", "description": "Weight training and resistance exercises"},
+            {"name": "Endurance", "description": "Activities focused on stamina and cardiovascular fitness", "created_by": admin},
+            {"name": "Agility", "description": "Quick movements and direction changes", "created_by": admin},
+            {"name": "Speed", "description": "Sprint and acceleration training", "created_by": admin},
+            {"name": "Technique", "description": "Sport-specific skill development", "created_by": admin},
+            {"name": "Explosiveness", "description": "Power and explosive strength development", "created_by": admin},
+            {"name": "Strength", "description": "Weight training and resistance exercises", "created_by": admin},
         ]
         
         # Dictionary to store created/existing categories by name
@@ -33,7 +41,7 @@ class Command(BaseCommand):
         for data in categories_data:
             obj, created = TrainingCategory.objects.get_or_create(
                 name=data["name"],
-                defaults={"description": data["description"]}
+                defaults={"description": data["description"], "created_by": data["created_by"]}
             )
             if created:
                 self.stdout.write(f'Created category: {obj.name}')
@@ -54,6 +62,10 @@ class Command(BaseCommand):
             "m": {"name": "Meters", "weight": 1.0},
         }
         
+        # find admin for attribution
+        admin = User.objects.filter(is_superuser=True).first()
+        admin_id = admin.pk if admin else None
+
         units = {}
         for code, data in unit_data.items():
             unit, created = MetricUnit.objects.get_or_create(
@@ -61,7 +73,8 @@ class Command(BaseCommand):
                 defaults={
                     "name": data["name"],
                     "normalization_weight": data["weight"],
-                    "description": f"Unit for {data['name']}"
+                    "description": f"Unit for {data['name']}",
+                    "created_by": admin,
                 }
             )
             units[code] = unit

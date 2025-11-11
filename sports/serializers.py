@@ -9,6 +9,16 @@ class SportSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ("created_at", "slug")
 
+    def validate_name(self, value):
+        """Ensure sport name is unique (case-insensitive) at the API/serializer level."""
+        qs = Sport.objects.filter(name__iexact=value)
+        # When updating, exclude current instance
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A sport with this name already exists.")
+        return value
+
 class FormulaComponentSerializer(serializers.ModelSerializer):
     stat_type_id = serializers.CharField(source='stat_type.id', read_only=True)
     stat_type_name = serializers.CharField(source='stat_type.name', read_only=True)

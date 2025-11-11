@@ -70,8 +70,18 @@ class Sport(models.Model):
         return self.name
 
     def save(self, *args, **kwargs):
+        # Generate a stable, unique slug from the name when not provided.
+        # Avoid using self.id before the instance is saved (it is None on first save).
         if not self.slug:
-            self.slug = f"{slugify(self.name)}-{self.id}"
+            base_slug = slugify(self.name)
+            slug = base_slug
+            counter = 1
+            # Ensure uniqueness of slug
+            while Sport.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = slug
+
         super().save(*args, **kwargs)
 
     def soft_delete(self):
