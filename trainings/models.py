@@ -103,6 +103,10 @@ class TrainingSession(models.Model):
 
     class Meta:
         ordering = ["-date", "-start_time"]
+        indexes = [
+            models.Index(fields=["date"]),
+            models.Index(fields=["date", "start_time"]),  # ✅ composite for calendar filters
+        ]
 
     @property
     def duration_minutes(self):

@@ -1,47 +1,36 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.utils import timezone
+from django.db.models import Q
+from datetime import datetime, timedelta
+from dateutil import parser
 from .models import Event
-from .serializers import EventSerializer, GameEventSerializer, TrainingEventSerializer
 from games.models import Game
 from trainings.models import TrainingSession
-from teams.models import Coach
 from teams.models import Team
-from django.db.models import Q
+from teams.models import Coach
 from users.models import User
-from datetime import datetime
-from django.utils import timezone
-from dateutil import parser
-
-
+from .serializers import EventSerializer, GameEventSerializer, TrainingEventSerializer
+import calendar
 
 class EventViewSet(viewsets.ModelViewSet):
-    """
-    Unified event manager endpoint combining Events, Games, and TrainingSessions.
-    """
-
     queryset = Event.objects.all().order_by("-startDate")
     serializer_class = EventSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """Return events filtered by the requesting user's role."""
         user = self.request.user
 
-        # Admin sees all events
         if getattr(user, "is_admin", False):
             return Event.objects.all()
 
-        # Coach - events created by self or by admins
         if getattr(user, "is_coach", False) or hasattr(user, "coach_profile"):
             return Event.objects.filter(
                 Q(created_by__role=User.Role.ADMIN) | Q(created_by=user)
             ).distinct()
 
-        # Player/other users - events created by admins or coaches of their teams
         teams = Team.objects.filter(players__user=user)
-
-        # Coaches of the player's teams
         coach_ids = Coach.objects.filter(
             Q(head_coached_teams__in=teams) | Q(assistant_coached_teams__in=teams)
         ).values_list("user_id", flat=True).distinct()
@@ -51,61 +40,113 @@ class EventViewSet(viewsets.ModelViewSet):
         ).distinct()
 
     def list(self, request, *args, **kwargs):
-        """Return combined Event, Game, and TrainingSession events."""
         user = request.user
+        view_type = request.query_params.get("view", "month").lower()
+        date_str = request.query_params.get("date")
 
-        # Filter events via get_queryset()
-        events_qs = self.get_queryset()
+        # Default to current date if not provided
+        if date_str:
+            try:
+                selected_date = parser.parse(date_str)
+            except Exception:
+                selected_date = timezone.now()
+        else:
+            selected_date = timezone.now()
 
-        # Filter games/trainings based on user role
+        # Ensure timezone awareness
+        if timezone.is_naive(selected_date):
+            selected_date = timezone.make_aware(selected_date, timezone.get_current_timezone())
+
+        # Compute date range based on view type
+        if view_type == "day":
+            start = selected_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+        elif view_type == "week":
+            start = selected_date - timedelta(days=selected_date.weekday())  # Monday start
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=7)
+        elif view_type in ["month", "agenda"]:
+            start = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            last_day = calendar.monthrange(start.year, start.month)[1]
+            end = start.replace(day=last_day, hour=23, minute=59, second=59)
+        elif view_type == "year":
+            start = selected_date.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            end = selected_date.replace(month=12, day=31, hour=23, minute=59, second=59)
+        else:
+            start = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            last_day = calendar.monthrange(start.year, start.month)[1]
+            end = start.replace(day=last_day, hour=23, minute=59, second=59)
+
+        # Filter datasets directly in DB
+        events_qs = self.get_queryset().filter(startDate__range=(start, end))
+
         if getattr(user, "is_admin", False):
-            games_qs = Game.objects.all()
-            trainings_qs = TrainingSession.objects.all()
+            games_qs = Game.objects.filter(started_at__range=(start, end))
+            trainings_qs = TrainingSession.objects.filter(date__range=(start.date(), end.date()))
         elif getattr(user, "is_coach", False) or hasattr(user, "coach_profile"):
             coach_profile = getattr(user, "coach_profile", None)
             coach_teams = Team.objects.filter(
                 Q(head_coach=coach_profile) | Q(assistant_coach=coach_profile)
             )
             games_qs = Game.objects.filter(
-                Q(home_team__in=coach_teams) | Q(away_team__in=coach_teams)
+                Q(home_team__in=coach_teams) | Q(away_team__in=coach_teams),
+                started_at__range=(start, end),
             )
-            trainings_qs = TrainingSession.objects.filter(team__in=coach_teams)
+            trainings_qs = TrainingSession.objects.filter(
+                team__in=coach_teams, date__range=(start.date(), end.date())
+            )
         else:
-            # Player
             teams = Team.objects.filter(players__user=user)
-            games_qs = Game.objects.filter(Q(home_team__in=teams) | Q(away_team__in=teams))
-            trainings_qs = TrainingSession.objects.filter(team__in=teams)
+            games_qs = Game.objects.filter(
+                Q(home_team__in=teams) | Q(away_team__in=teams),
+                started_at__range=(start, end),
+            )
+            trainings_qs = TrainingSession.objects.filter(
+                team__in=teams, date__range=(start.date(), end.date())
+            )
 
-        # Serialize
-        events_data = EventSerializer(events_qs, many=True).data
-        games_data = GameEventSerializer(games_qs, many=True).data
-        trainings_data = TrainingEventSerializer(trainings_qs, many=True).data
+        # Serialize all
+        events_data = EventSerializer(events_qs.order_by("startDate"), many=True).data
+        games_data = GameEventSerializer(games_qs.order_by("started_at"), many=True).data
+        trainings_data = TrainingEventSerializer(trainings_qs.order_by("date"), many=True).data
 
-        # Combine
+        # Merge results
         combined = events_data + games_data + trainings_data
+        
+        # Safe parse helper
 
-        # Safe sorting by startDate
-        def safe_parse(date_value):
-            """Convert string or datetime to aware datetime for sorting."""
-            if isinstance(date_value, datetime):
-                # Ensure aware
-                if timezone.is_naive(date_value):
-                    return timezone.make_aware(date_value, timezone.get_current_timezone())
-                return date_value
-            if isinstance(date_value, str):
-                try:
-                    dt = parser.isoparse(date_value)  # automatically handles Z / offset
-                    if timezone.is_naive(dt):
-                        dt = timezone.make_aware(dt, timezone.get_current_timezone())
-                    return dt
-                except Exception:
-                    return timezone.make_aware(datetime.max)
-            return timezone.make_aware(datetime.max)
+        def safe_parse_date(item):
+            """
+            Safely parse possible date keys into a comparable datetime.
+            Accepts ISO strings or datetime objects.
+            """
+            value = item.get("startDate") or item.get("started_at") or item.get("date")
+            if not value:
+                return timezone.now()  # fallback
 
-        combined.sort(key=lambda e: safe_parse(e.get("startDate")), reverse=False)
+            # Handle datetime objects directly
+            if isinstance(value, datetime):
+                if timezone.is_naive(value):
+                    return timezone.make_aware(value, timezone.get_current_timezone())
+                return value
 
-        return Response(combined)
+            # Handle string values
+            try:
+                dt = parser.isoparse(str(value))
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                return dt
+            except Exception:
+                return timezone.now()
 
-    def perform_create(self, serializer):
-        """Assign creator when creating a new Event."""
-        serializer.save(created_by=self.request.user)
+        # Sort safely by datetime value
+        combined.sort(key=lambda e: safe_parse_date(e), reverse=False)
+
+        # Normalize all date fields to string for response consistency
+        for item in combined:
+            for key in ["startDate", "endDate", "started_at", "ended_at", "date"]:
+                if key in item and isinstance(item[key], datetime):
+                    item[key] = item[key].isoformat()
+
+
+        return Response(sorted(combined, key=lambda e: e.get("startDate", e.get("started_at", e.get("date")))))

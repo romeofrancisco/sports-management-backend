@@ -16,6 +16,13 @@ class Event(models.Model):
     endDate = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES.choices, default=STATUS_CHOICES.UPCOMING)
     created_by = models.ForeignKey("users.User", on_delete=models.CASCADE, null=True, blank=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=["startDate"]),
+            models.Index(fields=["endDate"]),
+        ]
+        ordering = ["-startDate"]
 
     def __str__(self):
         return self.title
