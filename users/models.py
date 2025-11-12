@@ -79,6 +79,10 @@ class User(AbstractUser):
     @property
     def is_player(self):
         return self.role == self.Role.PLAYER
+    
+    @property
+    def get_id(self):
+        return self.id
 
     class Meta:
         verbose_name = "user"

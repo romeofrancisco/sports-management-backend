@@ -10,27 +10,35 @@ class Command(BaseCommand):
     help = 'Add random players to teams that have few or no players'
 
     def add_arguments(self, parser):
-        parser.add_argument('--team', type=int, help='ID of a specific team to add players to')
-        parser.add_argument('--team_slug', type=str, help='Slug of a specific team to add players to')
-        parser.add_argument('--sport', type=int, help='ID of a sport to add players to all its teams')
+        parser.add_argument('--team', type=str, help='Slug of a specific team to add players to')
+        parser.add_argument('--team_slug', type=str, help='(alias) Slug of a specific team to add players to')
+        parser.add_argument('--sport', type=str, help='Slug of a sport to add players to all its teams')
         parser.add_argument('--players', type=int, default=10, help='Number of players to add to each team')
         parser.add_argument('--min', type=int, default=5, help='Only add players if team has fewer than this number')
 
     def handle(self, *args, **options):
-        team_id = options.get('team')
-        team_slug = options.get('team_slug')
-        sport_id = options.get('sport')
+        # `--team` now expects a team slug. `--team_slug` kept as an alias.
+        team_slug = options.get('team')
+        team_slug_alias = options.get('team_slug')
+        sport_slug = options.get('sport')
         player_count = options.get('players')
         min_players = options.get('min')
         
         teams = []
         # Get teams to add players to
-        if team_id:
-            teams.append(Team.objects.get(id=team_id))
-        elif team_slug:
-            teams.append(Team.objects.get(slug=team_slug))
-        elif sport_id:
-            teams.extend(Team.objects.filter(sport_id=sport_id))
+        try:
+            if team_slug:
+                teams.append(Team.objects.get(slug=team_slug))
+            elif team_slug_alias:
+                teams.append(Team.objects.get(slug=team_slug_alias))
+            elif sport_slug:
+                # select teams whose sport has this slug
+                teams.extend(Team.objects.filter(sport__slug=sport_slug))
+            else:
+                teams.extend(Team.objects.all())
+        except Team.DoesNotExist:
+            self.stdout.write(self.style.ERROR(f"No team found for provided slug."))
+            return
         else:
             teams.extend(Team.objects.all())
             
@@ -62,12 +70,30 @@ class Command(BaseCommand):
         available_numbers = [num for num in range(1, 100) if num not in existing_numbers]
         
         # Default player data options
-        male_first_names = ['Michael', 'LeBron', 'Kevin', 'Stephen', 'Kobe', 'James', 'Kawhi', 
-                           'Giannis', 'Damian', 'Luka', 'Nikola', 'Joel', 'Jayson', 'Anthony', 'John']
-        female_first_names = ['Diana', 'Sue', 'Maya', 'Candace', 'Lisa', 'Tamika', 'Lauren', 
-                             'Skylar', 'Breanna', 'Elena', 'Napheesa', 'Sabrina', 'Paige', 'Caitlin', 'Angel']
-        last_names = ['Jordan', 'James', 'Durant', 'Curry', 'Bryant', 'Harden', 'Leonard',
-                      'Antetokounmpo', 'Lillard', 'Doncic', 'Jokic', 'Embiid', 'Tatum', 'Davis', 'Wall']
+        male_first_names = [
+            'Michael', 'LeBron', 'Kevin', 'Stephen', 'Kobe', 'James', 'Kawhi', 
+            'Giannis', 'Damian', 'Luka', 'Nikola', 'Joel', 'Jayson', 'Anthony', 'John',
+            'Chris', 'Russell', 'Jimmy', 'Paul', 'Devin', 'Trae', 'Zion', 'Ja', 'Karl', 'Andrew',
+            'Tyrese', 'Donovan', 'Jamal', 'DeMar', 'Klay', 'Derrick', 'Bradley', 'Ben', 'Victor', 
+            'Rudy', 'Pascal', 'Marcus', 'Fred', 'Draymond', 'Carmelo'
+        ]
+
+        female_first_names = [
+            'Diana', 'Sue', 'Maya', 'Candace', 'Lisa', 'Tamika', 'Lauren', 
+            'Skylar', 'Breanna', 'Elena', 'Napheesa', 'Sabrina', 'Paige', 'Caitlin', 'Angel',
+            'Alyssa', 'Chelsea', 'Arike', 'Kelsey', 'Nneka', 'Chiney', 'Brittney', 'Sylvia', 'Tina', 'Sheryl',
+            'Renee', 'Monique', 'Natasha', 'Courtney', 'Jonquel', 'DeWanna', 'Allisha', 'Jewell', 'Diamond', 
+            'Lexie', 'NaLyssa', 'Aliyah', 'Hailey', 'Jordan', 'Destanni'
+        ]
+
+        last_names = [
+            'Jordan', 'James', 'Durant', 'Curry', 'Bryant', 'Harden', 'Leonard',
+            'Antetokounmpo', 'Lillard', 'Doncic', 'Jokic', 'Embiid', 'Tatum', 'Davis', 'Wall',
+            'Irving', 'Booker', 'Mitchell', 'Murray', 'Green', 'Westbrook', 'Beal', 'George', 'Brown', 'Smart',
+            'Rose', 'Randle', 'Holiday', 'Ball', 'Fox', 'Porter', 'Barnes', 'Wiggins', 'Morant', 'Ingram',
+            'Love', 'Howard', 'Young', 'Carter', 'Miller'
+        ]
+
         
         for i in range(count):
             # Create unique email instead of username

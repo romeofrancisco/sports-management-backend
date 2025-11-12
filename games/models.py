@@ -98,10 +98,8 @@ class Game(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["date"]),
-            models.Index(fields=["status"]),
-            models.Index(fields=["home_team", "away_team"]),
             models.Index(fields=["started_at"]),
-            models.Index(fields=["ended_at"]),
+            models.Index(fields=["home_team", "away_team"]),
         ]
         ordering = ["date"]
 

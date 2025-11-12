@@ -44,15 +44,26 @@ class Folder(models.Model):
 
     def clean(self):
         """Validate folder name uniqueness within the same parent"""
-        # Check for duplicate folder names in the same parent (exact match)
-        existing = Folder.objects.filter(name=self.name, parent=self.parent).exclude(
-            pk=self.pk
-        )
+        # Ensure folder name is unique within the same parent (exact match).
+        # If a duplicate exists, auto-rename by appending a numeric suffix
+        # e.g. 'LeBron George' -> 'LeBron George (1)'. This avoids raising
+        # ValidationError during automated creation flows (signals/management commands).
+        existing = Folder.objects.filter(parent=self.parent).exclude(pk=self.pk)
 
-        if existing.exists():
-            raise ValidationError(
-                {"name": f"A folder named '{self.name}' already exists."}
-            )
+        # If there's no conflict, nothing to do
+        if not existing.filter(name=self.name).exists():
+            return
+
+        # Find a unique name by appending incremental suffixes
+        base = self.name
+        i = 1
+        new_name = f"{base} ({i})"
+        while existing.filter(name=new_name).exists():
+            i += 1
+            new_name = f"{base} ({i})"
+
+        # Update the instance name to the unique variant
+        self.name = new_name
 
     def save(self, *args, **kwargs):
         """Override save to call clean validation"""

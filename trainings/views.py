@@ -505,6 +505,8 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         from .services import TrainingSessionService
+        
+        
 
         # For coaches, ensure they can only create sessions for their teams
         if self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
@@ -521,8 +523,9 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                     raise PermissionDenied(
                         "You can only create training sessions for your own teams"
                     )
+        creator = self.request.user or (team.head_coach if team else None)
 
-        session = serializer.save()
+        session = serializer.save(creator=creator)
         # Automatically add all team players since all sessions are now team sessions
         if session.team:
             service = TrainingSessionService()

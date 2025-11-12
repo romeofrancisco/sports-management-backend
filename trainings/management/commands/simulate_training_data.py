@@ -16,6 +16,7 @@ class Command(BaseCommand):
     help = 'Simulate training sessions and player metrics to test data and UI'    
     def add_arguments(self, parser):
         parser.add_argument('--team', type=int, help='Team ID to simulate trainings for')
+        parser.add_argument('--all-teams', action='store_true', help='Generate simulated trainings for all teams')
         parser.add_argument('--count', type=int, default=5, help='Number of training sessions to simulate')
         parser.add_argument('--players', type=int, default=0, help='Number of players to generate metrics for (0 = all team players)')
         parser.add_argument('--days', type=int, default=30, help='Date range in days for training scheduling')
@@ -31,6 +32,7 @@ class Command(BaseCommand):
         attendance_rate = min(1.0, max(0.0, options.get('attendance_rate')))
         metrics_per_player = options.get('metrics_per_player')
         show_progress = options.get('progress')
+        all_teams_flag = options.get('all_teams')
         
         # Get team
         if team_id:
@@ -49,28 +51,51 @@ class Command(BaseCommand):
                 return
         self.stdout.write(f'Using team: {team.name}')
         
-        # Get or create training categories
+        # Get or create training categories and metrics once
         categories = self._ensure_training_categories()
-        
-        # Get or create training metrics
         metrics = self._ensure_training_metrics(categories)
-        
+
         if not metrics.exists():
             self.stdout.write(self.style.ERROR('No training metrics found. Please create metrics first.'))
             return
-            
+
         self.stdout.write(f'Found {metrics.count()} training metrics across {categories.count()} categories')
-        
+
+        # If --all-teams, iterate over eligible teams
+        if all_teams_flag:
+            teams_qs = Team.objects.annotate(player_count=Count('players')).filter(player_count__gt=0)
+            self.stdout.write(f'Generating simulations for {teams_qs.count()} teams')
+            total_sessions = 0
+            for t in teams_qs:
+                self.stdout.write(f'--- Processing team: {t.name} ---')
+                sessions = self._run_simulation_for_team(
+                    team=t,
+                    count=count,
+                    players_count=players_count,
+                    days_range=days_range,
+                    attendance_rate=attendance_rate,
+                    metrics_per_player=metrics_per_player,
+                    show_progress=show_progress,
+                    categories=categories,
+                    metrics=metrics,
+                )
+                total_sessions += sessions
+
+            self.stdout.write(self.style.SUCCESS(f'Total sessions created across teams: {total_sessions}'))
+            return
+
+        # Single-team flow
         # Get players for this team
         players = Player.objects.filter(team=team)
         if not players.exists():
             self.stdout.write(self.style.ERROR(f'No players found for team {team.name}. Please add players first.'))
             return
-            
+
         if players_count > 0 and players_count < players.count():
             players = random.sample(list(players), players_count)
-            
-        self.stdout.write(f'Using {len(players)} players from team {team.name}')        # Create training sessions
+
+        self.stdout.write(f'Using {len(players)} players from team {team.name}')
+        # Create training sessions for single team
         self.stdout.write(f'Creating {count} training sessions for {team.name}...')
         sessions_created = 0        # Generate training session dates (3-4 times per week) - FROM TODAY BACKWARDS
         today = timezone.now().date()
@@ -197,6 +222,104 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f'Error creating training session: {str(e)}'))
         
         self.stdout.write(self.style.SUCCESS(f'Successfully created {sessions_created} training sessions'))
+
+    def _run_simulation_for_team(self, team, count, players_count, days_range, attendance_rate, metrics_per_player, show_progress, categories, metrics):
+        """Run the simulation flow for a single team. Returns number of sessions created."""
+        # Get players for this team
+        players = list(Player.objects.filter(team=team))
+        if not players:
+            self.stdout.write(self.style.WARNING(f'No players found for team {team.name}. Skipping.'))
+            return 0
+
+        if players_count > 0 and players_count < len(players):
+            players = random.sample(players, players_count)
+
+        self.stdout.write(f'Using {len(players)} players from team {team.name}')
+        self.stdout.write(f'Creating {count} training sessions for {team.name}...')
+
+        sessions_created = 0
+        today = timezone.now().date()
+
+        # Build session_dates (same logic as main flow)
+        session_dates = []
+        core_training_days = [0, 2, 4]
+        optional_training_day = 5
+        current_date = today
+        sessions_needed = count
+
+        while sessions_needed > 0:
+            days_to_monday = current_date.weekday()
+            week_start = current_date - timedelta(days=days_to_monday)
+            weekly_sessions = []
+            for day_offset in core_training_days:
+                training_date = week_start + timedelta(days=day_offset)
+                if training_date <= today:
+                    weekly_sessions.append(training_date)
+            if random.random() < 0.6:
+                saturday_date = week_start + timedelta(days=optional_training_day)
+                if saturday_date <= today:
+                    weekly_sessions.append(saturday_date)
+            weekly_sessions.sort(reverse=True)
+            for session_date in weekly_sessions:
+                if sessions_needed > 0:
+                    session_dates.append(session_date)
+                    sessions_needed -= 1
+                else:
+                    break
+            current_date = week_start - timedelta(days=1)
+
+        session_dates.sort()
+        if not show_progress:
+            random.shuffle(session_dates)
+
+        for session_date in session_dates[:count]:
+            try:
+                with transaction.atomic():
+                    start_hour = random.choice([8, 9, 10, 14, 15, 16, 17, 18])
+                    start_time = timezone.datetime.strptime(f"{start_hour}:00", "%H:%M").time()
+                    end_time = timezone.datetime.strptime(f"{start_hour + 2}:00", "%H:%M").time()
+                    session = TrainingSession.objects.create(
+                        title=f"{team.name} Training {session_date.strftime('%m/%d')}",
+                        description=f"Training session for {team.name}",
+                        date=session_date,
+                        start_time=start_time,
+                        end_time=end_time,
+                        location=f"Training Ground {random.randint(1, 5)}",
+                        team=team,
+                        notes=f"Simulated training session for {team.name}"
+                    )
+                    category_list = list(categories)
+                    num_categories = random.randint(1, min(3, len(category_list)))
+                    selected_categories = random.sample(category_list, num_categories)
+                    session.categories.set(selected_categories)
+                    category_metrics = metrics.filter(category__in=selected_categories)
+                    if category_metrics.exists():
+                        category_metrics_list = list(category_metrics)
+                        min_metrics = min(3, len(category_metrics_list))
+                        max_metrics = min(10, len(category_metrics_list))
+                        if min_metrics == max_metrics:
+                            selected_metrics = category_metrics_list
+                        else:
+                            num_metrics = random.randint(min_metrics, max_metrics)
+                            selected_metrics = random.sample(category_metrics_list, num_metrics)
+                    else:
+                        metrics_list = list(metrics)
+                        min_metrics = min(3, len(metrics_list))
+                        max_metrics = min(10, len(metrics_list))
+                        if min_metrics == max_metrics:
+                            selected_metrics = metrics_list
+                        else:
+                            num_metrics = random.randint(min_metrics, max_metrics)
+                            selected_metrics = random.sample(metrics_list, num_metrics)
+                    session.metrics.set(selected_metrics)
+                    self._create_player_records(session, players, attendance_rate, selected_metrics, metrics_per_player, show_progress)
+                    session.update_status()
+                    sessions_created += 1
+                    self.stdout.write(f'Created session: {session.title} on {session.date} (Status: {session.status})')
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f'Error creating training session for team {team.name}: {str(e)}'))
+
+        return sessions_created
 
     def _ensure_training_categories(self):
         """Ensure we have training categories for simulation"""
