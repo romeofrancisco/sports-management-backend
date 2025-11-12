@@ -89,6 +89,7 @@ INSTALLED_APPS = [
     "games",
     "brackets",
     "trainings",
+    "events",
     "dashboard",
     "chat",
     "documents",

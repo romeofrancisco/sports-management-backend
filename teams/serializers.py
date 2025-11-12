@@ -2,6 +2,8 @@ from rest_framework.serializers import ModelSerializer, Serializer
 from rest_framework import serializers
 from .models import Team, Player, Coach
 from users.serializers import PlayerSerializer, CoachSerializer
+from users.models import User
+from django.db import IntegrityError
 from sports.models import Sport, Position
 from sports.serializers import SportSerializer, PositionSerializer
 
@@ -582,11 +584,25 @@ class CoachInfoSerializer(ModelSerializer):
 
         # Use atomic transaction to ensure both user and coach updates succeed together
         with transaction.atomic():
+            # Validate email uniqueness if provided to give friendly error
+            new_email = user_data.get("email")
+            if new_email:
+                # If email is changing and it's already used by another user, raise validation error
+                if User.objects.exclude(pk=user.pk).filter(email=new_email).exists():
+                    raise serializers.ValidationError({"email": "This email is already in use."})
+
             # Update the User model
             for attr, value in user_data.items():
                 setattr(user, attr, value)
 
-            user.save()
+            try:
+                user.save()
+            except IntegrityError as e:
+                # Translate DB integrity errors (unique constraint) into ValidationError
+                # Common case: duplicate email
+                if 'email' in str(e).lower():
+                    raise serializers.ValidationError({"email": "This email is already in use."})
+                raise serializers.ValidationError({"detail": "Failed to update user: integrity error."})
 
             # Update sports if provided
             if sports is not None:

@@ -3,66 +3,73 @@ from teams.models import Player, Team, Coach
 from django.utils import timezone
 import uuid
 
+
 class MetricUnit(models.Model):
     """Units of measurement for training metrics with normalization weights"""
+
     code = models.CharField(max_length=30, unique=True)
     name = models.CharField(max_length=100)
     normalization_weight = models.DecimalField(
         max_digits=5,
         decimal_places=2,
         default=1.0,
-        help_text="Weight to normalize improvements. Lower values for metrics that have naturally large percentage changes."
+        help_text="Weight to normalize improvements. Lower values for metrics that have naturally large percentage changes.",
     )
     description = models.TextField(blank=True)
     is_default = models.BooleanField(
         default=False,
-        help_text="System default units that cannot be deleted by regular users"
+        help_text="System default units that cannot be deleted by regular users",
     )
     created_by = models.ForeignKey(
-        'users.User',
+        "users.User",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='created_metric_units',
-        help_text="User who created this metric unit"
+        related_name="created_metric_units",
+        help_text="User who created this metric unit",
     )
-    
+
     def __str__(self):
         return f"{self.name} ({self.code})"
-    
+
     class Meta:
-        ordering = ['name']
+        ordering = ["name"]
+
 
 class TrainingCategory(models.Model):
     """Training categories like 'Endurance', 'Speed', 'Strength', etc."""
+
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     is_default = models.BooleanField(
         default=False,
-        help_text="System default categories that cannot be deleted by regular users"
+        help_text="System default categories that cannot be deleted by regular users",
     )
     created_by = models.ForeignKey(
-        'users.User',
+        "users.User",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='created_training_categories',
-        help_text="User who created this training category"
+        related_name="created_training_categories",
+        help_text="User who created this training category",
     )
-    
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name_plural = "Training Categories"
-        ordering = ['name']
+        ordering = ["name"]
+
+
 class TrainingSession(models.Model):
     """Records a training session for a team"""
+
     class Status(models.TextChoices):
         UPCOMING = "upcoming", "Upcoming"
         ONGOING = "ongoing", "Ongoing"
         COMPLETED = "completed", "Completed"
-    
+
     title = models.CharField(max_length=200)
     session_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     description = models.TextField(blank=True)
@@ -70,60 +77,76 @@ class TrainingSession(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     location = models.CharField(max_length=200)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='training_sessions')    
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
-    categories = models.ManyToManyField(TrainingCategory, related_name='sessions')
-    metrics = models.ManyToManyField('TrainingMetric', related_name='sessions', blank=True)
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="training_sessions"
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.UPCOMING
+    )
+    categories = models.ManyToManyField(TrainingCategory, related_name="sessions")
+    metrics = models.ManyToManyField(
+        "TrainingMetric", related_name="sessions", blank=True
+    )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+    creator = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_training_sessions",
+    )
+
     def __str__(self):
         return f"{self.title} - {self.date}"
-    
+
     class Meta:
-        ordering = ['-date', '-start_time']
-        
+        ordering = ["-date", "-start_time"]
+
     @property
     def duration_minutes(self):
         """Calculate duration of training in minutes"""
         if not self.start_time or not self.end_time:
             return 0
-            
-        start_datetime = timezone.datetime.combine(timezone.now().date(), self.start_time)
+
+        start_datetime = timezone.datetime.combine(
+            timezone.now().date(), self.start_time
+        )
         end_datetime = timezone.datetime.combine(timezone.now().date(), self.end_time)
-        
+
         if end_datetime < start_datetime:  # Handle sessions that cross midnight
             end_datetime = end_datetime + timezone.timedelta(days=1)
-            
+
         duration = end_datetime - start_datetime
         return int(duration.total_seconds() / 60)
 
     def get_auto_status(self):
         """Automatically determine status based on current time and session timing"""
         from django.utils import timezone
+
         now = timezone.now()
         session_start = timezone.datetime.combine(self.date, self.start_time)
         session_end = timezone.datetime.combine(self.date, self.end_time)
-        
+
         # Make timezone-aware
         session_start = timezone.make_aware(session_start)
         session_end = timezone.make_aware(session_end)
-        
+
         if now < session_start:
             return self.Status.UPCOMING
         elif session_start <= now <= session_end:
             return self.Status.ONGOING
         else:
             return self.Status.COMPLETED
-    
+
     def update_status(self):
         """Update the status field based on current time"""
         auto_status = self.get_auto_status()
         if self.status != auto_status:
             self.status = auto_status
-            self.save(update_fields=['status'])    
-        
+            self.save(update_fields=["status"])
+
     def can_manage_attendance(self):
         """Check if attendance can be managed for this session"""
         if self.status == self.Status.ONGOING:
@@ -131,132 +154,162 @@ class TrainingSession(models.Model):
         elif self.status == self.Status.COMPLETED:
             # Allow attendance management for completed sessions within 24 hours
             from django.utils import timezone
+
             session_end = timezone.datetime.combine(self.date, self.end_time)
             session_end = timezone.make_aware(session_end)
-            hours_since_completion = (timezone.now() - session_end).total_seconds() / 3600
+            hours_since_completion = (
+                timezone.now() - session_end
+            ).total_seconds() / 3600
             return hours_since_completion <= 24  # 24 hours grace period
         else:
             return False  # Upcoming sessions cannot have attendance managed
-    
+
     def can_configure_metrics(self):
         """Check if metrics can be configured for this session"""
         return self.status in [self.Status.UPCOMING, self.Status.ONGOING]
-    
+
     def can_record_metrics(self):
         """Check if metrics can be recorded for this session"""
         return self.status == self.Status.ONGOING
-    
+
     @property
     def is_past_due(self):
         """Check if the session is past due based on current time"""
         from django.utils import timezone
+
         now = timezone.now()
         session_end = timezone.datetime.combine(self.date, self.end_time)
         session_end = timezone.make_aware(session_end)
         return now > session_end
 
+
 class PlayerTraining(models.Model):
     """Records an individual player's participation in a training session"""
-    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='training_records')
-    session = models.ForeignKey(TrainingSession, on_delete=models.CASCADE, related_name='player_records')
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE, related_name="training_records"
+    )
+    session = models.ForeignKey(
+        TrainingSession, on_delete=models.CASCADE, related_name="player_records"
+    )
     attendance_status = models.CharField(
         max_length=20,
         choices=[
-            ('present', 'Present'),
-            ('absent', 'Absent'),
-            ('late', 'Late'),
-            ('excused', 'Excused Absence'),
-            ('pending', 'Pending'),        ],
-        default='pending'
+            ("present", "Present"),
+            ("absent", "Absent"),
+            ("late", "Late"),
+            ("excused", "Excused Absence"),
+            ("pending", "Pending"),
+        ],
+        default="pending",
     )
-    
+
     notes = models.TextField(blank=True)
-    assigned_metrics = models.ManyToManyField('TrainingMetric', related_name='assigned_player_trainings', blank=True)
-    
+    assigned_metrics = models.ManyToManyField(
+        "TrainingMetric", related_name="assigned_player_trainings", blank=True
+    )
+
     def __str__(self):
         return f"{self.player} - {self.session.title} ({self.session.date})"
-    
+
     class Meta:
-        unique_together = ['player', 'session']
+        unique_together = ["player", "session"]
         indexes = [
             # Index for efficient player and session lookups
-            models.Index(fields=['player'], name='player_idx'),
-            models.Index(fields=['session'], name='session_idx'),
+            models.Index(fields=["player"], name="player_idx"),
+            models.Index(fields=["session"], name="session_idx"),
             # Index for session date lookup
-            models.Index(fields=['session', 'player'], name='session_player_idx')
+            models.Index(fields=["session", "player"], name="session_player_idx"),
         ]
+
 
 class TrainingMetric(models.Model):
     """Metrics that can be tracked during training like 'sprint time', 'vertical jump', etc."""
-    
+
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     metric_unit = models.ForeignKey(
-        MetricUnit, 
+        MetricUnit,
         on_delete=models.PROTECT,  # Prevent deletion of units that are in use
-        related_name='metrics',
+        related_name="metrics",
         help_text="The unit of measurement for this metric",
         null=True,  # Temporarily allow null while we migrate
         blank=True,
     )
-    category = models.ForeignKey(TrainingCategory, on_delete=models.CASCADE, related_name='metrics')
-    is_lower_better = models.BooleanField(default=True, help_text="Is a lower value better? True for metrics like 'time'.")
+    category = models.ForeignKey(
+        TrainingCategory, on_delete=models.CASCADE, related_name="metrics"
+    )
+    is_lower_better = models.BooleanField(
+        default=True, help_text="Is a lower value better? True for metrics like 'time'."
+    )
     weight = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
+        max_digits=5,
+        decimal_places=2,
         default=1.0,
-        help_text="Weight factor for calculating overall improvement. Higher weight = more impact on overall performance."
+        help_text="Weight factor for calculating overall improvement. Higher weight = more impact on overall performance.",
     )
     is_default = models.BooleanField(
         default=False,
-        help_text="System default metrics that cannot be deleted by regular users"
+        help_text="System default metrics that cannot be deleted by regular users",
     )
     created_by = models.ForeignKey(
-        'users.User',
+        "users.User",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='created_training_metrics',
-        help_text="User who created this training metric"
+        related_name="created_training_metrics",
+        help_text="User who created this training metric",
     )
-    
+
     def __str__(self):
         return f"{self.name} ({self.metric_unit.code})"
-    
+
     @property
     def primary_category(self):
         """Returns the category of the metric (for backwards compatibility)"""
         return self.category
-    
+
     class Meta:
-        ordering = ['name']
+        ordering = ["name"]
+
 
 class PlayerMetricRecord(models.Model):
-    """Records a specific measurement for a player during a training session"""    
-    player_training = models.ForeignKey(PlayerTraining, on_delete=models.CASCADE, related_name='metric_records')
-    metric = models.ForeignKey(TrainingMetric, on_delete=models.CASCADE, related_name='records')
-    value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="The recorded value for this metric")
+    """Records a specific measurement for a player during a training session"""
+
+    player_training = models.ForeignKey(
+        PlayerTraining, on_delete=models.CASCADE, related_name="metric_records"
+    )
+    metric = models.ForeignKey(
+        TrainingMetric, on_delete=models.CASCADE, related_name="records"
+    )
+    value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="The recorded value for this metric",
+    )
     notes = models.TextField(blank=True)
-    recorded_by = models.ForeignKey(Coach, on_delete=models.SET_NULL, null=True, related_name='recorded_metrics')
+    recorded_by = models.ForeignKey(
+        Coach, on_delete=models.SET_NULL, null=True, related_name="recorded_metrics"
+    )
     recorded_at = models.DateTimeField(auto_now_add=True)
-    
+
     def __str__(self):
         return f"{self.player_training.player} - {self.metric.name}: {self.value} {self.metric.metric_unit.code}"
 
     class Meta:
-        ordering = ['-player_training__session__date', 'metric']
+        ordering = ["-player_training__session__date", "metric"]
         indexes = [
             # Index for filtering by player and metric (common query pattern)
-            models.Index(fields=['player_training', 'metric'], name='pt_metric_idx'),
-            
+            models.Index(fields=["player_training", "metric"], name="pt_metric_idx"),
             # Index for value-based sorting and filtering
-            models.Index(fields=['value'], name='metric_value_idx'),
-            
+            models.Index(fields=["value"], name="metric_value_idx"),
             # Index for looking up by metric
-            models.Index(fields=['metric'], name='metric_only_idx'),
-            
+            models.Index(fields=["metric"], name="metric_only_idx"),
             # For efficient player training lookup
-            models.Index(fields=['player_training'], name='player_training_idx'),        ]
+            models.Index(fields=["player_training"], name="player_training_idx"),
+        ]
 
     @property
     def improvement_from_last(self):
@@ -264,45 +317,53 @@ class PlayerMetricRecord(models.Model):
         # Return None if current value is not recorded
         if self.value is None:
             return None
-            
-        prev_record = PlayerMetricRecord.objects.filter(
-            player_training__player=self.player_training.player,
-            metric=self.metric,
-            player_training__session__date__lt=self.player_training.session.date
-        ).order_by('-player_training__session__date').first()
-        
+
+        prev_record = (
+            PlayerMetricRecord.objects.filter(
+                player_training__player=self.player_training.player,
+                metric=self.metric,
+                player_training__session__date__lt=self.player_training.session.date,
+            )
+            .order_by("-player_training__session__date")
+            .first()
+        )
+
         if not prev_record or prev_record.value is None:
             return None
-            
+
         raw_diff = self.value - prev_record.value
         # For metrics where lower is better (like time), negate the difference
         if self.metric.is_lower_better:
             return -raw_diff
-        return raw_diff    
-    
+        return raw_diff
+
     @property
     def improvement_percentage(self):
         """Calculate percentage improvement from last recorded value with unit normalization"""
         from decimal import Decimal
-        
+
         # Return None if current value is not recorded
         if self.value is None:
             return None
-        
-        prev_record = PlayerMetricRecord.objects.filter(
-            player_training__player=self.player_training.player,
-            metric=self.metric,
-            player_training__session__date__lt=self.player_training.session.date
-        ).order_by('-player_training__session__date').first()
-        
+
+        prev_record = (
+            PlayerMetricRecord.objects.filter(
+                player_training__player=self.player_training.player,
+                metric=self.metric,
+                player_training__session__date__lt=self.player_training.session.date,
+            )
+            .order_by("-player_training__session__date")
+            .first()
+        )
+
         if not prev_record or prev_record.value is None or prev_record.value == 0:
             return None
-            
+
         # Convert values to Decimal for precise calculation
         current_value = Decimal(str(self.value))
         prev_value = Decimal(str(prev_record.value))
-        raw_percentage = ((current_value - prev_value) / prev_value) * Decimal('100.0')
-        
+        raw_percentage = ((current_value - prev_value) / prev_value) * Decimal("100.0")
+
         # Apply unit normalization weight if available
         if self.metric.metric_unit:
             weight = Decimal(str(self.metric.metric_unit.normalization_weight))
@@ -310,11 +371,11 @@ class PlayerMetricRecord(models.Model):
         else:
             # Default normalization weight if metric_unit not set
             normalized_percentage = raw_percentage
-        
+
         # For metrics where lower is better (like time), negate the percentage
         if self.metric.is_lower_better:
             normalized_percentage = -normalized_percentage
-            
+
         # Convert to float for API serialization
         return float(normalized_percentage)
 
@@ -339,18 +400,25 @@ class PlayerMetricRecord(models.Model):
         for player in players:
             # Get the latest PlayerTraining for this player in this team (optionally up to a date)
             trainings = player.training_records.filter(
-                session__team=team,
-                session__isnull=False
+                session__team=team, session__isnull=False
             )
             if up_to_date:
                 trainings = trainings.filter(session__date__lte=up_to_date)
-            trainings = trainings.order_by('-session__date')
+            trainings = trainings.order_by("-session__date")
             latest_training = trainings.first()
             if not latest_training:
                 continue
             # Get the latest PlayerMetricRecord for this metric in that training
-            record = latest_training.metric_records.filter(metric=metric).order_by('-recorded_at').first()
-            if record and record.improvement_from_last is not None and record.improvement_percentage is not None:
+            record = (
+                latest_training.metric_records.filter(metric=metric)
+                .order_by("-recorded_at")
+                .first()
+            )
+            if (
+                record
+                and record.improvement_from_last is not None
+                and record.improvement_percentage is not None
+            ):
                 improvements.append(Decimal(record.improvement_from_last))
                 percentages.append(Decimal(record.improvement_percentage))
         if not improvements:
@@ -360,5 +428,5 @@ class PlayerMetricRecord(models.Model):
         return {
             "avg_improvement": float(avg_improvement),
             "avg_percentage": float(avg_percentage),
-            "count": len(improvements)
+            "count": len(improvements),
         }
