@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Sport, Position, SportStatCategory, SportStatType, Formula, FormulaComponent, LeaderCategory
 from games.models import PlayerStat
 from django.db.models import Count
+import re
 
 class SportSerializer(serializers.ModelSerializer):
     class Meta:
@@ -40,10 +41,11 @@ class FormulaSerializer(serializers.ModelSerializer):
         queryset=Sport.objects.all(),
         write_only=True
     )
+    category_name = serializers.CharField(source='category.name', read_only=True)
 
     class Meta:
         model = Formula
-        fields = ['id', 'is_ratio', 'uses_point_value', 'decimal_places', 'name', 'expression', 'sport_slug', 'sport_name', 'components']
+        fields = ['id', 'is_ratio', 'uses_point_value', 'decimal_places', 'name', 'category_name', 'category', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
             'sport': {'write_only': True}  # This will be set via sport_slug
         }
@@ -63,6 +65,7 @@ class FormulaSerializer(serializers.ModelSerializer):
         # Update all fields, including is_ratio
         instance.name = validated_data.get('name', instance.name)
         instance.expression = validated_data.get('expression', instance.expression)
+        instance.category = validated_data.get('category', instance.category)
         instance.is_ratio = validated_data.get('is_ratio', instance.is_ratio)
         instance.uses_point_value = validated_data.get('uses_point_value', instance.uses_point_value)
         instance.decimal_places = validated_data.get('decimal_places', instance.decimal_places)
@@ -117,6 +120,24 @@ class SportStatTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SportStatType
         fields = "__all__"
+
+    def validate_code(self, value):
+        """Validate the stat code format.
+
+        Allowed: starts with a letter or underscore, followed by letters, digits or underscores.
+        This prevents codes that start with digits (e.g., '3PT_MA') which break Python parsing.
+        Empty/None values are allowed.
+        """
+        if value is None or value == "":
+            return value
+
+        # Must start with a letter or underscore, then letters/digits/underscore
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', value):
+            raise serializers.ValidationError(
+                "Invalid code format. Code must start with a letter or underscore and contain only letters, digits, or underscores. Codes cannot start with a digit."
+            )
+
+        return value
 
     def validate(self, data):
         errors = {}
