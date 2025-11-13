@@ -1,6 +1,6 @@
 from rest_framework.serializers import ModelSerializer, Serializer
 from rest_framework import serializers
-from .models import Team, Player, Coach
+from .models import Team, Player, Coach, AcademicInfo
 from users.serializers import PlayerSerializer, CoachSerializer
 from users.models import User
 from django.db import IntegrityError
@@ -9,6 +9,14 @@ from sports.serializers import SportSerializer, PositionSerializer
 
 # Import Game model for the summary serializer
 from games.models import Game
+
+
+class AcademicInfoSerializer(ModelSerializer):
+    """Serializer for AcademicInfo model"""
+    
+    class Meta:
+        model = AcademicInfo
+        fields = ['id', 'year_level', 'course', 'section']
 
 
 class GameSummarySerializer(ModelSerializer):
@@ -286,6 +294,16 @@ class PlayerInfoSerializer(ModelSerializer):
         required=False,
         allow_null=True,
     )
+    
+    # AcademicInfo fields
+    academic_info_id = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicInfo.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
+        source='academic_info'
+    )
+    academic_info = AcademicInfoSerializer(read_only=True)
 
     # Read-only nested serializers
     team = TeamSerializer(read_only=True)
@@ -308,8 +326,8 @@ class PlayerInfoSerializer(ModelSerializer):
             "sex",
             "email",
             "slug",
-            "year_level",
-            "course",
+            "academic_info_id",
+            "academic_info",
             "height",
             "weight",
             "team_id",

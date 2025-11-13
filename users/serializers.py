@@ -73,12 +73,17 @@ class UserSerializer(ModelSerializer):
             from teams.serializers import PlayerSerializer
 
             player = Player.objects.get(user=obj)
+            academic_info = player.academic_info
             return {
                 "height": player.height,
                 "weight": player.weight,
                 "jersey_number": player.jersey_number,
-                "year_level": player.year_level,
-                "course": player.course,
+                "academic_info": {
+                    "id": academic_info.id if academic_info else None,
+                    "year_level": academic_info.year_level if academic_info else None,
+                    "course": academic_info.course if academic_info else None,
+                    "section": academic_info.section if academic_info else None,
+                } if academic_info else None,
                 "team_id": player.team.id if player.team else None,
                 "team_name": player.team.name if player.team else None,
                 "sport_id": player.sport.id if player.sport else None,

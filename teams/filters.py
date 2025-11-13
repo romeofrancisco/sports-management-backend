@@ -6,6 +6,9 @@ from django.db.models import Q
 class PlayerFilter(django_filters.FilterSet):
     sex = django_filters.ChoiceFilter(field_name="user__sex", choices=User.Sex.choices)
     team = django_filters.CharFilter(method='filter_team')
+    year_level = django_filters.CharFilter(field_name="academic_info__year_level", lookup_expr="icontains")
+    course = django_filters.CharFilter(field_name="academic_info__course", lookup_expr="icontains")
+    section = django_filters.CharFilter(field_name="academic_info__section", lookup_expr="icontains")
 
     def filter_team(self, queryset, name, value):
         """

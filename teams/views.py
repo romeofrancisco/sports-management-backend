@@ -5,8 +5,9 @@ from .serializers import (
     CoachInfoSerializer,
     TeamSerializer,
     GameSummarySerializer,
+    AcademicInfoSerializer,
 )
-from .models import Player, Coach, Team
+from .models import Player, Coach, Team, AcademicInfo
 from sports.models import Sport
 from rest_framework.permissions import IsAuthenticated
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
@@ -33,6 +34,126 @@ class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
+
+
+class AcademicInfoViewSet(ModelViewSet):
+    """
+    ViewSet for managing AcademicInfo records.
+    - List/Retrieve: All authenticated users can view
+    - Create/Update/Delete: Only admins can modify
+    """
+    queryset = AcademicInfo.objects.all()
+    serializer_class = AcademicInfoSerializer
+    pagination_class = None  # Return all academic info without pagination
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ["year_level", "course", "section"]
+    search_fields = ["year_level", "course", "section"]
+    
+    def get_permissions(self):
+        """
+        Allow read operations for authenticated users,
+        but restrict write operations to admins only
+        """
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [IsAuthenticated]
+        else:
+            permission_classes = [IsAdminUser]
+        return [permission() for permission in permission_classes]
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated], url_path="paginated")
+    def paginated(self, request):
+        """Return paginated AcademicInfo results with optional column exclusion.
+
+        Use this endpoint when the client prefers page-by-page fetching (for large
+        datasets or when driving a Select component with server-side paging).
+        
+        Parameters:
+        - page, page_size: Standard pagination parameters
+        - year_level, course, section: Filter specific values
+        - exclude: Column-based exclusion (comma-separated: 'course', 'section')
+          - exclude=course: Groups by year_level only, excludes course and section columns
+          - exclude=section: Groups by year_level and course, excludes section column
+          - If both excluded, only year_level grouping is returned
+        
+        Examples:
+        - GET /api/academic-info/paginated/?page=1&page_size=20
+        - GET /api/academic-info/paginated/?exclude=course (year-level aggregation)
+        - GET /api/academic-info/paginated/?exclude=section (year+course aggregation)
+        - GET /api/academic-info/paginated/?exclude=course,section (same as exclude=course)
+        """
+        # Parse exclude parameter
+        exclude_param = request.query_params.get('exclude', '').lower()
+        excluded_columns = set(col.strip() for col in exclude_param.split(',') if col.strip())
+        
+        # Determine what columns to exclude
+        exclude_course = 'course' in excluded_columns
+        exclude_section = 'section' in excluded_columns
+        
+        # Start with base queryset filtered by DjangoFilterBackend
+        base_qs = self.filter_queryset(self.get_queryset())
+        
+        # If course is excluded, section is naturally excluded too
+        if exclude_course:
+            # Group by year_level only, count players per year
+            aggregated_qs = base_qs.values('year_level').annotate(
+                player_count=Count('players', filter=Q(players__user__is_active=True))
+            ).order_by('year_level')
+            
+            # Paginate the aggregated results
+            paginator = Pagination()
+            page = paginator.paginate_queryset(list(aggregated_qs), request, view=self)
+            
+            if page is not None:
+                return paginator.get_paginated_response(page)
+            return Response(list(aggregated_qs))
+            
+        elif exclude_section:
+            # Group by year_level and course, count players per year+course combination
+            aggregated_qs = base_qs.values('year_level', 'course').annotate(
+                player_count=Count('players', filter=Q(players__user__is_active=True))
+            ).order_by('year_level', 'course')
+            
+            # Paginate the aggregated results
+            paginator = Pagination()
+            page = paginator.paginate_queryset(list(aggregated_qs), request, view=self)
+            
+            if page is not None:
+                return paginator.get_paginated_response(page)
+            return Response(list(aggregated_qs))
+            
+        else:
+            # Default behavior: return full AcademicInfo with player counts
+            annotated_qs = base_qs.annotate(
+                player_count=Count("players", filter=Q(players__user__is_active=True))
+            )
+
+            # Use the local Pagination class to paginate results for this action
+            paginator = Pagination()
+            page = paginator.paginate_queryset(annotated_qs, request, view=self)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                data = serializer.data
+                # serializer.data is a list of dicts in the same order as `page`.
+                # Attach the annotated player_count to each serialized item.
+                for idx, obj in enumerate(page):
+                    try:
+                        data[idx]["player_count"] = obj.player_count
+                    except Exception:
+                        # Be defensive: if anything goes wrong, skip attaching the count
+                        continue
+
+                return paginator.get_paginated_response(data)
+
+            # Fallback: return all if pagination not applied
+            serializer = self.get_serializer(annotated_qs, many=True)
+            data = serializer.data
+            for idx, obj in enumerate(annotated_qs):
+                try:
+                    data[idx]["player_count"] = obj.player_count
+                except Exception:
+                    continue
+
+            return Response(data)
 
 
 class TeamViewSet(ModelViewSet):
