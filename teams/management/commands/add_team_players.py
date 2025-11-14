@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
 import random
-from teams.models import Team, Player
+from teams.models import Team, Player, AcademicInfo
 from sports.models import Position
 
 User = get_user_model()
@@ -133,6 +133,16 @@ class Command(BaseCommand):
                 jersey_number = random.randint(1, 99)
             
             # Select position if available
+            # Use existing AcademicInfo records only. Do NOT create defaults.
+            academic_infos = list(AcademicInfo.objects.all())
+            if not academic_infos:
+                self.stdout.write(self.style.ERROR(
+                    "No AcademicInfo records found. Create AcademicInfo entries before running this command."
+                ))
+                return
+
+            selected_academic = random.choice(academic_infos)
+
             player = Player.objects.create(
                 user=user,
                 team=team,
@@ -140,8 +150,7 @@ class Command(BaseCommand):
                 sport=team.sport,
                 height=random.randint(165, 210),  # Random height between 165-210 cm
                 weight=random.randint(65, 115),   # Random weight between 65-115 kg
-                year_level=random.choice([choice[0] for choice in Player.YEAR_LEVEL_CHOICES]),
-                course=random.choice([choice[0] for choice in Player.COURSE_CHOICES])
+                academic_info=selected_academic,
             )
             
             # Add positions (1 or 2 random positions)

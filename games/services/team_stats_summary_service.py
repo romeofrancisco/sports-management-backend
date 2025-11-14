@@ -65,7 +65,7 @@ class TeamStatsSummaryService:
                 game=self.game, 
                 stat_type__is_record=True  # Ensure we only get recorded stats
             )
-            .values("player__team", "period", "stat_type__code", "stat_type__point_value")
+            .values("player__team", "period", "stat_type__code", "stat_type__point_value", "stat_type__is_negative")
             .annotate(total=Count("id"))
         )
         return team_stats
@@ -81,6 +81,7 @@ class TeamStatsSummaryService:
             abbr = stat["stat_type__code"]
             total = stat["total"]
             point_value = stat["stat_type__point_value"]
+            is_negative = stat.get("stat_type__is_negative")
 
             if team_id in summary and period <= self.game.current_period:
                 # Add to the recording stats total for this team and period
@@ -93,12 +94,28 @@ class TeamStatsSummaryService:
                 
                 # For points scoring type, also aggregate to the top level
                 if self.game.sport.scoring_type == Sport.SCORING_TYPES.POINTS:
-                    summary[team_id]["recording_stats"][abbr] += total
-                    
-                    # Also store point values at top level
-                    if "point_values" not in summary[team_id]:
-                        summary[team_id]["point_values"] = {}
-                    summary[team_id]["point_values"][abbr] = point_value
+                    # If this stat is negative, points are awarded to the OPPOSING team
+                    if is_negative:
+                        # determine opponent id
+                        if team_id == self.game.home_team_id:
+                            target_team_id = self.game.away_team_id
+                        elif team_id == self.game.away_team_id:
+                            target_team_id = self.game.home_team_id
+                        else:
+                            target_team_id = team_id
+
+                        # Add counts/points to opponent's top-level recording stats
+                        if target_team_id in summary:
+                            summary[target_team_id]["recording_stats"][abbr] += total
+                            if "point_values" not in summary[target_team_id]:
+                                summary[target_team_id]["point_values"] = {}
+                            summary[target_team_id]["point_values"][abbr] = point_value
+                    else:
+                        summary[team_id]["recording_stats"][abbr] += total
+                        # Also store point values at top level
+                        if "point_values" not in summary[team_id]:
+                            summary[team_id]["point_values"] = {}
+                        summary[team_id]["point_values"][abbr] = point_value
 
     def _compute_formula_stats(self, summary):
         # Build dependency graph
@@ -268,9 +285,26 @@ class TeamStatsSummaryService:
 
                 # Calculate period points
                 for stat in self.recording_stats.filter(point_value__gt=0):
-                    stat_value = period_data["recording_stats"].get(stat.code, 0) or 0  # Ensure None becomes 0
-                    if stat_value:
-                        period_points += stat_value * stat.point_value
+                    # If stat is not negative, credit points to this team based on their recorded stat
+                    if not getattr(stat, 'is_negative', False):
+                        stat_value = period_data["recording_stats"].get(stat.code, 0) or 0
+                        if stat_value:
+                            period_points += stat_value * stat.point_value
+                    else:
+                        # Negative stat - points go to the opposing team, so look up opponent's recorded value
+                        # Determine opponent id
+                        if team_id == self.game.home_team_id:
+                            opponent_id = self.game.away_team_id
+                        elif team_id == self.game.away_team_id:
+                            opponent_id = self.game.home_team_id
+                        else:
+                            opponent_id = None
+
+                        if opponent_id and opponent_id in summary and period in summary[opponent_id]["periods"]:
+                            opponent_period_data = summary[opponent_id]["periods"][period]
+                            opp_value = opponent_period_data["recording_stats"].get(stat.code, 0) or 0
+                            if opp_value:
+                                period_points += opp_value * stat.point_value
                 
                 # For set-based sports, process period stats
                 if self.game.sport.scoring_type == Sport.SCORING_TYPES.SETS:
