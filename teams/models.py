@@ -214,29 +214,22 @@ class PlayerManager(models.Manager):
             user_id__in=subbed_out.values('substitute_out')
         )
 
+class AcademicInfo(models.Model):
+    year_level = models.CharField(max_length=50)
+    course = models.CharField(max_length=100)
+    section = models.CharField(max_length=50, blank=True, null=True)
+
+    class Meta:
+        unique_together = ('year_level', 'course', 'section')
+        verbose_name = "Academic Information"
+        verbose_name_plural = "Academic Information"
+        ordering = ['year_level']
+
+    def __str__(self):
+        section_display = f" - {self.section}" if self.section else ""
+        return f"{self.year_level} | {self.course}{section_display}"
+
 class Player(models.Model):
-    YEAR_LEVEL_CHOICES = [
-        ('grade_7', 'Grade 7'),
-        ('grade_8', 'Grade 8'),
-        ('grade_9', 'Grade 9'),
-        ('grade_10', 'Grade 10'),
-        ('grade_11', 'Grade 11'),
-        ('grade_12', 'Grade 12'),
-        ('1st_year_college', '1st Year College'),
-        ('2nd_year_college', '2nd Year College'),
-        ('3rd_year_college', '3rd Year College'),
-        ('4th_year_college', '4th Year College'),
-    ]
-    
-    COURSE_CHOICES = [
-        ('stem', 'STEM'),
-        ('gas', 'GAS'),
-        ('humss', 'HUMSS'),
-        ('abm', 'ABM'),
-        ('bs_cs', 'BS Computer Science'),
-        ('bs_ba', 'BS Business Administration'),
-    ]
-        
     user = models.OneToOneField( settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='player_profile', primary_key=True)
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
@@ -245,8 +238,7 @@ class Player(models.Model):
     jersey_number = models.IntegerField(blank=False)
     position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
-    year_level = models.CharField(max_length=20, choices=YEAR_LEVEL_CHOICES)
-    course = models.CharField(max_length=50, choices=COURSE_CHOICES)
+    academic_info = models.ForeignKey(AcademicInfo, null=True, blank=True, on_delete=models.SET_NULL, related_name='players')
     
     
     objects = PlayerManager()

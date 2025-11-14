@@ -6,6 +6,7 @@ from .models import Bracket, BracketRound, BracketMatch
 from .serializers import BracketSerializer
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
+from django.core import exceptions as django_exceptions
 from django_filters.rest_framework import DjangoFilterBackend
 import random
 
@@ -17,7 +18,18 @@ class BracketViewSet(viewsets.ModelViewSet):
     filterset_fields = ['season', 'tournament', 'elimination_type']
     
     def perform_create(self, serializer):
-        bracket = serializer.save()
+        try:
+            bracket = serializer.save()
+        except django_exceptions.ValidationError as e:
+            # Convert Django ValidationError to DRF ValidationError with a friendly structure
+            # If the Django error has a message_dict (field errors), pass it through.
+            if hasattr(e, 'message_dict') and e.message_dict:
+                raise ValidationError(detail=e.message_dict)
+            # Otherwise use the messages list or a generic non_field_errors key
+            messages = e.messages if hasattr(e, 'messages') else [str(e)]
+            raise ValidationError(detail={'non_field_errors': messages})
+
+        # If save succeeded, generate bracket structure
         self._generate_bracket(bracket)
 
     def _generate_bracket(self, bracket):

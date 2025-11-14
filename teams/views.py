@@ -5,8 +5,9 @@ from .serializers import (
     CoachInfoSerializer,
     TeamSerializer,
     GameSummarySerializer,
+    AcademicInfoSerializer,
 )
-from .models import Player, Coach, Team
+from .models import Player, Coach, Team, AcademicInfo
 from sports.models import Sport
 from rest_framework.permissions import IsAuthenticated
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
@@ -33,6 +34,138 @@ class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
     max_page_size = 50
+
+
+class AcademicInfoViewSet(ModelViewSet):
+    """
+    ViewSet for managing AcademicInfo records.
+    - List/Retrieve: All authenticated users can view
+    - Create/Update/Delete: Only admins can modify
+    """
+    queryset = AcademicInfo.objects.all()
+    serializer_class = AcademicInfoSerializer
+    pagination_class = None  # Return all academic info without pagination
+    filter_backends = [SearchFilter]
+    filterset_fields = ["year_level", "course", "section"]
+    search_fields = ["year_level", "course", "section"]
+    
+    def get_permissions(self):
+        """
+        Allow read operations for authenticated users,
+        but restrict write operations to admins only
+        """
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [IsAuthenticated]
+        else:
+            permission_classes = [IsAdminUser]
+        return [permission() for permission in permission_classes]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        request = self.request
+
+        year_level = request.query_params.get("year_level")
+        course = request.query_params.get("course")
+        section = request.query_params.get("section")
+
+        # Partial match for year_level
+        if year_level:
+            queryset = queryset.filter(year_level__icontains=year_level)
+
+        # Optional: also make course & section partial-match
+        if course:
+            queryset = queryset.filter(course__icontains=course)
+
+        if section:
+            queryset = queryset.filter(section__icontains=section)
+
+        return queryset
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated], url_path="paginated")
+    def paginated(self, request):
+        """Return paginated AcademicInfo results with optional column exclusion.
+
+        Use this endpoint when the client prefers page-by-page fetching (for large
+        datasets or when driving a Select component with server-side paging).
+        
+        Parameters:
+        - page, page_size: Standard pagination parameters
+        - year_level, course, section: Filter specific values
+        - exclude: Column-based exclusion (comma-separated: 'course', 'section')
+          - exclude=course: Groups by year_level only, excludes course and section columns
+          - exclude=section: Groups by year_level and course, excludes section column
+          - If both excluded, only year_level grouping is returned
+        
+        Examples:
+        - GET /api/academic-info/paginated/?page=1&page_size=20
+        - GET /api/academic-info/paginated/?exclude=course (year-level aggregation)
+        - GET /api/academic-info/paginated/?exclude=section (year+course aggregation)
+        - GET /api/academic-info/paginated/?exclude=course,section (same as exclude=course)
+        """
+        # Parse exclude parameter
+        exclude_param = request.query_params.get("exclude", "").lower()
+        excluded_columns = set(col.strip() for col in exclude_param.split(",") if col.strip())
+        exclude_course = "course" in excluded_columns
+        exclude_section = "section" in excluded_columns
+
+        # Base queryset filtered by search params
+        base_qs = self.filter_queryset(self.get_queryset())
+
+        # Determine aggregation based on exclusions
+        if exclude_course:
+            # Group by year_level only
+            qs = (
+                base_qs.values("year_level")
+                .annotate(player_count=Count("players", filter=Q(players__user__is_active=True)))
+                .order_by("year_level")
+            )
+        elif exclude_section:
+            # Group by year_level + course
+            qs = (
+                base_qs.values("year_level", "course")
+                .annotate(player_count=Count("players", filter=Q(players__user__is_active=True)))
+                .order_by("year_level", "course")
+            )
+        else:
+            # Full queryset with player counts
+            qs = base_qs.annotate(player_count=Count("players", filter=Q(players__user__is_active=True))).order_by("year_level", "course", "section")
+
+        # Paginate
+        paginator = Pagination()
+        page = paginator.paginate_queryset(list(qs), request, view=self)
+        if page is not None:
+            if not page:  # Empty page
+                return paginator.get_paginated_response([])
+
+            # If using dict-style values() aggregation, return as-is
+            if isinstance(page[0], dict):
+                return paginator.get_paginated_response(list(page))
+
+            # Otherwise, serialize model instances
+            serializer = self.get_serializer(page, many=True)
+            # Attach player_count if missing
+            for idx, obj in enumerate(page):
+                try:
+                    serializer.data[idx]["player_count"] = getattr(obj, "player_count", 0)
+                except Exception:
+                    continue
+            return paginator.get_paginated_response(serializer.data)
+
+        # Fallback: return all if no pagination applied
+        if qs:
+            first_item = qs[0]
+            if isinstance(first_item, dict):
+                return Response(list(qs))
+            serializer = self.get_serializer(qs, many=True)
+            for idx, obj in enumerate(qs):
+                try:
+                    serializer.data[idx]["player_count"] = getattr(obj, "player_count", 0)
+                except Exception:
+                    continue
+            return Response(serializer.data)
+
+        # Completely empty queryset
+        return Response([])
 
 
 class TeamViewSet(ModelViewSet):

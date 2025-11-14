@@ -51,7 +51,7 @@ class DashboardViewSet(viewsets.ViewSet):
         try:
             # System-wide statistics
             total_teams = Team.objects.count()
-            total_players = Player.objects.filter(team__isnull=False).count()
+            total_players = Player.objects.filter(team__isnull=False, user__is_active=True).count()
             total_coaches = Coach.objects.count()
             total_games = Game.objects.count()
             total_leagues = League.objects.count()

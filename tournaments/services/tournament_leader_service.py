@@ -93,7 +93,7 @@ class TournamentLeaderService:
                         player__user_id=player_stat['player__user_id'],
                         stat_type=stat_type
                     ).count()
-                    player_all_stats[stat_type.code] = stat_count
+                    player_all_stats[stat_type.display_name] = stat_count
                 
                 player_data = {
                     "player_id": player_stat['player__user_id'],

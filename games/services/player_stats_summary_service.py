@@ -416,6 +416,19 @@ class PlayerStatsSummaryService:
             for stat in player_summary_stats
         }
         
+        # Create a lookup for stat categories
+        stat_categories = {}
+        for stat in player_summary_stats.select_related('category'):
+            category_name = stat.category.name if stat.category else "Other"
+            display_name = stat.display_name or stat.name
+            stat_categories[display_name] = category_name
+
+        # Map display label back to stat object so we can return distinct name and display_name
+        display_to_stat = {}
+        for stat in player_summary_stats:
+            label = stat.display_name or stat.name
+            display_to_stat[label] = stat
+        
         # Create a lookup for ratio stats and their components
         ratio_component_lookup = {}
         for stat in self.formula_stats.filter(formula__is_ratio=True):
@@ -493,13 +506,23 @@ class PlayerStatsSummaryService:
                 response_entry["total_points"] = total_points
                 
                 if not for_calculation:
+                    # Group stats by category
+                    stats_by_category = defaultdict(list)
+                    for stat, value in total_stats.items():
+                        category = stat_categories.get(stat, "Other")
+                        stat_obj = display_to_stat.get(stat)
+                        stats_by_category[category].append({
+                            "name": stat_obj.name if stat_obj is not None else stat,
+                            "display_name": stat_obj.display_name if stat_obj is not None else stat,
+                            "value": value
+                        })
+                    
                     response_entry["stats"] = [
                         {
-                            "name": stat,
-                            "display_name": stat,
-                            "value": value
+                            "category": category,
+                            "stats": stats
                         }
-                        for stat, value in total_stats.items()
+                        for category, stats in stats_by_category.items()
                     ]
 
             # For set-based sports, calculate period stats and totals
@@ -700,15 +723,25 @@ class PlayerStatsSummaryService:
                                 period_values_by_stat[stat_name] = {}
                             period_values_by_stat[stat_name][str(period_num)] = value
                     
+                    # Group stats by category
+                    stats_by_category = defaultdict(list)
+                    for stat_name, value in totals.items():
+                        category = stat_categories.get(stat_name, "Other")
+                        stat_obj = display_to_stat.get(stat_name)
+                        stats_by_category[category].append({
+                            "name": stat_obj.name if stat_obj is not None else stat_name,
+                            "display_name": stat_obj.display_name if stat_obj is not None else stat_name,
+                            "value": value,
+                            "period_values": period_values_by_stat.get(stat_name, {})
+                        })
+                    
                     # Add stats field for frontend compatibility
                     response_entry["stats"] = [
                         {
-                            "name": stat_name,
-                            "display_name": stat_name,
-                            "value": value,
-                            "period_values": period_values_by_stat.get(stat_name, {})
+                            "category": category,
+                            "stats": stats
                         }
-                        for stat_name, value in totals.items()
+                        for category, stats in stats_by_category.items()
                     ]
 
             response.append(response_entry)

@@ -18,6 +18,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from django.db.models import Count
 from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
+from django.db import IntegrityError, transaction
+from rest_framework.exceptions import ValidationError
 
 
 class SportsViewSet(ModelViewSet):
@@ -244,6 +246,23 @@ class PositionViewSet(ModelViewSet):
             return [IsAuthenticated()]  # Any authenticated user can read
         return [IsAdminUser()]  # Admin permission required for write operations
 
+    def perform_create(self, serializer):
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except IntegrityError:
+            raise ValidationError({
+                "detail": "A position with the same name or abbreviation already exists for this sport."
+            })
+
+    def perform_update(self, serializer):
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except IntegrityError:
+            raise ValidationError({
+                "detail": "A position with the same name or abbreviation already exists for this sport."
+            })
 
 class LeaderCategoryViewSet(viewsets.ModelViewSet):
     """
