@@ -23,6 +23,7 @@ class Command(BaseCommand):
         parser.add_argument('--completed', action='store_true', help='Create completed games (default: scheduled)')
         parser.add_argument('--days', type=int, default=30, help='Date range in days for game scheduling')
         parser.add_argument('--bracket', type=int, help='Simulate games for a specific bracket ID')
+        parser.add_argument('--tournament', type=int, help='Simulate games for a specific tournament ID (will find its bracket)')
         parser.add_argument('--round', type=int, help='Simulate games for a specific round in the bracket')
         parser.add_argument('--all-rounds', action='store_true', help='Simulate all rounds in the bracket')
 
@@ -34,22 +35,36 @@ class Command(BaseCommand):
         create_completed = options.get('completed')
         days_range = options.get('days')
         bracket_id = options.get('bracket')
+        tournament_id = options.get('tournament')
         bracket_round = options.get('round')
         all_rounds = options.get('all_rounds')
         
         # Check if we're simulating bracket games
         if bracket_id:
             return self._simulate_bracket_games(bracket_id, bracket_round, all_rounds)
+
+        # If a tournament id was provided, try to find its bracket and simulate that
+        if tournament_id:
+            try:
+                bracket = Bracket.objects.get(tournament_id=tournament_id)
+            except Bracket.DoesNotExist:
+                self.stdout.write(self.style.ERROR(f'No bracket found for tournament with ID {tournament_id}'))
+                return
+            return self._simulate_bracket_games(bracket.id, bracket_round, all_rounds)
+        elif season_id:
+            try:
+                bracket = Bracket.objects.get(season_id=season_id)
+            except Bracket.DoesNotExist:
+                self.stdout.write(self.style.ERROR(f'No bracket found for season with ID {season_id}'))
+                return
+            return self._simulate_bracket_games(bracket.id, bracket_round, all_rounds)
+
             
         # Get sport, teams, and league
         if sport_id:
             sport = Sport.objects.get(id=sport_id)
         elif league_id:
             league = League.objects.get(id=league_id)
-            sport = league.sport
-        elif season_id:
-            season = Season.objects.get(id=season_id)
-            league = season.league
             sport = league.sport
         else:
             # Default to first sport with teams

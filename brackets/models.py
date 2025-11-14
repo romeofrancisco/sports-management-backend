@@ -28,6 +28,7 @@ class Bracket(models.Model):
     winner = models.ForeignKey(
         "teams.Team",
         null=True,
+        blank=True,
         on_delete=models.SET_NULL,
         related_name="bracket_winner",
     )

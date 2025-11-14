@@ -223,6 +223,7 @@ class AcademicInfo(models.Model):
         unique_together = ('year_level', 'course', 'section')
         verbose_name = "Academic Information"
         verbose_name_plural = "Academic Information"
+        ordering = ['year_level']
 
     def __str__(self):
         section_display = f" - {self.section}" if self.section else ""
