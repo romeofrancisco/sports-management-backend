@@ -133,3 +133,8 @@ def league_logo_upload_path(instance, filename):
 def sport_banner_upload_path(instance, filename):
     """Upload path for sport banners. Uses sport name as identifier."""
     return generate_upload_path('sport_banners', instance, filename, identifier_field='name')
+
+
+def facility_photo_upload_path(instance, filename):
+    """Upload path for facility photos. Uses facility name as identifier."""
+    return generate_upload_path('facility_images', instance, filename, identifier_field='name')

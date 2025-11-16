@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "chat",
     "documents",
     "tournaments",
+    "facilities",
 ]
 
 MIDDLEWARE = [
