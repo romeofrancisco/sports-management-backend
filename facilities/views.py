@@ -5,7 +5,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from .models import Facility, Reservation
 from .serializers import FacilitySerializer, ReservationSerializer
-
+from django.utils import timezone
+from django.db.models import Case, When, Value, IntegerField
 
 class IsCoachOrAdmin(permissions.BasePermission):
 	def has_permission(self, request, view):
@@ -53,7 +54,7 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 	permission_classes = [permissions.IsAuthenticated]
 
 	class ReservationPagination(PageNumberPagination):
-		page_size = 20
+		page_size = 10
 		page_size_query_param = "page_size"
 		max_page_size = 100
 
@@ -61,16 +62,86 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 
 	def get_queryset(self):
 		qs = super().get_queryset()
+		now = timezone.now()
+
+		# Auto-expire all outdated pending reservations
+		qs.filter(
+			status=Reservation.Status.PENDING,
+			start_datetime__lt=now
+		).update(status=Reservation.Status.EXPIRED)
+
+		# Filtering by facility/coach/status as before
 		facility_id = self.request.query_params.get("facility")
 		coach_id = self.request.query_params.get("coach")
 		status_q = self.request.query_params.get("status")
+
 		if facility_id:
 			qs = qs.filter(facility_id=facility_id)
 		if coach_id:
 			qs = qs.filter(coach_id=coach_id)
 		if status_q:
 			qs = qs.filter(status=status_q)
-		return qs.order_by("start_datetime")
+
+		# Support calendar-style view & date range filtering
+		# NOTE: previous behavior applied a default `view=month` which caused
+		# the endpoint to return only the current month's reservations when
+		# no calendar params were provided. Change to only apply the
+		# date-range filter when the client explicitly passes `view` or
+		# `date` so the list endpoint returns the full paginated set by
+		# default (matching admin list counts).
+		view = self.request.query_params.get("view")
+		date_str = self.request.query_params.get("date")
+
+		if view is not None or date_str is not None:
+			# parse date parameter; default to now
+			try:
+				if date_str:
+					from dateutil import parser as dateparser
+					selected_date = dateparser.parse(date_str)
+				else:
+					selected_date = timezone.now()
+			except Exception:
+				selected_date = timezone.now()
+
+			# make timezone aware
+			if timezone.is_naive(selected_date):
+				selected_date = timezone.make_aware(selected_date, timezone.get_current_timezone())
+
+			from datetime import timedelta
+			import calendar as _calendar
+
+			v = (view or "month").lower()
+
+			if v == "day":
+				start = selected_date.replace(hour=0, minute=0, second=0, microsecond=0)
+				end = start + timedelta(days=1)
+			elif v == "week":
+				start = selected_date - timedelta(days=selected_date.weekday())
+				start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+				end = start + timedelta(days=7)
+			elif v in ("month", "agenda"):
+				start = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+				last_day = _calendar.monthrange(start.year, start.month)[1]
+				end = start.replace(day=last_day, hour=23, minute=59, second=59)
+			elif v == "year":
+				start = selected_date.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+				end = selected_date.replace(month=12, day=31, hour=23, minute=59, second=59)
+			else:
+				start = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+				last_day = _calendar.monthrange(start.year, start.month)[1]
+				end = start.replace(day=last_day, hour=23, minute=59, second=59)
+
+			qs = qs.filter(start_datetime__range=(start, end))
+
+		# Order pending reservations first, then by start_datetime.
+		# All non-pending reservations keep their chronological order.
+		status_order = Case(
+			When(status=Reservation.Status.PENDING, then=Value(0)),
+			default=Value(1),
+			output_field=IntegerField(),
+		)
+
+		return qs.annotate(status_order=status_order).order_by("status_order", "-start_datetime")
 
 	def perform_create(self, serializer):
 		user = self.request.user
@@ -83,8 +154,16 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 		else:
 			raise permissions.PermissionDenied("Only coaches or admins can create reservations")
 
+	def list(self, request, *args, **kwargs):
+		# Support full-list fetch for calendar consumers via ?no_pagination=1
+		if request.query_params.get("no_pagination") in ("1", "true", "True"):
+			qs = self.filter_queryset(self.get_queryset())
+			serializer = self.get_serializer(qs, many=True)
+			return Response(serializer.data)
+		return super().list(request, *args, **kwargs)
 
-class ReservationRetrieveUpdateAPIView(generics.RetrieveUpdateAPIView):
+
+class ReservationRetrieveUpdateAPIView(generics.RetrieveUpdateDestroyAPIView):
 	queryset = Reservation.objects.all().select_related("facility", "coach", "requested_by")
 	serializer_class = ReservationSerializer
 	permission_classes = [permissions.IsAuthenticated]
@@ -92,6 +171,11 @@ class ReservationRetrieveUpdateAPIView(generics.RetrieveUpdateAPIView):
 	def perform_update(self, serializer):
 		# Delegate logic to serializer (it enforces admin-only status changes)
 		serializer.save()
+  
+	def get_object(self):
+		obj = super().get_object()
+		obj.auto_expire()   # check & update if pending and overdue
+		return obj
 
 
 # Create your views here.
