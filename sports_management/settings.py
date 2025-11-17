@@ -13,13 +13,13 @@ env = environ.Env(DEBUG=(bool, False))
 # Default is 'development' if DJANGO_ENV is not set.
 DJANGO_ENV = os.environ.get("DJANGO_ENV", "development")
 
-if DJANGO_ENV == "production":
-    env_file = BASE_DIR / ".env.production"
-else:
+env_file = None
+
+if DJANGO_ENV != "production":
     env_file = BASE_DIR / ".env.development"
 
-# Load the environment variables from the selected file.
-environ.Env.read_env(env_file)
+if env_file and env_file.exists():
+    env.read_env(env_file)
 
 
 # Quick-start development settings - unsuitable for production
@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "chat",
     "documents",
     "tournaments",
+    "facilities",
 ]
 
 MIDDLEWARE = [
@@ -264,13 +265,12 @@ if REDIS_URL:
     # Production: Use Redis cache for better performance
     CACHES = {
         "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": REDIS_URL,
-            "TIMEOUT": 300,  # 5 minutes
             "OPTIONS": {
-                "MAX_ENTRIES": 1000,
-                "CULL_FREQUENCY": 3,
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
             },
+            "TIMEOUT": 300,
         }
     }
 else:
