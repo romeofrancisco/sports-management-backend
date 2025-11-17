@@ -1,4 +1,4 @@
-# Use Python 3.9 slim image
+# Use Python 3.12 slim image
 FROM python:3.12-slim
 
 # Set environment variables

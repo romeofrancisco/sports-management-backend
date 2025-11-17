@@ -225,6 +225,11 @@ class FastStatRecordingService:
             # Optimized score update - only update if it's a scoring stat
             if self.stat_type.is_points and self.stat_type.point_value > 0:
                 self._update_score_efficiently()
+                
+            # Manually send WebSocket update since signals were disconnected
+            from games.signals import send_score_update
+            send_score_update(self.game)
+            
         finally:
             # Reconnect the signals
             post_save.connect(update_game_score, sender=PlayerStat)
