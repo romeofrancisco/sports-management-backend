@@ -14,7 +14,8 @@ env = environ.Env(DEBUG=(bool, False))
 DJANGO_ENV = os.environ.get("DJANGO_ENV", "development")
 
 if DJANGO_ENV == "production":
-    env_file = BASE_DIR / ".env.production"
+    
+    pass
 else:
     env_file = BASE_DIR / ".env.development"
 

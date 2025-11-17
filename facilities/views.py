@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from .models import Facility, Reservation
 from .serializers import FacilitySerializer, ReservationSerializer
 from django.utils import timezone
-from django.db.models import Case, When, Value, IntegerField
+from django.db.models import Case, When, Value, IntegerField, Q
 
 class IsCoachOrAdmin(permissions.BasePermission):
 	def has_permission(self, request, view):
@@ -62,6 +62,16 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 
 	def get_queryset(self):
 		qs = super().get_queryset()
+
+		# If the requesting user is a coach, restrict results to their reservations
+		# unless the client explicitly requests the full, unpaginated list
+		# (via ?no_pagination=1). This allows calendar consumers to fetch all
+		# reservations while still keeping paginated coach views limited.
+		user = getattr(self.request, "user", None)
+		no_pagination = self.request.query_params.get("no_pagination") in ("1", "true", "True")
+		if user and getattr(user, "is_coach", False) and not no_pagination:
+			qs = qs.filter(coach=user)
+
 		now = timezone.now()
 
 		# Auto-expire all outdated pending reservations
@@ -74,6 +84,7 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 		facility_id = self.request.query_params.get("facility")
 		coach_id = self.request.query_params.get("coach")
 		status_q = self.request.query_params.get("status")
+		q = self.request.query_params.get("q")
 
 		if facility_id:
 			qs = qs.filter(facility_id=facility_id)
@@ -81,6 +92,41 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 			qs = qs.filter(coach_id=coach_id)
 		if status_q:
 			qs = qs.filter(status=status_q)
+		# Free-text search across facility name/location and coach/requester names
+		if q:
+			qs = qs.filter(
+				Q(facility__name__icontains=q)
+				| Q(facility__location__icontains=q)
+				| Q(coach__first_name__icontains=q)
+				| Q(coach__last_name__icontains=q)
+				| Q(requested_by__first_name__icontains=q)
+				| Q(requested_by__last_name__icontains=q)
+			)
+
+		# Date range filtering
+		start_date_str = self.request.query_params.get("start_date")
+		end_date_str = self.request.query_params.get("end_date")
+		if start_date_str or end_date_str:
+			from dateutil import parser as dateparser
+			try:
+				start_date = None
+				end_date = None
+				if start_date_str:
+					start_date = dateparser.parse(start_date_str)
+					if timezone.is_naive(start_date):
+						start_date = timezone.make_aware(start_date, timezone.get_current_timezone())
+				if end_date_str:
+					end_date = dateparser.parse(end_date_str)
+					if timezone.is_naive(end_date):
+						end_date = timezone.make_aware(end_date, timezone.get_current_timezone())
+				if start_date and end_date:
+					qs = qs.filter(start_datetime__range=(start_date, end_date))
+				elif start_date:
+					qs = qs.filter(start_datetime__gte=start_date)
+				elif end_date:
+					qs = qs.filter(start_datetime__lte=end_date)
+			except Exception:
+				pass  # Invalid date format, ignore filter
 
 		# Support calendar-style view & date range filtering
 		# NOTE: previous behavior applied a default `view=month` which caused
