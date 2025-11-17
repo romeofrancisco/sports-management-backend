@@ -387,51 +387,81 @@ class Game(models.Model):
         return None  # No errors
 
     def _calculate_team_scores(self):
-        def score(team, opposing_team):
-            # Filter stats by current period if it's a set-based sport
-            filters = {
-                "game": self,
-                "stat_type__point_value__gt": 0,
-            }
-
-            if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
-                # Ensure set exists for current period
-                if not self.sets.filter(period=self.current_period).exists():
-                    GameSet.objects.create(
-                        game=self,
-                        period=self.current_period,
-                        home_team_score=0,
-                        away_team_score=0,
-                        winner=None,
-                    )
-                filters["period"] = self.current_period
-
-            # Add points from positive stats for this team
-            positive_points = (
-                PlayerStat.objects.filter(
-                    **filters, player__team=team, stat_type__is_negative=False
-                ).aggregate(total=Sum("stat_type__point_value"))["total"]
-                or 0
-            )
-
-            # Add points from negative stats from opposing team
-            negative_points = (
-                PlayerStat.objects.filter(
-                    **filters, player__team=opposing_team, stat_type__is_negative=True
-                ).aggregate(total=Sum("stat_type__point_value"))["total"]
-                or 0
-            )
-
-            return positive_points + negative_points
-
-        # Calculate scores with negative stats adding to opposing team
-        home_score = score(self.home_team, self.away_team)
-        away_score = score(self.away_team, self.home_team)
-
-        return {
-            "home_team_score": home_score,
-            "away_team_score": away_score,
-        }
+        # Use select_related and prefetch_related for better performance
+        stats_queryset = PlayerStat.objects.select_related(
+            'player__team', 'stat_type'
+        ).filter(game=self)
+        
+        # Filter by current period if it's a set-based sport
+        if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            # Ensure set exists for current period
+            if not self.sets.filter(period=self.current_period).exists():
+                GameSet.objects.create(
+                    game=self,
+                    period=self.current_period,
+                    home_team_score=0,
+                    away_team_score=0,
+                    winner=None,
+                )
+            stats_queryset = stats_queryset.filter(period=self.current_period)
+        
+        # Filter for stats that have point values
+        stats_queryset = stats_queryset.filter(stat_type__point_value__gt=0)
+        
+        # Calculate scores using aggregation
+        home_positive = stats_queryset.filter(
+            player__team=self.home_team, 
+            stat_type__is_negative=False
+        ).aggregate(total=Sum("stat_type__point_value"))["total"] or 0
+        
+        home_negative = stats_queryset.filter(
+            player__team=self.away_team, 
+            stat_type__is_negative=True
+        ).aggregate(total=Sum("stat_type__point_value"))["total"] or 0
+        
+        away_positive = stats_queryset.filter(
+            player__team=self.away_team, 
+            stat_type__is_negative=False
+        ).aggregate(total=Sum("stat_type__point_value"))["total"] or 0
+        
+        away_negative = stats_queryset.filter(
+            player__team=self.home_team, 
+            stat_type__is_negative=True
+        ).aggregate(total=Sum("stat_type__point_value"))["total"] or 0
+        
+    def update_scores_incremental(self, stat, operation='add'):
+        """
+        Update scores incrementally when a stat is added/removed
+        Much faster than full recalculation
+        
+        Args:
+            stat: PlayerStat instance
+            operation: 'add' or 'remove'
+        """
+        point_value = stat.stat_type.point_value
+        team = stat.player.team
+        
+        # Handle set-based sports (only current period)
+        if self.sport.scoring_type == Sport.SCORING_TYPES.SETS:
+            if stat.period != self.current_period:
+                return  # Don't update if not current period
+        
+        # Calculate score change
+        if operation == 'add':
+            score_change = point_value
+        elif operation == 'remove':
+            score_change = -point_value
+        else:
+            return
+        
+        # Apply to appropriate team
+        if team == self.home_team:
+            self.home_team_score = max(0, self.home_team_score + score_change)
+        elif team == self.away_team:
+            self.away_team_score = max(0, self.away_team_score + score_change)
+        
+        # Save without triggering signals
+        self.save(update_fields=['home_team_score', 'away_team_score', 'updated_at'])
 
     def start_game(self):
         if self.status != self.Status.SCHEDULED:

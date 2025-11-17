@@ -197,45 +197,32 @@ class MultiPlayerProgressService:
                     # Sort by date and keep only the most recent record
                     records_by_player[player_id].sort(key=lambda x: x['date'])
                     records_by_player[player_id] = [records_by_player[player_id][-1]]
-          # Calculate overall improvement metrics for each player using ProgressService
+          # Calculate overall improvement metrics for each player using batch ProgressService
         # This ensures consistency with the coach dashboard calculations
+        from ..services.progress_service import ProgressService
+        
+        # Get Player instances for batch operations
+        players_instances = Player.objects.filter(user_id__in=selected_player_ids)
+        
+        # Use batch methods for better performance
+        overall_improvements = ProgressService.batch_calculate_overall_improvement(
+            players_instances, self.date_from, self.date_to
+        )
+        recent_improvements = ProgressService.batch_calculate_recent_improvement(
+            players_instances, self.date_from, self.date_to
+        )
+        best_performances = ProgressService.batch_find_best_performance(
+            players_instances, self.date_from, self.date_to
+        )
+        
+        # Convert to the expected format
         player_improvements = {}
         for player_id in selected_player_ids:
-            from ..services.progress_service import ProgressService
-            from ..models import Player
-            
-            try:
-                player = Player.objects.get(user_id=player_id)
-                
-                # Use the same ProgressService methods as coach dashboard for consistency
-                overall_improvement = ProgressService.calculate_overall_improvement(
-                    player, 
-                    date_from=self.date_from, 
-                    date_to=self.date_to
-                )
-                recent_improvement = ProgressService.calculate_recent_improvement(
-                    player, 
-                    date_from=self.date_from, 
-                    date_to=self.date_to
-                )
-                best_performance = ProgressService.find_best_performance(
-                    player, 
-                    date_from=self.date_from, 
-                    date_to=self.date_to
-                )
-                
-                player_improvements[player_id] = {
-                    'overall_improvement': overall_improvement,
-                    'recent_improvement': recent_improvement,
-                    'best_performance': best_performance
-                }
-            except Player.DoesNotExist:
-                # Handle case where player doesn't exist
-                player_improvements[player_id] = {
-                    'overall_improvement': None,
-                    'recent_improvement': None,
-                    'best_performance': None
-                }
+            player_improvements[player_id] = {
+                'overall_improvement': overall_improvements.get(player_id),
+                'recent_improvement': recent_improvements.get(player_id),
+                'best_performance': best_performances.get(player_id)
+            }
         
         return records_by_player, player_improvements
     
@@ -253,6 +240,53 @@ class MultiPlayerProgressService:
         Returns:
             dict: Complete response data
         """
+        # Bulk calculate training stats for all players to avoid N+1 queries
+        from django.db.models import Count, Q, Max
+        from ..models import Player, PlayerTraining, PlayerMetricRecord
+        
+        players = Player.objects.filter(user_id__in=selected_player_ids)
+        
+        # Training sessions stats - bulk calculate for all players
+        training_query = PlayerTraining.objects.filter(player__in=players)
+        if self.date_from:
+            training_query = training_query.filter(session__date__gte=self.date_from)
+        if self.date_to:
+            training_query = training_query.filter(session__date__lte=self.date_to)
+            
+        training_stats = training_query.values('player__user_id').annotate(
+            total_sessions=Count('id'),
+            present_sessions=Count('id', filter=Q(attendance_status="present")),
+            late_sessions=Count('id', filter=Q(attendance_status="late"))
+        ).values('player__user_id', 'total_sessions', 'present_sessions', 'late_sessions')
+        
+        training_stats_dict = {stat['player__user_id']: stat for stat in training_stats}
+        
+        # Recent metrics count - bulk calculate
+        recent_metrics_query = PlayerMetricRecord.objects.filter(player_training__player__in=players)
+        if self.date_from:
+            recent_metrics_query = recent_metrics_query.filter(recorded_at__gte=self.date_from)
+        if self.date_to:
+            recent_metrics_query = recent_metrics_query.filter(recorded_at__lte=self.date_to)
+            
+        recent_metrics_stats = recent_metrics_query.values('player_training__player__user_id').annotate(
+            count=Count('id')
+        ).values('player_training__player__user_id', 'count')
+        
+        recent_metrics_dict = {stat['player_training__player__user_id']: stat['count'] for stat in recent_metrics_stats}
+        
+        # Last training date - bulk calculate (within date range if specified)
+        last_training_query = PlayerTraining.objects.filter(player__in=players)
+        if self.date_from:
+            last_training_query = last_training_query.filter(session__date__gte=self.date_from)
+        if self.date_to:
+            last_training_query = last_training_query.filter(session__date__lte=self.date_to)
+            
+        last_training_stats = last_training_query.values('player__user_id').annotate(
+            last_date=Max('session__date')
+        ).values('player__user_id', 'last_date')
+        
+        last_training_dict = {stat['player__user_id']: stat['last_date'] for stat in last_training_stats}
+        
         # Build the final response structure
         for player_id, records in records_by_player.items():
             if player_id in player_info:
@@ -264,51 +298,26 @@ class MultiPlayerProgressService:
                 
                 # Add to player's metrics
                 player_info[player_id]['metrics_data'] = [player_metric_data]
-                  # Add improvement metrics if available
+                  
+                # Add improvement metrics if available
                 if player_id in player_improvements:
                     improvement_data = player_improvements[player_id]
                     
-                    # Calculate training session metrics to match coach dashboard
-                    from ..models import Player, PlayerTraining
-                    try:
-                        player = Player.objects.get(user_id=player_id)
-                        
-                        # Calculate training sessions and attendance rate
-                        training_records_query = PlayerTraining.objects.filter(player=player)
-                        
-                        # Apply date filters if provided
-                        if self.date_from:
-                            training_records_query = training_records_query.filter(session__date__gte=self.date_from)
-                        if self.date_to:
-                            training_records_query = training_records_query.filter(session__date__lte=self.date_to)
-                        
-                        total_sessions = training_records_query.count()
-                        present_sessions = training_records_query.filter(attendance_status="present").count()
-                        late_sessions = training_records_query.filter(attendance_status="late").count()
-                        attended_sessions = present_sessions + late_sessions
-                        attendance_rate = (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
-                        
-                        # Get recent metrics count
-                        from ..models import PlayerMetricRecord
-                        recent_metrics_query = PlayerMetricRecord.objects.filter(
-                            player_training__player=player
-                        )
-                        if self.date_from:
-                            recent_metrics_query = recent_metrics_query.filter(recorded_at__gte=self.date_from)
-                        if self.date_to:
-                            recent_metrics_query = recent_metrics_query.filter(recorded_at__lte=self.date_to)
-                        
-                        recent_metrics_count = recent_metrics_query.count()
-                        
-                        # Get last training date
-                        last_training = training_records_query.order_by('-session__date').first()
-                        last_training_date = last_training.session.date if last_training else None
-                        
-                    except Player.DoesNotExist:
-                        total_sessions = 0
-                        attendance_rate = 0
-                        recent_metrics_count = 0
-                        last_training_date = None
+                    # Get pre-calculated training stats
+                    t_stats = training_stats_dict.get(player_id, {
+                        'total_sessions': 0, 
+                        'present_sessions': 0, 
+                        'late_sessions': 0
+                    })
+                    
+                    total_sessions = t_stats['total_sessions']
+                    present_sessions = t_stats['present_sessions']
+                    late_sessions = t_stats['late_sessions']
+                    attended_sessions = present_sessions + late_sessions
+                    attendance_rate = (attended_sessions / total_sessions * 100) if total_sessions > 0 else 0
+                    
+                    recent_metrics_count = recent_metrics_dict.get(player_id, 0)
+                    last_training_date = last_training_dict.get(player_id)
                     
                     player_info[player_id].update({
                         'overall_improvement': improvement_data['overall_improvement'],

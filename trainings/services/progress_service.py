@@ -611,3 +611,362 @@ class ProgressService:
             }
 
         return None
+
+    @staticmethod
+    def batch_calculate_overall_improvement(players, date_from=None, date_to=None):
+        """
+        Calculate overall improvement across all metrics for multiple players in batch
+
+        Args:
+            players: List of Player instances
+            date_from: Optional start date filter
+            date_to: Optional end date filter
+
+        Returns:
+            Dictionary keyed by player user_id with improvement metrics
+        """
+        from decimal import Decimal
+
+        if not players:
+            return {}
+
+        player_ids = [p.user_id for p in players]
+
+        # Fetch all metrics for all players with date range in one query
+        records_query = PlayerMetricRecord.objects.filter(
+            player_training__player__user_id__in=player_ids,
+            value__isnull=False,  # Only include records with actual values
+            player_training__session__status="completed",  # Only completed sessions
+        ).select_related(
+            "player_training__session",
+            "player_training__player",
+            "metric",
+            "metric__metric_unit",
+        )
+
+        # Apply date filters if provided
+        if date_from and date_from not in ["undefined", "null", ""]:
+            records_query = records_query.filter(
+                player_training__session__date__gte=date_from
+            )
+        if date_to and date_to not in ["undefined", "null", ""]:
+            records_query = records_query.filter(
+                player_training__session__date__lte=date_to
+            )
+
+        # Group records by player
+        player_metrics_data = {}
+        for record in records_query:
+            player_id = record.player_training.player.user_id
+            metric_id = record.metric.id
+
+            if player_id not in player_metrics_data:
+                player_metrics_data[player_id] = {}
+
+            if metric_id not in player_metrics_data[player_id]:
+                player_metrics_data[player_id][metric_id] = {
+                    "is_lower_better": record.metric.is_lower_better,
+                    "name": record.metric.name,
+                    "weight": Decimal(
+                        str(
+                            record.metric.metric_unit.normalization_weight
+                            if record.metric.metric_unit
+                            else 1.0
+                        )
+                    ),
+                    "records": [],
+                }
+
+            player_metrics_data[player_id][metric_id]["records"].append(
+                {"date": record.player_training.session.date, "value": record.value}
+            )
+
+        # Calculate improvements for each player
+        results = {}
+        for player_id, metrics_data in player_metrics_data.items():
+            # Calculate weighted improvement percentages for each metric
+            weighted_normalized_improvements = []
+            total_weights = Decimal("0.0")
+
+            for metric_id, data in metrics_data.items():
+                if len(data["records"]) < 2:
+                    continue  # Skip metrics with insufficient data
+
+                # Sort records chronologically
+                sorted_records = sorted(data["records"], key=lambda x: x["date"])
+
+                # Calculate improvement between first and last record
+                first_record = sorted_records[0]
+                last_record = sorted_records[-1]
+
+                # Additional safety check for null values
+                if first_record["value"] is None or last_record["value"] is None:
+                    continue
+
+                # Calculate raw improvement
+                raw_improvement = last_record["value"] - first_record["value"]
+
+                # Adjust for metrics where lower is better
+                if data["is_lower_better"]:
+                    raw_improvement = -raw_improvement
+
+                # Calculate percentage improvement if first value is not zero
+                if first_record["value"] != 0:
+                    raw_percentage = (
+                        raw_improvement / abs(first_record["value"])
+                    ) * Decimal("100")
+                    weight = data["weight"]
+
+                    # Apply the weight to normalize the percentage
+                    normalized_percentage = raw_percentage * weight
+                    weighted_normalized_improvements.append(normalized_percentage)
+                    total_weights += weight
+
+            # Calculate overall improvement as weighted average of all metrics
+            if weighted_normalized_improvements and total_weights:
+                avg_improvement = sum(weighted_normalized_improvements) / total_weights
+                results[player_id] = {
+                    "percentage": float(avg_improvement),
+                    "metric_count": len(weighted_normalized_improvements),
+                    "is_positive": avg_improvement > 0,
+                }
+            else:
+                results[player_id] = None
+
+        # Fill in None for players with no data
+        for player in players:
+            if player.user_id not in results:
+                results[player.user_id] = None
+
+        return results
+
+    @staticmethod
+    def batch_calculate_recent_improvement(players, date_from=None, date_to=None):
+        """
+        Calculate recent improvement for multiple players in batch
+
+        Args:
+            players: List of Player instances
+            date_from: Optional start date filter
+            date_to: Optional end date filter
+
+        Returns:
+            Dictionary keyed by player user_id with recent improvement metrics
+        """
+        from decimal import Decimal
+
+        if not players:
+            return {}
+
+        player_ids = [p.user_id for p in players]
+
+        # Get current date
+        today = timezone.now().date()
+
+        # Determine date range for recent records
+        if date_from and date_to:
+            if isinstance(date_from, str):
+                start_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+            else:
+                start_date = date_from
+
+            if isinstance(date_to, str):
+                end_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+            else:
+                end_date = date_to
+        else:
+            # Default to 90 days ago
+            start_date = today - timezone.timedelta(days=90)
+            end_date = today
+
+        # Fetch all recent records for all players in one query
+        recent_records = PlayerMetricRecord.objects.filter(
+            player_training__player__user_id__in=player_ids,
+            player_training__session__date__gte=start_date,
+            player_training__session__date__lte=end_date,
+            value__isnull=False,
+            player_training__session__status="completed",
+        ).select_related(
+            "player_training__session",
+            "player_training__player",
+            "metric",
+            "metric__metric_unit"
+        )
+
+        # Check if any records exist for the date range
+        if not recent_records.exists():
+            return {player.user_id: None for player in players}
+
+        # Group records by player
+        player_metrics_data = {}
+        for record in recent_records:
+            player_id = record.player_training.player.user_id
+            metric_id = record.metric.id
+
+            if player_id not in player_metrics_data:
+                player_metrics_data[player_id] = {}
+
+            if metric_id not in player_metrics_data[player_id]:
+                player_metrics_data[player_id][metric_id] = {
+                    "is_lower_better": record.metric.is_lower_better,
+                    "name": record.metric.name,
+                    "weight": Decimal(
+                        str(
+                            record.metric.metric_unit.normalization_weight
+                            if record.metric.metric_unit
+                            else 1.0
+                        )
+                    ),
+                    "records": [],
+                }
+
+            player_metrics_data[player_id][metric_id]["records"].append(
+                {"date": record.player_training.session.date, "value": record.value}
+            )
+
+        # Calculate improvements for each player
+        results = {}
+        for player_id, metrics_data in player_metrics_data.items():
+            # Calculate weighted improvement percentages for each metric
+            weighted_normalized_improvements = []
+            total_weights = Decimal("0.0")
+
+            for metric_id, data in metrics_data.items():
+                if len(data["records"]) < 2:
+                    continue  # Skip metrics with insufficient data
+
+                # Sort records chronologically
+                sorted_records = sorted(data["records"], key=lambda x: x["date"])
+
+                # Calculate improvement between first and last record
+                first_record = sorted_records[0]
+                last_record = sorted_records[-1]
+
+                # Calculate raw improvement
+                raw_improvement = last_record["value"] - first_record["value"]
+
+                # Adjust for metrics where lower is better
+                if data["is_lower_better"]:
+                    raw_improvement = -raw_improvement
+
+                # Calculate percentage improvement if first value is not zero
+                if first_record["value"] != 0:
+                    raw_percentage = (
+                        raw_improvement / abs(first_record["value"])
+                    ) * Decimal("100")
+                    weight = data["weight"]
+
+                    # Apply the weight to normalize the percentage
+                    normalized_percentage = raw_percentage * weight
+                    weighted_normalized_improvements.append(normalized_percentage)
+                    total_weights += weight
+
+            # Calculate overall improvement as weighted average of all metrics
+            if weighted_normalized_improvements and total_weights:
+                avg_improvement = sum(weighted_normalized_improvements) / total_weights
+                results[player_id] = {
+                    "percentage": float(avg_improvement),
+                    "metric_count": len(weighted_normalized_improvements),
+                    "is_positive": avg_improvement > 0,
+                }
+            else:
+                results[player_id] = None
+
+        # Fill in None for players with no data
+        for player in players:
+            if player.user_id not in results:
+                results[player.user_id] = None
+
+        return results
+
+    @staticmethod
+    def batch_find_best_performance(players, date_from=None, date_to=None):
+        """
+        Find best performance in any metric for multiple players in batch
+
+        Args:
+            players: List of Player instances
+            date_from: Optional start date filter
+            date_to: Optional end date filter
+
+        Returns:
+            Dictionary keyed by player user_id with best performance details
+        """
+        if not players:
+            return {}
+
+        player_ids = [p.user_id for p in players]
+
+        # Fetch all records for all players in one query
+        records_query = PlayerMetricRecord.objects.filter(
+            player_training__player__user_id__in=player_ids,
+            value__isnull=False,
+            player_training__session__status="completed",
+        ).select_related(
+            "player_training__session",
+            "player_training__player",
+            "metric",
+            "metric__metric_unit",
+        )
+
+        # Apply date filters if provided
+        if date_from and date_from not in ["undefined", "null", ""]:
+            records_query = records_query.filter(
+                player_training__session__date__gte=date_from
+            )
+        if date_to and date_to not in ["undefined", "null", ""]:
+            records_query = records_query.filter(
+                player_training__session__date__lte=date_to
+            )
+
+        # Group records by player and metric
+        player_metric_records = {}
+        for record in records_query:
+            player_id = record.player_training.player.user_id
+            metric_id = record.metric.id
+
+            if player_id not in player_metric_records:
+                player_metric_records[player_id] = {}
+
+            if metric_id not in player_metric_records[player_id]:
+                player_metric_records[player_id][metric_id] = []
+
+            player_metric_records[player_id][metric_id].append(record)
+
+        # Find best performance for each player
+        results = {}
+        for player_id, metric_records in player_metric_records.items():
+            best_performances = []
+
+            for metric_id, records in metric_records.items():
+                if not records:
+                    continue
+
+                # Sort records to find best based on is_lower_better
+                metric = records[0].metric
+                if metric.is_lower_better:
+                    best_record = min(records, key=lambda r: r.value)
+                else:
+                    best_record = max(records, key=lambda r: r.value)
+
+                best_performances.append({
+                    "metric_id": metric_id,
+                    "metric_name": best_record.metric.name,
+                    "value": best_record.value,
+                    "unit": best_record.metric.metric_unit.code if best_record.metric.metric_unit else "",
+                    "date": best_record.player_training.session.date,
+                    "is_lower_better": best_record.metric.is_lower_better,
+                })
+
+            # Return the first best performance found
+            if best_performances:
+                results[player_id] = best_performances[0]
+            else:
+                results[player_id] = None
+
+        # Fill in None for players with no data
+        for player in players:
+            if player.user_id not in results:
+                results[player.user_id] = None
+
+        return results

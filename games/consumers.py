@@ -3,7 +3,6 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from .models import Game
-from teams.models import Coach, Player
 
 
 class GameScoreConsumer(AsyncWebsocketConsumer):
@@ -27,12 +26,15 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
         # Join room group
         await self.channel_layer.group_add(
             self.room_group_name,
-            self.channel_name        )
+            self.channel_name
+        )
         
         await self.accept()
+        print(f"WebSocket connected for game {self.game_id}, user {user}")
 
     async def disconnect(self, close_code):
-        # Leave room group
+        """Leave room group"""
+        print(f"Disconnecting WebSocket for game {self.game_id} with code {close_code}")
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
@@ -45,6 +47,7 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
 
     async def score_update(self, event):
         """Send score update to WebSocket"""
+        print(f"Sending score update for game {self.game_id}: {event}")
         await self.send(text_data=json.dumps({
             'type': 'score_update',
             'game_id': event['game_id'],
@@ -62,6 +65,7 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
 
     async def game_status_update(self, event):
         """Send game status update to WebSocket"""
+        print(f"Sending game status update for game {self.game_id}: {event}")
         await self.send(text_data=json.dumps({
             'type': 'game_status_update',
             'game_id': event['game_id'],
