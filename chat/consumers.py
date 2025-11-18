@@ -4,6 +4,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
+from push_notifications.models import WebPushDevice
 from .models import TeamChat, ChatMessage
 from teams.models import Team, Coach, Player
 
@@ -51,6 +52,9 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
         if not chat_message:
             return
 
+        # Get team for team name
+        team = await database_sync_to_async(Team.objects.get)(id=team_id)
+
         # Check cache first
         if user.id in self.profile_cache:
             profile_info = self.profile_cache[user.id]
@@ -63,6 +67,7 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
             {
                 'type': 'chat_message',
                 'team_id': team_id,
+                'team_name': team.name,
                 'message': message,
                 'sender_name': user.get_full_name(),
                 'sender_id': user.id,
@@ -73,8 +78,51 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
             }
         )
 
+        # Send push notifications to team members (excluding sender)
+        asyncio.create_task(self.send_push_notifications(user, team_id, message, chat_message.id))
+
     async def chat_message(self, event):
         await self.send(text_data=json.dumps(event))
+
+    @database_sync_to_async
+    def send_push_notifications(self, sender, team_id, message, message_id):
+        """
+        Send push notifications to all team members except the sender
+        """
+        try:
+            team = Team.objects.get(id=team_id)
+            team_members = []
+
+            # Get all coaches for the team
+            coaches = Coach.objects.filter(
+                Q(head_coached_teams=team) | Q(assistant_coached_teams=team)
+            )
+            team_members.extend([coach.user for coach in coaches])
+
+            # Get all players for the team
+            players = Player.objects.filter(team=team)
+            team_members.extend([player.user for player in players])
+
+            # Remove sender from recipients
+            recipients = [user for user in team_members if user != sender]
+
+            # Get devices for recipients
+            devices = WebPushDevice.objects.filter(user__in=recipients, active=True)
+
+            if devices.exists():
+                # Send push notification
+                devices.send_message(
+                    title=f"{team.name}",
+                    body=f"{sender.get_full_name()}: {message[:80]}{'...' if len(message) > 80 else ''}",
+                    extra={
+                        'team_id': team_id,
+                        'message_id': message_id,
+                        'sender_name': sender.get_full_name(),
+                        'team_name': team.name
+                    }
+                )
+        except Exception as e:
+            print(f"Error sending push notifications: {e}")
 
     # -------------------------
     # DATABASE HELPERS

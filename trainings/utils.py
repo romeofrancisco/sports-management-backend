@@ -35,15 +35,17 @@ def batch_fetch_record_data(player_ids, metric_id, date_from, date_to):
         base_filter &= Q(metric_id=metric_id)
     
     # Fetch all records in a single query with proper select_related
+    # Add a reasonable limit to prevent excessive memory usage for large teams
+    max_records = 50000  # Safeguard against loading too much data
     records = PlayerMetricRecord.objects.filter(base_filter).select_related(
         'player_training__player__user',
         'player_training__session',
-        'metric'
+        'metric__metric_unit'
     ).order_by(
         'player_training__player__user_id',
         'player_training__session__date',
         'player_training__session__start_time'
-    )
+    )[:max_records]
     
     # Group records by player
     records_by_player = defaultdict(list)
@@ -81,11 +83,8 @@ def calculate_player_improvement(records_by_player, metric_is_lower_better, metr
             }
             continue
             
-        # Sort records by date for proper calculation
-        sorted_records = sorted(records, key=lambda r: (
-            r.player_training.session.date,
-            r.player_training.session.start_time or '00:00'
-        ))
+        # Records are already sorted by date and time from the query
+        sorted_records = records
         
         # Calculate overall improvement (first vs last)
         overall_improvement = None

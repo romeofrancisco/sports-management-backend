@@ -51,6 +51,9 @@ class TeamOverviewService:
             ValueError: For validation errors
             PermissionError: For access control violations
         """
+        import time
+        start_time = time.time()
+        
         # Validate required parameters
         if not metric_id:
             raise ValueError("metric_id parameter is required")
@@ -97,8 +100,13 @@ class TeamOverviewService:
         # Build response
         result = self._build_response(team_name, player_ids, team_stats, metric_id)
         
-        # Cache the result for 10 minutes
-        cache.set(cache_key, result, 600)
+        # Cache the result for 5 minutes (reduced from 10 for more frequent updates)
+        cache.set(cache_key, result, 300)
+        
+        # Log performance
+        end_time = time.time()
+        processing_time = end_time - start_time
+        print(f"Team overview processed in {processing_time:.2f}s for {len(player_ids)} players, {sum(len(records) for records in records_by_player.values())} records")
         
         return result
     
@@ -133,7 +141,7 @@ class TeamOverviewService:
         """
         try:
             if team_slug:
-                players_query = Player.objects.filter(team__slug=team_slug)
+                players_query = Player.objects.filter(team__slug=team_slug).select_related('user', 'team')
                 
                 # Get team info for response
                 try:
@@ -148,7 +156,7 @@ class TeamOverviewService:
                     players_query = players_query.filter(user_id__in=player_ids)
             else:
                 player_ids = [int(id.strip()) for id in player_ids_param.split(',') if id.strip()]
-                players_query = Player.objects.filter(user_id__in=player_ids)
+                players_query = Player.objects.filter(user_id__in=player_ids).select_related('user', 'team')
                 team_name = "Selected Players"
                 
         except ValueError as e:

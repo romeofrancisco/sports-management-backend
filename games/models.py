@@ -29,7 +29,6 @@ class GameCoachPermission(models.Model):
         unique_together = ["game", "coach"]
         indexes = [
             models.Index(fields=["game", "coach"]),
-            models.Index(fields=["coach"]),
         ]
 
     def __str__(self):
@@ -948,7 +947,6 @@ class PlayerStat(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["game", "player"]),
-            models.Index(fields=["stat_type"]),
         ]
         ordering = ["-timestamp"]
 

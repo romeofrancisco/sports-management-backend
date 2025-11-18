@@ -3,6 +3,7 @@
 .env.production
 db.sqlite3
 /media
+firebase-*.json
 
 # Python cache files
 __pycache__/
