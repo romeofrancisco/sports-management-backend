@@ -4,25 +4,19 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
-from push_notifications.models import WebPushDevice
-from .models import TeamChat, ChatMessage
 from teams.models import Team, Coach, Player
+from .models import TeamChat, ChatMessage
+from push_notifications.models import GCMDevice
 
-# -------------------------
-# TEAM CHAT CONSUMER
-# -------------------------
+
 class TeamChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.team_id = self.scope['url_route']['kwargs']['team_id']
         self.room_group_name = f'chat_team_{self.team_id}'
-        self.profile_cache = {}  # cache per connection
+        self.profile_cache = {}
 
         user = self.scope["user"]
-        if isinstance(user, AnonymousUser):
-            await self.close()
-            return
-
-        if not await self.user_can_access_team_chat(user, self.team_id):
+        if isinstance(user, AnonymousUser) or not await self.user_can_access_team_chat(user, self.team_id):
             await self.close()
             return
 
@@ -30,118 +24,86 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
     async def disconnect(self, close_code):
-        try:
-            await asyncio.wait_for(
-                self.channel_layer.group_discard(self.room_group_name, self.channel_name),
-                timeout=2
-            )
-        except asyncio.TimeoutError:
-            print(f"Timeout discarding group {self.room_group_name}")
+        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
     async def receive(self, text_data):
         try:
             data = json.loads(text_data)
             message = data['message']
             user = self.scope["user"]
-            asyncio.create_task(self.save_and_broadcast(user, self.team_id, message))
+            await self.save_and_broadcast(user, self.team_id, message)
         except Exception as e:
-            await self.send(json.dumps({'error': f'Error processing message: {str(e)}'}))
+            await self.send(json.dumps({'error': str(e)}))
 
     async def save_and_broadcast(self, user, team_id, message):
         chat_message = await self.save_message(user, team_id, message)
         if not chat_message:
             return
 
-        # Get team for team name
         team = await database_sync_to_async(Team.objects.get)(id=team_id)
+        profile_info = self.profile_cache.get(user.id) or await self.get_user_profile(user)
+        self.profile_cache[user.id] = profile_info
 
-        # Check cache first
-        if user.id in self.profile_cache:
-            profile_info = self.profile_cache[user.id]
-        else:
-            profile_info = await self.get_user_profile(user)
-            self.profile_cache[user.id] = profile_info
+        event = {
+            'type': 'chat_message',
+            'team_id': team_id,
+            'team_name': team.name,
+            'message': message,
+            'sender_name': user.get_full_name(),
+            'sender_id': user.id,
+            'sender_role': user.role,
+            'profile': profile_info,
+            'timestamp': chat_message.timestamp.isoformat(),
+            'message_id': chat_message.id
+        }
 
-        await self.channel_layer.group_send(
-            f'chat_team_{team_id}',
-            {
-                'type': 'chat_message',
-                'team_id': team_id,
-                'team_name': team.name,
-                'message': message,
-                'sender_name': user.get_full_name(),
-                'sender_id': user.id,
-                'sender_role': user.role,
-                'profile': profile_info,
-                'timestamp': chat_message.timestamp.isoformat(),
-                'message_id': chat_message.id
-            }
-        )
+        # Broadcast to channel group
+        await self.channel_layer.group_send(self.room_group_name, event)
 
-        # Send push notifications to team members (excluding sender)
-        asyncio.create_task(self.send_push_notifications(user, team_id, message, chat_message.id))
+        # Push notifications asynchronously via FCM
+        asyncio.create_task(self.push_notifications(user, team, message, chat_message.id))
 
     async def chat_message(self, event):
-        await self.send(text_data=json.dumps(event))
+        await self.send(json.dumps(event))
 
     @database_sync_to_async
-    def send_push_notifications(self, sender, team_id, message, message_id):
-        """
-        Send push notifications to all team members except the sender
-        """
+    def push_notifications(self, sender, team, message, message_id):
+        """Send FCM notifications to all team members except sender"""
         try:
-            team = Team.objects.get(id=team_id)
-            team_members = []
+            recipients = list(set(
+                [coach.user for coach in Coach.objects.filter(Q(head_coached_teams=team) | Q(assistant_coached_teams=team))] +
+                [player.user for player in Player.objects.filter(team=team)]
+            ))
+            recipients = [u for u in recipients if u != sender]
 
-            # Get all coaches for the team
-            coaches = Coach.objects.filter(
-                Q(head_coached_teams=team) | Q(assistant_coached_teams=team)
-            )
-            team_members.extend([coach.user for coach in coaches])
-
-            # Get all players for the team
-            players = Player.objects.filter(team=team)
-            team_members.extend([player.user for player in players])
-
-            # Remove sender from recipients
-            recipients = [user for user in team_members if user != sender]
-
-            # Get devices for recipients
-            devices = WebPushDevice.objects.filter(user__in=recipients, active=True)
-
+            devices = GCMDevice.objects.filter(user__in=recipients, active=True)
             if devices.exists():
-                # Send push notification
                 devices.send_message(
+                    message=message,
                     title=f"{team.name}",
-                    body=f"{sender.get_full_name()}: {message[:80]}{'...' if len(message) > 80 else ''}",
-                    extra={
-                        'team_id': team_id,
-                        'message_id': message_id,
-                        'sender_name': sender.get_full_name(),
-                        'team_name': team.name
-                    }
+                    extra={"team_id": team.id, "message_id": message_id}
                 )
         except Exception as e:
-            print(f"Error sending push notifications: {e}")
+            print(f"FCM push error: {e}")
 
-    # -------------------------
-    # DATABASE HELPERS
-    # -------------------------
+    # --- Helpers ---
     @database_sync_to_async
     def get_user_profile(self, user):
-        profile_data = {'profile_picture': None, 'position': None, 'jersey_number': None}
+        data = {'profile_picture': None, 'position': None, 'jersey_number': None}
         try:
             if user.role == 'Player':
-                player = Player.objects.get(user=user)
-                profile_data['profile_picture'] = player.profile_picture.url if player.profile_picture else None
-                profile_data['position'] = player.position
-                profile_data['jersey_number'] = player.jersey_number
+                p = Player.objects.get(user=user)
+                data.update({
+                    'profile_picture': p.profile_picture.url if p.profile_picture else None,
+                    'position': p.position,
+                    'jersey_number': p.jersey_number
+                })
             elif user.role == 'Coach':
-                coach = Coach.objects.get(user=user)
-                profile_data['profile_picture'] = coach.profile_picture.url if coach.profile_picture else None
+                c = Coach.objects.get(user=user)
+                data['profile_picture'] = c.profile_picture.url if c.profile_picture else None
         except Exception:
             pass
-        return profile_data
+        return data
 
     @database_sync_to_async
     def user_can_access_team_chat(self, user, team_id):
@@ -168,49 +130,88 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
         except Exception:
             return None
 
+
 # -------------------------
 # GLOBAL CHAT CONSUMER
 # -------------------------
 class GlobalChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        user = self.scope["user"]
-        if isinstance(user, AnonymousUser):
+        self.user = self.scope["user"]
+        if isinstance(self.user, AnonymousUser):
             await self.close()
             return
 
-        self.user = user
-        self.team_groups = await self.get_user_team_groups(user)
-        self.profile_cache = {}  # per connection
+        self.team_groups = await self.get_user_team_groups(self.user)
+        self.profile_cache = {}
 
         for group_name in self.team_groups:
             try:
-                await asyncio.wait_for(self.channel_layer.group_add(group_name, self.channel_name), timeout=2)
+                await asyncio.wait_for(
+                    self.channel_layer.group_add(group_name, self.channel_name),
+                    timeout=2
+                )
             except asyncio.TimeoutError:
                 print(f"Timeout joining group {group_name}")
 
         await self.accept()
-        print(f"Global chat connected for user {user.id} to teams: {self.team_groups}")
+        print(f"Global chat connected for user {self.user.id} to teams: {self.team_groups}")
 
     async def disconnect(self, close_code):
         for group_name in getattr(self, 'team_groups', []):
             try:
-                await asyncio.wait_for(self.channel_layer.group_discard(group_name, self.channel_name), timeout=2)
+                await asyncio.wait_for(
+                    self.channel_layer.group_discard(group_name, self.channel_name),
+                    timeout=2
+                )
             except asyncio.TimeoutError:
                 print(f"Timeout discarding group {group_name}")
 
     async def receive(self, text_data):
-        pass  # global consumer doesn't send messages
+        """Only admin can send global announcements"""
+        try:
+            data = json.loads(text_data)
+            message = data.get('message')
+            if not message:
+                return
+
+            if not self.user.is_admin:
+                await self.send(json.dumps({'error': 'Only admin can send global messages'}))
+                return
+
+            for group_name in self.team_groups:
+                await self.channel_layer.group_send(
+                    group_name,
+                    {
+                        'type': 'chat_message',
+                        'team_id': group_name.split("_")[-1],
+                        'team_name': "Global Announcement",
+                        'message': message,
+                        'sender_name': self.user.get_full_name(),
+                        'sender_id': self.user.id,
+                        'sender_role': self.user.role,
+                        'profile': {},
+                        'timestamp': None,
+                        'message_id': None
+                    }
+                )
+
+            asyncio.create_task(self.send_global_push(message))
+
+        except Exception as e:
+            await self.send(json.dumps({'error': str(e)}))
 
     async def chat_message(self, event):
-        # Cache sender profile
-        sender_id = event['sender_id']
-        if sender_id not in self.profile_cache:
+        sender_id = event.get('sender_id')
+        if sender_id and sender_id not in self.profile_cache:
             self.profile_cache[sender_id] = event.get('profile', {})
         else:
-            event['profile'] = self.profile_cache[sender_id]
+            event['profile'] = self.profile_cache.get(sender_id, {})
 
         await self.send(text_data=json.dumps(event))
 
+    # -------------------------
+    # HELPERS
+    # -------------------------
     @database_sync_to_async
     def get_user_team_groups(self, user):
         team_ids = []
@@ -228,3 +229,29 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
         except Exception:
             pass
         return [f'chat_team_{team_id}' for team_id in team_ids]
+
+    @database_sync_to_async
+    def send_global_push(self, message):
+        try:
+            recipients = []
+            for group_name in self.team_groups:
+                team_id = int(group_name.split("_")[-1])
+                team = Team.objects.get(id=team_id)
+
+                coaches = Coach.objects.filter(Q(head_coached_teams=team) | Q(assistant_coached_teams=team))
+                recipients.extend([c.user for c in coaches])
+
+                players = Player.objects.filter(team=team)
+                recipients.extend([p.user for p in players])
+
+            recipients = [u for u in set(recipients) if u != self.user]
+            devices = GCMDevice.objects.filter(user__in=recipients, active=True)
+
+            if devices.exists():
+                devices.send_message(
+                    message=message,
+                    title="Global Announcement",
+                    extra={"url": "/chat"}
+                )
+        except Exception as e:
+            print(f"FCM global push error: {e}")
