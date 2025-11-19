@@ -5,6 +5,94 @@ from pywebpush import webpush, WebPushException
 from push_notifications.models import WebPushDevice
 from teams.models import Team
 from users.models import User
+import firebase_admin
+from firebase_admin import credentials, messaging
+from .models import FCMDevice
+
+# Initialize Firebase Admin SDK
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(settings.FIREBASE_SERVICE_ACCOUNT_KEY)
+        firebase_admin.initialize_app(cred)
+except Exception as e:
+    print(f"Firebase Admin initialization error: {e}")
+
+
+def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
+    """
+    Send FCM push notifications for a chat message to all team members except the sender.
+
+    Args:
+        sender: The user who sent the message
+        team_id: ID of the team
+        message_text: The message content
+        message_id: ID of the message
+        team_name: Name of the team
+    """
+    try:
+        team = Team.objects.get(id=team_id)
+    except Team.DoesNotExist:
+        print(f"Team {team_id} not found")
+        return
+
+    # Get all users in the team except the sender
+    team_users = []
+    if team.head_coach:
+        team_users.append(team.head_coach.user)
+    if team.assistant_coach:
+        team_users.append(team.assistant_coach.user)
+    team_users.extend([player.user for player in team.players.all()])
+    team_users = [u for u in team_users if u != sender]
+
+    # Get their FCM tokens
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        print(f"No FCM devices found for team {team_id}")
+        return
+
+    # Prepare the notification payload
+    sender_name = sender.get_full_name() or sender.username
+    notification_body = f"{sender_name}: {message_text[:100]}{'...' if len(message_text) > 100 else ''}"
+
+    tokens = [device.fcm_token for device in devices]
+    
+    # Create the message
+    message = messaging.MulticastMessage(
+        notification=messaging.Notification(
+            title=f"New message in {team_name}",
+            body=notification_body,
+        ),
+        data={
+            "team_id": str(team_id),
+            "message_id": str(message_id),
+            "sender_id": str(sender.id),
+            "sender_name": sender_name,
+            "click_action": f"/chat/{team_id}"
+        },
+        tokens=tokens,
+    )
+
+    try:
+        # Send the message
+        response = messaging.send_multicast(message)
+        print(f"✓ Successfully sent {response.success_count} FCM notifications")
+        
+        # Handle failed tokens
+        if response.failure_count > 0:
+            failed_tokens = []
+            for idx, resp in enumerate(response.responses):
+                if not resp.success:
+                    failed_tokens.append(tokens[idx])
+                    print(f"✗ Failed to send to token {idx}: {resp.exception}")
+            
+            # Remove invalid tokens
+            FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+            print(f"Removed {len(failed_tokens)} invalid FCM tokens")
+            
+    except Exception as e:
+        print(f"✗ Error sending FCM notifications: {e}")
+
 
 def send_web_push(sender, team_id, message_text, message_id, team_name):
     """

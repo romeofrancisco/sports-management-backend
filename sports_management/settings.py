@@ -325,6 +325,9 @@ if not DEBUG:
 # Google AI API Configuration
 GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
 
+# Firebase Admin SDK Configuration
+FIREBASE_SERVICE_ACCOUNT_KEY = os.path.join(BASE_DIR, "firebase-service-account.json")
+
 # Push Notifications Configuration
 PUSH_NOTIFICATIONS_SETTINGS = {
     "FCM_SERVICE_ACCOUNT_JSON": os.environ.get("FCM_SERVICE_ACCOUNT_JSON_CONTENT") or os.path.join(BASE_DIR, "firebase-service-account.json"),

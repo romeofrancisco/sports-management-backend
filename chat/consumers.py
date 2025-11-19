@@ -6,7 +6,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
 from teams.models import Team, Coach, Player
 from .models import TeamChat, ChatMessage
-from push_notifications.models import GCMDevice
+from notifications.utils import send_fcm_notification
 
 
 class TeamChatConsumer(AsyncWebsocketConsumer):
@@ -70,19 +70,7 @@ class TeamChatConsumer(AsyncWebsocketConsumer):
     def push_notifications(self, sender, team, message, message_id):
         """Send FCM notifications to all team members except sender"""
         try:
-            recipients = list(set(
-                [coach.user for coach in Coach.objects.filter(Q(head_coached_teams=team) | Q(assistant_coached_teams=team))] +
-                [player.user for player in Player.objects.filter(team=team)]
-            ))
-            recipients = [u for u in recipients if u != sender]
-
-            devices = GCMDevice.objects.filter(user__in=recipients, active=True)
-            if devices.exists():
-                devices.send_message(
-                    message=message,
-                    title=f"{team.name}",
-                    extra={"team_id": team.id, "message_id": message_id}
-                )
+            send_fcm_notification(sender, team.id, message, message_id, team.name)
         except Exception as e:
             print(f"FCM push error: {e}")
 
@@ -233,6 +221,10 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def send_global_push(self, message):
         try:
+            from notifications.models import FCMDevice
+            import firebase_admin
+            from firebase_admin import messaging
+            
             recipients = []
             for group_name in self.team_groups:
                 team_id = int(group_name.split("_")[-1])
@@ -245,13 +237,20 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
                 recipients.extend([p.user for p in players])
 
             recipients = [u for u in set(recipients) if u != self.user]
-            devices = GCMDevice.objects.filter(user__in=recipients, active=True)
+            devices = FCMDevice.objects.filter(user__in=recipients)
 
             if devices.exists():
-                devices.send_message(
-                    message=message,
-                    title="Global Announcement",
-                    extra={"url": "/chat"}
+                tokens = [device.fcm_token for device in devices]
+                fcm_message = messaging.MulticastMessage(
+                    notification=messaging.Notification(
+                        title="Global Announcement",
+                        body=message,
+                    ),
+                    data={"click_action": "/chat"},
+                    tokens=tokens,
                 )
+                response = messaging.send_multicast(fcm_message)
+                print(f"✓ Sent {response.success_count} global FCM notifications")
         except Exception as e:
             print(f"FCM global push error: {e}")
+

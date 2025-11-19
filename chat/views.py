@@ -8,6 +8,7 @@ from .serializers import TeamChatSerializer, ChatMessageSerializer
 from teams.models import Team, Coach, Player
 from django.db.models import Q
 from notifications.utils import send_web_push
+from notifications.models import FCMDevice
 import asyncio
 
 # -------------------------
@@ -174,5 +175,32 @@ def subscribe_to_push(request):
             device.save()
 
         return Response({'status': 'Subscribed successfully'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# -------------------------
+# SAVE FCM TOKEN
+# -------------------------
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def save_fcm_token(request):
+    """Save or update FCM token for a user"""
+    token = request.data.get('token')
+    user = request.user
+
+    if not token:
+        return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        device, created = FCMDevice.objects.update_or_create(
+            user=user,
+            defaults={'fcm_token': token}
+        )
+        
+        action = 'created' if created else 'updated'
+        return Response({
+            'status': f'FCM token {action} successfully',
+            'token': token
+        }, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
