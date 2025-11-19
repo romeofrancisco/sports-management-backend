@@ -8,3 +8,9 @@ class FCMDevice(models.Model):
     fcm_token = models.CharField(max_length=255)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'fcm_token')
+        indexes = [
+            models.Index(fields=['user', 'fcm_token']),
+        ]
