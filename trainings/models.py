@@ -219,9 +219,6 @@ class PlayerTraining(models.Model):
     class Meta:
         unique_together = ["player", "session"]
         indexes = [
-            # Index for efficient player and session lookups
-            models.Index(fields=["player"], name="player_idx"),
-            models.Index(fields=["session"], name="session_idx"),
             # Index for session date lookup
             models.Index(fields=["session", "player"], name="session_player_idx"),
         ]
@@ -309,10 +306,8 @@ class PlayerMetricRecord(models.Model):
             models.Index(fields=["player_training", "metric"], name="pt_metric_idx"),
             # Index for value-based sorting and filtering
             models.Index(fields=["value"], name="metric_value_idx"),
-            # Index for looking up by metric
-            models.Index(fields=["metric"], name="metric_only_idx"),
-            # For efficient player training lookup
-            models.Index(fields=["player_training"], name="player_training_idx"),
+            # Index for metric filtering
+            models.Index(fields=["metric"], name="metric_idx"),
         ]
 
     @property

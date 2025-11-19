@@ -96,6 +96,8 @@ INSTALLED_APPS = [
     "documents",
     "tournaments",
     "facilities",
+    "push_notifications",
+    "notifications",
 ]
 
 MIDDLEWARE = [
@@ -212,8 +214,22 @@ else:
             "PASSWORD": env("DB_PASSWORD"),
             "HOST": env("DB_HOST"),
             "PORT": env("DB_PORT"),
+            "CONN_MAX_AGE": 60,  # Keep connections alive for 60 seconds
+            "OPTIONS": {
+                "connect_timeout": 10,
+            },
         }
     }
+
+
+# Database performance settings
+DATABASES['default']['OPTIONS'] = {
+    **DATABASES['default'].get('OPTIONS', {}),
+    'keepalives': 1,
+    'keepalives_idle': 30,
+    'keepalives_interval': 10,
+    'keepalives_count': 5,
+}
 
 
 # Password validation
@@ -308,3 +324,13 @@ if not DEBUG:
 
 # Google AI API Configuration
 GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
+
+# Push Notifications Configuration
+PUSH_NOTIFICATIONS_SETTINGS = {
+    "FCM_SERVICE_ACCOUNT_JSON": os.environ.get("FCM_SERVICE_ACCOUNT_JSON_CONTENT") or os.path.join(BASE_DIR, "firebase-service-account.json"),
+    "FCM_API_KEY": os.environ.get("FCM_API_KEY"),  # optional if using legacy key
+    "UPDATE_ON_DUPLICATE_REG_ID": True,
+    "WP_CLAIMS": {"sub": "mailto:romeofrancisco.works@gmail.com"},
+    "VAPID_PUBLIC_KEY": os.environ.get("VAPID_PUBLIC_KEY"),
+    "VAPID_PRIVATE_KEY": os.environ.get("VAPID_PRIVATE_KEY"),
+}
