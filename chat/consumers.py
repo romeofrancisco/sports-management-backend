@@ -240,17 +240,24 @@ class GlobalChatConsumer(AsyncWebsocketConsumer):
             devices = FCMDevice.objects.filter(user__in=recipients)
 
             if devices.exists():
-                tokens = [device.fcm_token for device in devices]
-                fcm_message = messaging.MulticastMessage(
-                    notification=messaging.Notification(
-                        title="Global Announcement",
-                        body=message,
-                    ),
-                    data={"click_action": "/chat"},
-                    tokens=tokens,
-                )
-                response = messaging.send_multicast(fcm_message)
-                print(f"✓ Sent {response.success_count} global FCM notifications")
+                success_count = 0
+                for device in devices:
+                    try:
+                        # Send data-only message - service worker will create the notification
+                        fcm_message = messaging.Message(
+                            data={
+                                "title": "Global Announcement",
+                                "body": message,
+                                "click_action": "/chat"
+                            },
+                            token=device.fcm_token,
+                        )
+                        messaging.send(fcm_message)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"✗ Error sending global FCM to user {device.user.id}: {e}")
+                print(f"✓ Sent {success_count} global FCM notifications")
         except Exception as e:
             print(f"FCM global push error: {e}")
+
 

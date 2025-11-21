@@ -7,9 +7,7 @@ from .models import TeamChat, ChatMessage
 from .serializers import TeamChatSerializer, ChatMessageSerializer
 from teams.models import Team, Coach, Player
 from django.db.models import Q
-from notifications.utils import send_web_push
 from notifications.models import FCMDevice
-import asyncio
 
 # -------------------------
 # PAGINATION
@@ -87,10 +85,10 @@ class TeamChatMessagesView(generics.ListCreateAPIView):
         team_chat, _ = TeamChat.objects.get_or_create(team=team)
         message = serializer.save(team_chat=team_chat, sender=user)
 
-        # Send push notifications asynchronously
-        asyncio.create_task(
-            send_web_push(user, team_id, message.message, message.id, team.name)
-        )
+        # Disable Web Push - using FCM only
+        # asyncio.create_task(
+        #     send_web_push(user, team_id, message.message, message.id, team.name)
+        # )
 
     def user_can_access_team_chat(self, user, team):
         if user.is_admin:
@@ -192,8 +190,10 @@ def save_fcm_token(request):
         return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        # Use token as unique key to prevent duplicate tokens per user
         device, created = FCMDevice.objects.update_or_create(
             user=user,
+            fcm_token=token,
             defaults={'fcm_token': token}
         )
         

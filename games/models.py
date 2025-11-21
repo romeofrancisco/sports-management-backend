@@ -133,7 +133,7 @@ class Game(models.Model):
             return False
 
         # For league games, check explicit permissions
-        if self.type == self.Type.LEAGUE:
+        if self.type == self.Type.LEAGUE or self.type == self.Type.TOURNAMENT:
             return self.coach_permissions.filter(coach=user).exists()
 
         # For non-league games, allow team coaches
@@ -153,8 +153,8 @@ class Game(models.Model):
 
     def assign_coach(self, coach, assigned_by):
         """Assign a coach to manage this game"""
-        if self.type != self.Type.LEAGUE:
-            raise ValidationError("Can only assign coaches to league games")
+        if self.type == self.Type.PRACTICE:
+            raise ValidationError("Can only assign coaches to league and tournament games")
 
         permission, created = GameCoachPermission.objects.get_or_create(
             game=self, coach=coach, defaults={"assigned_by": assigned_by}
