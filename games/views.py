@@ -461,6 +461,7 @@ class GameViewSet(viewsets.ModelViewSet):
         "starting_lineup__player__user",
         "substitutions__substitute_in__user",
         "substitutions__substitute_out__user",
+        "coach_permissions__coach",
     )
     serializer_class = GameSerializer
     permission_classes = [IsAuthenticated]
@@ -1353,17 +1354,17 @@ class GameViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get", "post", "delete"])
     def coach_assignments(self, request, pk=None):
         """
-        Manage coach assignments for league games
+        Manage coach assignments for league and tournament games
         GET: List assigned coaches
         POST: Assign a coach to the game
         DELETE: Remove coach assignment
         """
         game = self.get_object()
 
-        # Only allow coach assignments for league games
-        if game.type != Game.Type.LEAGUE:
+        # Only allow coach assignments for league and tournament games
+        if game.type == Game.Type.PRACTICE:
             return Response(
-                {"error": "Coach assignments are only allowed for league games"},
+                {"error": "Coach assignments are only allowed for league and tournament games"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

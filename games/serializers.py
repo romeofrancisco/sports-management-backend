@@ -319,7 +319,7 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_assigned_coaches(self, obj):
         """Return list of coaches assigned to manage this game"""
-        if obj.type == Game.Type.LEAGUE:
+        if obj.type == Game.Type.LEAGUE or obj.type == Game.Type.TOURNAMENT:
             permissions = obj.coach_permissions.select_related("coach").all()
             return [
                 {
