@@ -99,7 +99,7 @@ class DashboardViewSet(viewsets.ViewSet):
             ).count()
             teams_with_few_players = (
                 Team.objects.annotate(player_count=Count("players"))
-                .filter(player_count__lt=5)
+                .filter(player_count__lt=F('sport__max_players_on_field'))
                 .count()
             )
 
@@ -1690,7 +1690,7 @@ class DashboardViewSet(viewsets.ViewSet):
             # Check for teams with insufficient players
             understaffed_teams = (
                 Team.objects.annotate(player_count=Count("players"))
-                .filter(player_count__lt=5)
+                .filter(player_count__lt=F('sport__max_players_on_field'))
                 .count()
             )
 
@@ -1699,7 +1699,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     {
                         "type": "warning",
                         "title": "Teams Need More Players",
-                        "message": f"{understaffed_teams} teams have fewer than 5 players",
+                        "message": f"{understaffed_teams} teams have fewer than the minimum players required for their sport",
                         "action": "Recruit more players or consider team consolidation",
                     }
                 )
@@ -1838,7 +1838,7 @@ class DashboardViewSet(viewsets.ViewSet):
                 # Teams with too few players
                 understaffed_teams = (
                     Team.objects.annotate(player_count=Count("players"))
-                    .filter(player_count__lt=5)
+                    .filter(player_count__lt=F('sport__max_players_on_field'))
                     .count()
                 )
                 score -= (understaffed_teams / total_teams) * 15
