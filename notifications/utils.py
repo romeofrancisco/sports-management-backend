@@ -90,3 +90,95 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
     if failed_tokens:
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
         print(f"Removed {len(failed_tokens)} invalid FCM tokens")
+
+
+def send_training_session_notification(training_session, creator=None):
+    """
+    Send FCM push notifications to all players in a team when a new training session is created.
+
+    Args:
+        training_session: The TrainingSession instance that was created
+        creator: The user who created the training session (optional, to exclude from notifications)
+    """
+    print(f"[Training Notification] Starting notification for session: {training_session.title}")
+    
+    try:
+        team = training_session.team
+        if not team:
+            print("[Training Notification] No team associated with training session")
+            return
+    except Exception as e:
+        print(f"[Training Notification] Error getting team: {e}")
+        return
+
+    print(f"[Training Notification] Team: {team.name} (ID: {team.id})")
+
+    # Get all players in the team
+    team_players = team.players.all()
+    
+    if not team_players.exists():
+        print(f"[Training Notification] No players in team {team.name}")
+        return
+
+    print(f"[Training Notification] Found {team_players.count()} players in team")
+
+    # Get user objects for all players, excluding the creator
+    player_users = [player.user for player in team_players if player.user and player.user != creator]
+
+    if not player_users:
+        print(f"[Training Notification] No player users to notify for team {team.name}")
+        return
+
+    print(f"[Training Notification] Will notify {len(player_users)} players (excluding creator)")
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=player_users)
+
+    if not devices.exists():
+        print(f"[Training Notification] No FCM devices found for players in team {team.name}")
+        return
+
+    print(f"[Training Notification] Found {devices.count()} FCM devices")
+
+    # Prepare the notification payload
+    session_date = training_session.date.strftime("%B %d, %Y") if training_session.date else "TBD"
+    session_time = training_session.start_time.strftime("%I:%M %p") if training_session.start_time else "TBD"
+    
+    notification_title = f"New Training Session: {training_session.title}"
+    notification_body = f"Scheduled for {session_date} at {session_time} - {training_session.location or 'Location TBD'}"
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "training_session",
+                    "session_id": str(training_session.session_id),
+                    "team_id": str(team.id),
+                    "team_name": team.name,
+                    "click_action": f"/"
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+            print(f"✓ Training notification sent to user {device.user.id}: {response}")
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"✗ Error sending training notification to user {device.user.id}: {error_msg}")
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    print(f"✓ Successfully sent {success_count} training session notifications")
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+        print(f"Removed {len(failed_tokens)} invalid FCM tokens")

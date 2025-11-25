@@ -505,11 +505,10 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         from .services import TrainingSessionService
-        
-        
+        from notifications.utils import send_training_session_notification
 
         # For coaches, ensure they can only create sessions for their teams
-        if self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
+        if self.request.user.is_coach:
             team = serializer.validated_data.get("team")
             if team:
                 from django.db.models import Q
@@ -523,6 +522,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                     raise PermissionDenied(
                         "You can only create training sessions for your own teams"
                     )
+                    
         creator = self.request.user or (team.head_coach if team else None)
 
         session = serializer.save(creator=creator)
@@ -530,6 +530,15 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         if session.team:
             service = TrainingSessionService()
             service.auto_add_team_players(session)
+            
+            # Send push notification to all players in the team
+            try:
+                send_training_session_notification(session, creator=self.request.user)
+            except Exception as e:
+                # Log error but don't fail the request
+                print(f"[DEBUG] Failed to send training session notification: {e}")
+                import traceback
+                traceback.print_exc()
 
     def perform_update(self, serializer):
         """Only allow coaches to update training sessions for their own teams"""
@@ -656,15 +665,6 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             session, context={"request": request}
         )
         return Response(serializer.data)
-
-    def perform_create(self, serializer):
-        from .services import TrainingSessionService
-
-        session = serializer.save()
-        # Automatically add all team players since all sessions are now team sessions
-        if session.team:
-            service = TrainingSessionService()
-            service.auto_add_team_players(session)
 
     @action(detail=True, methods=["post"])
     def assign_metrics(self, request, pk=None):
