@@ -52,12 +52,17 @@ class Sport(models.Model):
     win_points_threshold = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="Target points needed to win a match (e.g., 3 sets)",
+        help_text="Target points needed to win a set (e.g., 25 for volleyball)",
+    )
+    deciding_set_points_threshold = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Points needed for the final/deciding set (e.g., 15 for volleyball's 5th set). If not set, uses win_points_threshold",
     )
     win_margin = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="Target value needed to win a match (e.g., 3 sets)",
+        help_text="Minimum point margin needed to win a set (e.g., 2 points)",
     )
     is_active = models.BooleanField(
         default=True,
