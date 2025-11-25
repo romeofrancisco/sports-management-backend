@@ -1227,6 +1227,15 @@ class GameViewSet(viewsets.ModelViewSet):
                 "win_threshold": (
                     game.sport.win_threshold if scoring_type == "sets" else None
                 ),
+                "win_points_threshold": (
+                    game.sport.win_points_threshold if scoring_type == "sets" else None
+                ),
+                "deciding_set_points_threshold": (
+                    game.sport.deciding_set_points_threshold if scoring_type == "sets" else None
+                ),
+                "win_margin": (
+                    game.sport.win_margin if scoring_type == "sets" else None
+                ),
             },
             "events": events,
         }

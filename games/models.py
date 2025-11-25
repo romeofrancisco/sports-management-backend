@@ -303,12 +303,26 @@ class Game(models.Model):
 
                 # Check win points threshold for current set
                 if sport.win_points_threshold and self:
+                    # Determine if this is the deciding set
+                    is_deciding_set = (
+                        sport.win_threshold
+                        and (home_sets_won == sport.win_threshold - 1)
+                        and (away_sets_won == sport.win_threshold - 1)
+                    )
+                    
+                    # Use deciding set threshold if applicable, otherwise use regular threshold
+                    points_threshold = (
+                        sport.deciding_set_points_threshold
+                        if is_deciding_set and sport.deciding_set_points_threshold
+                        else sport.win_points_threshold
+                    )
+                    
                     if (
-                        self.home_team_score < sport.win_points_threshold
-                        and self.away_team_score < sport.win_points_threshold
+                        self.home_team_score < points_threshold
+                        and self.away_team_score < points_threshold
                     ):
                         return {
-                            "error": f"Neither team has reached the win points threshold of {sport.win_points_threshold}"
+                            "error": f"Neither team has reached the win points threshold of {points_threshold}"
                         }
 
                     # Check win margin if specified
@@ -316,7 +330,7 @@ class Game(models.Model):
                         score_diff = abs(self.home_team_score - self.away_team_score)
                         if (
                             max(self.home_team_score, self.away_team_score)
-                            >= sport.win_points_threshold
+                            >= points_threshold
                             and score_diff < sport.win_margin
                         ):
                             return {
@@ -527,13 +541,27 @@ class Game(models.Model):
             # Check if current set is complete only if it's not already won/lost
             current_set = self.sets.filter(period=self.current_period).first()
             if current_set and not current_set.winner and sport.win_points_threshold:
+                # Determine if this is the deciding set
+                is_deciding_set = (
+                    sport.win_threshold
+                    and (home_sets_won == sport.win_threshold - 1)
+                    and (away_sets_won == sport.win_threshold - 1)
+                )
+                
+                # Use deciding set threshold if applicable, otherwise use regular threshold
+                points_threshold = (
+                    sport.deciding_set_points_threshold
+                    if is_deciding_set and sport.deciding_set_points_threshold
+                    else sport.win_points_threshold
+                )
+                
                 if (
-                    current_set.home_team_score < sport.win_points_threshold
-                    and current_set.away_team_score < sport.win_points_threshold
+                    current_set.home_team_score < points_threshold
+                    and current_set.away_team_score < points_threshold
                 ):
                     raise ValidationError(
                         {
-                            "error": f"Current set hasn't reached {sport.win_points_threshold} points"
+                            "error": f"Current set hasn't reached {points_threshold} points"
                         }
                     )
 
@@ -894,6 +922,32 @@ class ScoreUpdate(models.Model):
         # Check if a team has ALREADY won before this score update
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
             if sport.win_points_threshold and sport.win_margin:
+                # Determine if this is the deciding set
+                home_sets_won = game.sets.filter(winner=game.home_team).count()
+                away_sets_won = game.sets.filter(winner=game.away_team).count()
+                is_deciding_set = (
+                    sport.win_threshold
+                    and (home_sets_won == sport.win_threshold - 1)
+                    and (away_sets_won == sport.win_threshold - 1)
+                )
+                
+                # Use deciding set threshold if applicable
+                points_threshold = (
+                    sport.deciding_set_points_threshold
+                    if is_deciding_set and sport.deciding_set_points_threshold
+                    else sport.win_points_threshold
+                )
+                
+                # Check if either team has already won this set
+                if (
+                    (game.home_team_score >= points_threshold and 
+                     game.home_team_score - game.away_team_score >= sport.win_margin) or
+                    (game.away_team_score >= points_threshold and 
+                     game.away_team_score - game.home_team_score >= sport.win_margin)
+                ):
+                    raise ValidationError(
+                        f"This set is already complete. Cannot add more points."
+                    )
                 if (
                     game.home_team_score >= sport.win_points_threshold
                     and (game.home_team_score - game.away_team_score) >= sport.win_margin
@@ -974,6 +1028,32 @@ class PlayerStat(models.Model):
 
         if sport.scoring_type == Sport.SCORING_TYPES.SETS:
             if sport.win_points_threshold and sport.win_margin:
+                # Determine if this is the deciding set
+                home_sets_won = game.sets.filter(winner=game.home_team).count()
+                away_sets_won = game.sets.filter(winner=game.away_team).count()
+                is_deciding_set = (
+                    sport.win_threshold
+                    and (home_sets_won == sport.win_threshold - 1)
+                    and (away_sets_won == sport.win_threshold - 1)
+                )
+                
+                # Use deciding set threshold if applicable
+                points_threshold = (
+                    sport.deciding_set_points_threshold
+                    if is_deciding_set and sport.deciding_set_points_threshold
+                    else sport.win_points_threshold
+                )
+                
+                # Check if either team has already won this set
+                if (
+                    (game.home_team_score >= points_threshold and 
+                     game.home_team_score - game.away_team_score >= sport.win_margin) or
+                    (game.away_team_score >= points_threshold and 
+                     game.away_team_score - game.home_team_score >= sport.win_margin)
+                ):
+                    raise ValidationError(
+                        f"This set is already complete. Cannot record more stats."
+                    )
                 if (
                     game.home_team_score >= sport.win_points_threshold
                     and (game.home_team_score - game.away_team_score)
