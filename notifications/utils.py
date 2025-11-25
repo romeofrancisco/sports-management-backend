@@ -161,7 +161,7 @@ def send_training_session_notification(training_session, creator=None):
                     "session_id": str(training_session.session_id),
                     "team_id": str(team.id),
                     "team_name": team.name,
-                    "click_action": f"/trainings/{training_session.id}"
+                    "click_action": f"/"
                 },
                 token=device.fcm_token,
             )

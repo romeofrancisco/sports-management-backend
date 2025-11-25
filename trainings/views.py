@@ -506,12 +506,9 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         from .services import TrainingSessionService
         from notifications.utils import send_training_session_notification
-        
-        print("[DEBUG] perform_create called in TrainingSessionViewSet")
 
         # For coaches, ensure they can only create sessions for their teams
-        if self.request.user.is_coach and hasattr(self.request.user, "coach_profile") or self.request.user.is_admin:
-            print("[DEBUG] User is coach or admin, proceeding with team check")
+        if self.request.user.is_coach:
             team = serializer.validated_data.get("team")
             if team:
                 from django.db.models import Q
@@ -525,6 +522,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                     raise PermissionDenied(
                         "You can only create training sessions for your own teams"
                     )
+                    
         creator = self.request.user or (team.head_coach if team else None)
 
         session = serializer.save(creator=creator)
@@ -534,10 +532,8 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
             service.auto_add_team_players(session)
             
             # Send push notification to all players in the team
-            print(f"[DEBUG] About to send training notification for session: {session.title} to team: {session.team.name}")
             try:
                 send_training_session_notification(session, creator=self.request.user)
-                print(f"[DEBUG] Training notification function completed for session: {session.id}")
             except Exception as e:
                 # Log error but don't fail the request
                 print(f"[DEBUG] Failed to send training session notification: {e}")

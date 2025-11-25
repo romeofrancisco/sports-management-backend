@@ -720,6 +720,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "time": game.time,
                     "location": game.location,
                     "is_home": game.home_team in coach_teams,
+                    "type": game.type,
                 }
                 for game in upcoming_games
             ]
@@ -1095,6 +1096,7 @@ class DashboardViewSet(viewsets.ViewSet):
                     "time": game.time,
                     "location": game.location,
                     "is_home": game.home_team == player.team,
+                    "type": game.type,
                 }
                 for game in upcoming_games
             ]  # Recent performance metrics
