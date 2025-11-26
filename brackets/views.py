@@ -44,6 +44,36 @@ class BracketViewSet(viewsets.ModelViewSet):
         
         # Update season end date after generating bracket
         self._update_season_end_date(bracket)
+        
+        # Send notifications for all games created during bracket generation
+        self._send_bracket_game_notifications(bracket)
+    
+    def _send_bracket_game_notifications(self, bracket):
+        """Send notifications for games created during bracket generation"""
+        from brackets.signals import _bulk_games_cache
+        
+        bracket_id = bracket.id
+        if bracket_id in _bulk_games_cache and _bulk_games_cache[bracket_id]:
+            games = _bulk_games_cache[bracket_id]
+            
+            # If multiple games were created (round robin), send bulk notification
+            if len(games) > 3:
+                try:
+                    from notifications.utils import send_bulk_game_notifications
+                    send_bulk_game_notifications(games)
+                except Exception as e:
+                    print(f"Failed to send bulk game notifications: {e}")
+            else:
+                # For single/double elimination first round (2-3 games), send individual notifications
+                try:
+                    from notifications.utils import send_game_notification
+                    for game in games:
+                        send_game_notification(game)
+                except Exception as e:
+                    print(f"Failed to send game notifications: {e}")
+            
+            # Clear the cache
+            del _bulk_games_cache[bracket_id]
     
     def _update_season_end_date(self, bracket):
         """Update season end date to the latest game date if season end date is null"""

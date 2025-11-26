@@ -10,6 +10,27 @@ from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
+# Track games created in bulk for round robin notifications
+_bulk_games_cache = {}
+
+
+def _send_game_notification_async(game):
+    """Helper to send game notification in a separate thread to avoid blocking"""
+    try:
+        from notifications.utils import send_game_notification
+        send_game_notification(game)
+    except Exception as e:
+        logger.error(f"Failed to send game notification: {e}")
+
+
+def _send_bulk_game_notifications_async(games):
+    """Helper to send bulk game notifications in a separate thread to avoid blocking"""
+    try:
+        from notifications.utils import send_bulk_game_notifications
+        send_bulk_game_notifications(games)
+    except Exception as e:
+        logger.error(f"Failed to send bulk game notifications: {e}")
+
 
 @receiver(post_save, sender=Game)
 def update_match_winner(sender, instance, **kwargs):
@@ -394,6 +415,13 @@ def create_or_assign_game(sender, instance, **kwargs):
             logger.info(
                 f"Game {game.id} created for match {instance.id} (Round {instance.round.round_number}) scheduled at {scheduled_datetime}"
             )
+            
+            # Track games for bulk notification (round robin creates multiple at once)
+            bracket_id = instance.bracket.id
+            if bracket_id not in _bulk_games_cache:
+                _bulk_games_cache[bracket_id] = []
+            _bulk_games_cache[bracket_id].append(game)
+            
         except Exception as e:
             logger.error(f"Failed to create game for match {instance.id}: {str(e)}")
 

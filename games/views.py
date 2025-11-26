@@ -549,7 +549,9 @@ class GameViewSet(viewsets.ModelViewSet):
 
         # Admins can create any type of game
         if user.is_admin:
-            serializer.save(creator=user)
+            game = serializer.save(creator=user)
+            # Send notification for all games created by admin
+            self._send_game_notification(game, user)
             return
 
         # Coaches can only create practice games for their teams
@@ -566,11 +568,21 @@ class GameViewSet(viewsets.ModelViewSet):
             if home_team not in coach_teams and away_team not in coach_teams:
                 raise PermissionDenied("You can only create games for teams you coach")
 
-            serializer.save(creator=user)
+            game = serializer.save(creator=user)
+            # Send notification for practice games too
+            self._send_game_notification(game, user)
             return
 
         # Deny access for other users
         raise PermissionDenied("You don't have permission to create games")
+
+    def _send_game_notification(self, game, creator=None):
+        """Send notification for a newly created game"""
+        try:
+            from notifications.utils import send_game_notification
+            send_game_notification(game, creator=creator)
+        except Exception as e:
+            logger.error(f"Failed to send game notification for game {game.id}: {e}")
 
     def perform_destroy(self, instance):
         """

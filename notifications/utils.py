@@ -13,6 +13,198 @@ except Exception as e:
     print(f"Firebase Admin initialization error: {e}")
 
 
+def send_game_notification(game, creator=None):
+    """
+    Send FCM push notifications to all players and coaches of both teams when a new game is scheduled.
+
+    Args:
+        game: The Game instance that was created
+        creator: The user who created the game (optional, to exclude from notifications)
+    """
+    try:
+        home_team = game.home_team
+        away_team = game.away_team
+        
+        if not home_team or not away_team:
+            return
+    except Exception as e:
+        return
+
+    # Get all users from both teams (players and coaches)
+    team_users = []
+    
+    for team in [home_team, away_team]:
+        # Add coaches
+        if team.head_coach and team.head_coach.user:
+            team_users.append(team.head_coach.user)
+        if team.assistant_coach and team.assistant_coach.user:
+            team_users.append(team.assistant_coach.user)
+        # Add players
+        team_users.extend([player.user for player in team.players.all() if player.user])
+
+    # Remove duplicates and exclude creator
+    team_users = list(set([u for u in team_users if u and u != creator]))
+
+    if not team_users:
+        return
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
+
+    # Prepare the notification payload
+    game_date = game.date.strftime("%B %d, %Y") if game.date else "TBD"
+    game_time = game.time.strftime("%I:%M %p") if game.time else "TBD"
+    
+    # Determine game type label and click action
+    game_type_label = "Game"
+    click_action = f"/games?gameId={game.id}"
+    
+    if game.type == "league" and game.league and game.season:
+        game_type_label = "League Game"
+        click_action = f"/leagues/{game.league.id}/seasons/{game.season.id}/games?gameId={game.id}"
+    elif game.type == "tournament" and game.tournament:
+        game_type_label = "Tournament Game"
+        click_action = f"/tournaments/{game.tournament.id}/games?gameId={game.id}"
+    elif game.type == "practice":
+        game_type_label = "Practice Game"
+        click_action = f"/games?gameId={game.id}"
+    
+    notification_title = f"New {game_type_label} Scheduled"
+    notification_body = f"{home_team.name} vs {away_team.name} on {game_date} at {game_time}"
+
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "game",
+                    "game_id": str(game.id),
+                    "game_type": str(game.type),
+                    "home_team_id": str(home_team.id),
+                    "away_team_id": str(away_team.id),
+                    "home_team_name": home_team.name,
+                    "away_team_name": away_team.name,
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
+def send_bulk_game_notifications(games, creator=None):
+    """
+    Send FCM push notifications for multiple games at once (e.g., round robin creation).
+    Sends a summary notification instead of one per game to avoid notification spam.
+
+    Args:
+        games: List of Game instances that were created
+        creator: The user who created the games (optional, to exclude from notifications)
+    """
+    if not games:
+        return
+    
+    # Collect all unique teams and users
+    all_teams = set()
+    for game in games:
+        if game.home_team:
+            all_teams.add(game.home_team)
+        if game.away_team:
+            all_teams.add(game.away_team)
+    
+    if not all_teams:
+        return
+
+    # Get all users from all teams
+    team_users = []
+    for team in all_teams:
+        if team.head_coach and team.head_coach.user:
+            team_users.append(team.head_coach.user)
+        if team.assistant_coach and team.assistant_coach.user:
+            team_users.append(team.assistant_coach.user)
+        team_users.extend([player.user for player in team.players.all() if player.user])
+
+    # Remove duplicates and exclude creator
+    team_users = list(set([u for u in team_users if u and u != creator]))
+
+    if not team_users:
+        return
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
+
+    # Determine the context (tournament or league)
+    first_game = games[0]
+    context_name = ""
+    game_type_label = "Games"
+    click_action = "/games"
+    
+    if first_game.tournament:
+        context_name = first_game.tournament.name
+        game_type_label = "Tournament Games"
+        click_action = f"/tournaments/{first_game.tournament.id}/games"
+    elif first_game.season and first_game.league:
+        context_name = f"{first_game.league.name} - {first_game.season.name}"
+        game_type_label = "League Games"
+        click_action = f"/leagues/{first_game.league.id}/seasons/{first_game.season.id}/games"
+    
+    notification_title = f"{len(games)} New {game_type_label} Scheduled"
+    notification_body = f"New games have been scheduled for {context_name}. Check the schedule for details."
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "bulk_games",
+                    "games_count": str(len(games)),
+                    "game_type": str(first_game.type),
+                    "context_name": context_name,
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
 def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
     """
     Send FCM push notifications for a chat message to all team members except the sender.
