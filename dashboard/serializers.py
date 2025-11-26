@@ -137,7 +137,7 @@ class UpcomingGameSerializer(serializers.Serializer):
     time = serializers.TimeField(allow_null=True)
     location = serializers.CharField()
     is_home = serializers.BooleanField()
-    type = serializers.CharField()
+    type = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
 
 class UpcomingTrainingSessionSerializer(serializers.Serializer):
