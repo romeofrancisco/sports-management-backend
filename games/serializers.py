@@ -13,6 +13,7 @@ from sports.models import SportStatType, Position, Sport
 from sports.serializers import PositionSerializer
 from django.core.exceptions import ValidationError
 from leagues.models import League, Season
+from tournaments.models import Tournament
 
 
 class GameCoachPermissionSerializer(serializers.ModelSerializer):
@@ -236,6 +237,7 @@ class GameSerializer(serializers.ModelSerializer):
     # Nested league and season data for frontend display
     league = serializers.SerializerMethodField()
     season = serializers.SerializerMethodField()
+    tournament = serializers.SerializerMethodField()
     assigned_coaches = serializers.SerializerMethodField()
     recent_score_updates = serializers.SerializerMethodField()
 
@@ -251,6 +253,9 @@ class GameSerializer(serializers.ModelSerializer):
     )
     season_id = serializers.PrimaryKeyRelatedField(
         queryset=Season.objects.all(), write_only=True, source="season", required=False
+    )
+    tournament_id = serializers.PrimaryKeyRelatedField(
+        queryset=Tournament.objects.all(), write_only=True, source="tournament", required=False
     )
 
     class Meta:
@@ -270,6 +275,8 @@ class GameSerializer(serializers.ModelSerializer):
             "away_team",
             "home_team_id",
             "away_team_id",
+            "tournament",
+            "tournament_id",
             "league_id",
             "season_id",
             "lineup_status",
@@ -299,6 +306,12 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
+    
+    def get_tournament(self, obj):
+        """Return tournament data with name only for frontend display"""
+        if obj.tournament:
+            return {"id": obj.tournament.id, "name": obj.tournament.name}
+        return None
 
     def get_league(self, obj):
         """Return league data with name only for frontend display"""
