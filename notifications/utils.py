@@ -374,3 +374,96 @@ def send_training_session_notification(training_session, creator=None):
     if failed_tokens:
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
         print(f"Removed {len(failed_tokens)} invalid FCM tokens")
+
+
+def send_event_notification(event, creator=None):
+    """
+    Send FCM push notifications for a new event.
+    
+    - If admin creates the event: notify all coaches
+    - If coach creates the event: notify all players on teams they coach
+
+    Args:
+        event: The Event instance that was created
+        creator: The user who created the event
+    """
+    from users.models import User
+    from teams.models import Coach
+    from django.db import models as db_models
+    
+    if not creator:
+        return
+    
+    target_users = []
+    
+    # Determine who to notify based on creator's role
+    if creator.role == User.Role.ADMIN or creator.is_superuser:
+        # Admin created the event - notify all coaches
+        coaches = Coach.objects.select_related('user').all()
+        target_users = [coach.user for coach in coaches if coach.user and coach.user != creator]
+    elif creator.role == User.Role.COACH or hasattr(creator, 'coach_profile'):
+        # Coach created the event - notify all players on their teams
+        try:
+            coach_profile = creator.coach_profile
+            # Get all teams where this coach is head or assistant coach
+            coached_teams = Team.objects.filter(
+                db_models.Q(head_coach=coach_profile) | db_models.Q(assistant_coach=coach_profile)
+            )
+            # Get all players from these teams
+            for team in coached_teams:
+                for player in team.players.all():
+                    if player.user and player.user != creator:
+                        target_users.append(player.user)
+        except Exception:
+            return
+    
+    # Remove duplicates
+    target_users = list(set(target_users))
+    
+    if not target_users:
+        return
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=target_users)
+
+    if not devices.exists():
+        return
+
+    # Prepare the notification payload
+    event_date = event.startDate.strftime("%B %d, %Y") if event.startDate else "TBD"
+    event_time = event.startDate.strftime("%I:%M %p") if event.startDate else "TBD"
+    
+    notification_title = f"New Event: {event.title}"
+    notification_body = f"Scheduled for {event_date} at {event_time}"
+    if event.description:
+        notification_body += f" - {event.description[:50]}{'...' if len(event.description) > 50 else ''}"
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "event",
+                    "event_id": str(event.id),
+                    "event_title": event.title,
+                    "click_action": "/calendar"
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()

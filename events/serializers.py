@@ -47,7 +47,7 @@ class TrainingEventSerializer(serializers.ModelSerializer):
     def get_user(self, obj):
         user = getattr(obj, "creator", None)
         if not user:
-            return {"id": f"game:{obj.id}", "name": "System"}
+            return {"id": f"game:{obj.id}", "name": "Admin"}
         
         picture = None
         try:
@@ -139,24 +139,28 @@ class GameEventSerializer(serializers.ModelSerializer):
 
     def get_description(self, obj):
         """Optional detailed info."""
-        parts = []
-        if obj.location:
-            parts.append(f"Location: {obj.location}")
-        if obj.sport:
-            parts.append(f"Sport: {obj.sport.name}")
-        if obj.type:
-            parts.append(f"Type: {obj.get_type_display()}")
-        if obj.league:
-            parts.append(f"League: {obj.league.name}")
-        if obj.season:
-            parts.append(f"Season: {obj.season.name}")
-        return " | ".join(parts) or "Game Event"
+        sport = obj.sport.name if obj.sport else "Various Sports"
+        type = obj.type.capitalize() if obj.type else "Game"
+        league = f"{obj.league.name} - {obj.season.name}" if obj.league and obj.season else "General League"
+        tournament = obj.tournament.name if obj.tournament else "General Tournament"
+        
+        description = ""  
+        if obj.type == 'tournament':
+            description = f"{sport} {type}: {tournament} {f"at {obj.location}" if obj.location else ''}"
+        elif obj.type == 'league':
+            description = f"{sport} {type}: {league} {f"at {obj.location}" if obj.location else ''}"
+        elif obj.type == 'practice':
+            description = f"{sport} {type} Game {f"at {obj.location}" if obj.location else ''}"
+        else:
+            description = f"{sport} {type}: {f"at {obj.location}" if obj.location else ''}"
+        
+        return description.strip()
 
     def get_user(self, obj):
         """Represent game creator as 'user' for compatibility."""
         user = getattr(obj, "creator", None)
         if not user:
-            return {"id": f"game:{obj.id}", "name": "System"}
+            return {"id": f"game:{obj.id}", "name": "Admin"}
         
         picture = None
         try:
