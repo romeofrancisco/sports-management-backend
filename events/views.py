@@ -12,12 +12,23 @@ from teams.models import Team
 from teams.models import Coach
 from users.models import User
 from .serializers import EventSerializer, GameEventSerializer, TrainingEventSerializer
+from notifications.utils import send_event_notification
 import calendar
 
 class EventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all().order_by("-startDate")
     serializer_class = EventSerializer
     permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create event and send notifications based on creator's role."""
+        event = serializer.save(created_by=self.request.user)
+        
+        # Send notification asynchronously
+        try:
+            send_event_notification(event, creator=self.request.user)
+        except Exception:
+            pass  # Don't fail the request if notification fails
 
     def get_queryset(self):
         user = self.request.user

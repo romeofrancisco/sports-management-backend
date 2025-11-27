@@ -13,6 +13,32 @@ except Exception as e:
     print(f"Firebase Admin initialization error: {e}")
 
 
+def get_frontend_url():
+    """Get the frontend URL from settings, defaulting to production URL."""
+    url = getattr(settings, 'FRONTEND_URL', None)
+    
+    # Default to production URL if not set or empty
+    if not url:
+        return 'https://sports-management-frontend.vercel.app'
+    
+    url = url.strip()
+    
+    # For localhost, keep http (FCM doesn't require https for localhost)
+    if 'localhost' in url or '127.0.0.1' in url:
+        # Remove trailing slash and return as-is
+        return url.rstrip('/')
+    
+    # For production, ensure URL starts with https://
+    if not url.startswith('https://'):
+        if url.startswith('http://'):
+            url = url.replace('http://', 'https://', 1)
+        else:
+            url = f'https://{url}'
+    
+    # Remove trailing slash
+    return url.rstrip('/')
+
+
 def send_game_notification(game, creator=None):
     """
     Send FCM push notifications to all players and coaches of both teams when a new game is scheduled.
@@ -59,18 +85,19 @@ def send_game_notification(game, creator=None):
     game_time = game.time.strftime("%I:%M %p") if game.time else "TBD"
     
     # Determine game type label and click action
+    frontend_url = get_frontend_url()
     game_type_label = "Game"
-    click_action = f"/games?gameId={game.id}"
+    click_action = f"{frontend_url}/games?gameId={game.id}"
     
     if game.type == "league" and game.league and game.season:
         game_type_label = "League Game"
-        click_action = f"/leagues/{game.league.id}/seasons/{game.season.id}/games?gameId={game.id}"
+        click_action = f"{frontend_url}/leagues/{game.league.id}/seasons/{game.season.id}/games?gameId={game.id}"
     elif game.type == "tournament" and game.tournament:
         game_type_label = "Tournament Game"
-        click_action = f"/tournaments/{game.tournament.id}/games?gameId={game.id}"
+        click_action = f"{frontend_url}/tournaments/{game.tournament.id}/games?gameId={game.id}"
     elif game.type == "practice":
         game_type_label = "Practice Game"
-        click_action = f"/games?gameId={game.id}"
+        click_action = f"{frontend_url}/games?gameId={game.id}"
     
     notification_title = f"New {game_type_label} Scheduled"
     notification_body = f"{home_team.name} vs {away_team.name} on {game_date} at {game_time}"
@@ -82,6 +109,7 @@ def send_game_notification(game, creator=None):
 
     for device in devices:
         try:
+            # Use data-only message - service worker will handle notification display
             message = messaging.Message(
                 data={
                     "title": notification_title,
@@ -157,18 +185,19 @@ def send_bulk_game_notifications(games, creator=None):
 
     # Determine the context (tournament or league)
     first_game = games[0]
+    frontend_url = get_frontend_url()
     context_name = ""
     game_type_label = "Games"
-    click_action = "/games"
+    click_action = f"{frontend_url}/games"
     
     if first_game.tournament:
         context_name = first_game.tournament.name
         game_type_label = "Tournament Games"
-        click_action = f"/tournaments/{first_game.tournament.id}/games"
+        click_action = f"{frontend_url}/tournaments/{first_game.tournament.id}/games"
     elif first_game.season and first_game.league:
         context_name = f"{first_game.league.name} - {first_game.season.name}"
         game_type_label = "League Games"
-        click_action = f"/leagues/{first_game.league.id}/seasons/{first_game.season.id}/games"
+        click_action = f"{frontend_url}/leagues/{first_game.league.id}/seasons/{first_game.season.id}/games"
     
     notification_title = f"{len(games)} New {game_type_label} Scheduled"
     notification_body = f"New games have been scheduled for {context_name}. Check the schedule for details."
@@ -179,6 +208,7 @@ def send_bulk_game_notifications(games, creator=None):
 
     for device in devices:
         try:
+            # Use data-only message - service worker will handle notification display
             message = messaging.Message(
                 data={
                     "title": notification_title,
@@ -208,6 +238,7 @@ def send_bulk_game_notifications(games, creator=None):
 def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
     """
     Send FCM push notifications for a chat message to all team members except the sender.
+    Also includes admins who can view all team chats.
 
     Args:
         sender: The user who sent the message
@@ -216,6 +247,8 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
         message_id: ID of the message
         team_name: Name of the team
     """
+    from users.models import User  # Import here to avoid circular imports
+    
     try:
         team = Team.objects.get(id=team_id)
     except Team.DoesNotExist:
@@ -224,12 +257,18 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
 
     # Get all users in the team except the sender
     team_users = []
-    if team.head_coach:
+    if team.head_coach and team.head_coach.user:
         team_users.append(team.head_coach.user)
-    if team.assistant_coach:
+    if team.assistant_coach and team.assistant_coach.user:
         team_users.append(team.assistant_coach.user)
-    team_users.extend([player.user for player in team.players.all()])
-    team_users = [u for u in team_users if u != sender]
+    team_users.extend([player.user for player in team.players.all() if player.user])
+    
+    # Also include admins (they can view all team chats)
+    admin_users = User.objects.filter(is_superuser=True)
+    team_users.extend(list(admin_users))
+    
+    # Remove duplicates and exclude sender
+    team_users = list(set([u for u in team_users if u and u != sender]))
 
     # Get their FCM tokens
     devices = FCMDevice.objects.filter(user__in=team_users)
@@ -241,6 +280,11 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
     # Prepare the notification payload
     sender_name = sender.get_full_name() or sender.username
     notification_body = f"{sender_name}: {message_text[:100]}{'...' if len(message_text) > 100 else ''}"
+    notification_title = f"New message in {team_name}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/chat/team/{team_id}"
+    
+    print(f"[Chat Notification] Frontend URL: {frontend_url}, Click action: {click_action}")
 
     # Send individual messages to each token
     success_count = 0
@@ -248,18 +292,17 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
     
     for device in devices:
         try:
-            # Include notification field to ensure delivery on all platforms
-            # Send data-only message - service worker will create the notification
-            # This prevents FCM from auto-showing a notification
+            # Use data-only message - service worker will handle notification display
             message = messaging.Message(
                 data={
-                    "title": f"New message in {team_name}",
+                    "title": notification_title,
                     "body": notification_body,
+                    "type": "chat",
                     "team_id": str(team_id),
                     "message_id": str(message_id),
                     "sender_id": str(sender.id),
                     "sender_name": sender_name,
-                    "click_action": f"/chat/team/{team_id}"
+                    "click_action": click_action
                 },
                 token=device.fcm_token,
             )
@@ -270,18 +313,18 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
             print(f"✓ FCM notification sent to user {device.user.id}: {response}")
             
         except Exception as e:
-            error_msg = str(e)
-            print(f"✗ Error sending to user {device.user.id}: {error_msg}")
-            # Remove token if it's invalid (unregistered, invalid, etc.)
-            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower():
+            error_msg = str(e).lower()
+            print(f"✗ Error sending to user {device.user.id}: {e}")
+            # Remove token if it's invalid (various error types)
+            if any(err in error_msg for err in ['unregistered', 'invalid', 'not found', 'not a valid fcm', 'auth error']):
                 failed_tokens.append(device.fcm_token)
     
     print(f"✓ Successfully sent {success_count} FCM notifications")
     
     # Remove invalid tokens
     if failed_tokens:
-        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
-        print(f"Removed {len(failed_tokens)} invalid FCM tokens")
+        deleted_count = FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()[0]
+        print(f"🗑️ Removed {deleted_count} invalid FCM tokens")
 
 
 def send_training_session_notification(training_session, creator=None):
@@ -338,6 +381,8 @@ def send_training_session_notification(training_session, creator=None):
     
     notification_title = f"New Training Session: {training_session.title}"
     notification_body = f"Scheduled for {session_date} at {session_time} - {training_session.location or 'Location TBD'}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/"
 
     # Send individual messages to each token
     success_count = 0
@@ -345,6 +390,7 @@ def send_training_session_notification(training_session, creator=None):
 
     for device in devices:
         try:
+            # Use data-only message - service worker will handle notification display
             message = messaging.Message(
                 data={
                     "title": notification_title,
@@ -353,7 +399,7 @@ def send_training_session_notification(training_session, creator=None):
                     "session_id": str(training_session.session_id),
                     "team_id": str(team.id),
                     "team_name": team.name,
-                    "click_action": f"/"
+                    "click_action": click_action
                 },
                 token=device.fcm_token,
             )
@@ -374,3 +420,228 @@ def send_training_session_notification(training_session, creator=None):
     if failed_tokens:
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
         print(f"Removed {len(failed_tokens)} invalid FCM tokens")
+
+
+def send_event_notification(event, creator=None):
+    """
+    Send FCM push notifications for a new event.
+    
+    - If admin creates the event: notify all coaches
+    - If coach creates the event: notify all players on teams they coach
+
+    Args:
+        event: The Event instance that was created
+        creator: The user who created the event
+    """
+    from users.models import User
+    from teams.models import Coach
+    from django.db import models as db_models
+    
+    if not creator:
+        return
+    
+    target_users = []
+    
+    # Determine who to notify based on creator's role
+    if creator.role == User.Role.ADMIN or creator.is_superuser:
+        # Admin created the event - notify all coaches
+        coaches = Coach.objects.select_related('user').all()
+        target_users = [coach.user for coach in coaches if coach.user and coach.user != creator]
+    elif creator.role == User.Role.COACH or hasattr(creator, 'coach_profile'):
+        # Coach created the event - notify all players on their teams
+        try:
+            coach_profile = creator.coach_profile
+            # Get all teams where this coach is head or assistant coach
+            coached_teams = Team.objects.filter(
+                db_models.Q(head_coach=coach_profile) | db_models.Q(assistant_coach=coach_profile)
+            )
+            # Get all players from these teams
+            for team in coached_teams:
+                for player in team.players.all():
+                    if player.user and player.user != creator:
+                        target_users.append(player.user)
+        except Exception:
+            return
+    
+    # Remove duplicates
+    target_users = list(set(target_users))
+    
+    if not target_users:
+        return
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=target_users)
+
+    if not devices.exists():
+        return
+
+    # Prepare the notification payload
+    event_date = event.startDate.strftime("%B %d, %Y") if event.startDate else "TBD"
+    event_time = event.startDate.strftime("%I:%M %p") if event.startDate else "TBD"
+    
+    notification_title = f"New Event: {event.title}"
+    notification_body = f"Scheduled for {event_date} at {event_time}"
+    if event.description:
+        notification_body += f" - {event.description[:50]}{'...' if len(event.description) > 50 else ''}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/calendar"
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            # Use data-only message - service worker will handle notification display
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "event",
+                    "event_id": str(event.id),
+                    "event_title": event.title,
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
+def send_reservation_created_notification(reservation):
+    """
+    Send FCM push notification to all admins when a new reservation is created.
+
+    Args:
+        reservation: The Reservation instance that was created
+    """
+    from users.models import User
+    
+    # Get all admin users
+    admin_users = User.objects.filter(role=User.Role.ADMIN)
+    
+    if not admin_users.exists():
+        return
+
+    # Get FCM tokens for admin users
+    devices = FCMDevice.objects.filter(user__in=admin_users)
+
+    if not devices.exists():
+        return
+
+    # Prepare the notification payload
+    coach_name = reservation.coach.get_full_name() if reservation.coach else "Unknown"
+    facility_name = reservation.facility.name if reservation.facility else "Unknown Facility"
+    reservation_date = reservation.start_datetime.strftime("%B %d, %Y") if reservation.start_datetime else "TBD"
+    reservation_time = reservation.start_datetime.strftime("%I:%M %p") if reservation.start_datetime else "TBD"
+    
+    notification_title = "New Facility Reservation Request"
+    notification_body = f"{coach_name} requested {facility_name} on {reservation_date} at {reservation_time}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/facility-reservation/approvals"
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            # Use data-only message - service worker will handle notification display
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "reservation_request",
+                    "reservation_id": str(reservation.id),
+                    "facility_id": str(reservation.facility.id) if reservation.facility else "",
+                    "facility_name": facility_name,
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
+def send_reservation_status_notification(reservation, new_status):
+    """
+    Send FCM push notification to the coach when their reservation is approved or rejected.
+
+    Args:
+        reservation: The Reservation instance that was updated
+        new_status: The new status ('approved' or 'rejected')
+    """
+    if not reservation.coach:
+        return
+    
+    # Get FCM tokens for the coach
+    devices = FCMDevice.objects.filter(user=reservation.coach)
+
+    if not devices.exists():
+        return
+
+    # Prepare the notification payload
+    facility_name = reservation.facility.name if reservation.facility else "Unknown Facility"
+    reservation_date = reservation.start_datetime.strftime("%B %d, %Y") if reservation.start_datetime else "TBD"
+    reservation_time = reservation.start_datetime.strftime("%I:%M %p") if reservation.start_datetime else "TBD"
+    
+    status_text = "Approved" if new_status == "approved" else "Rejected"
+    status_emoji = "✅" if new_status == "approved" else "❌"
+    
+    notification_title = f"Reservation {status_text} {status_emoji}"
+    notification_body = f"Your reservation for {facility_name} on {reservation_date} at {reservation_time} has been {new_status}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/facility-reservation/approvals"
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            # Use data-only message - service worker will handle notification display
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "reservation_status",
+                    "reservation_id": str(reservation.id),
+                    "facility_id": str(reservation.facility.id) if reservation.facility else "",
+                    "facility_name": facility_name,
+                    "status": new_status,
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
