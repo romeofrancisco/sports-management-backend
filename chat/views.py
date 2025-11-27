@@ -182,7 +182,7 @@ def subscribe_to_push(request):
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def save_fcm_token(request):
-    """Save or update FCM token for a user"""
+    """Save or update FCM token for a user. Each browser/device gets its own token."""
     token = request.data.get('token')
     user = request.user
 
@@ -190,17 +190,26 @@ def save_fcm_token(request):
         return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Use token as unique key to prevent duplicate tokens per user
-        device, created = FCMDevice.objects.update_or_create(
-            user=user,
-            fcm_token=token,
-            defaults={'fcm_token': token}
-        )
+        # Check if this exact token already exists for this user
+        existing = FCMDevice.objects.filter(fcm_token=token).first()
         
-        action = 'created' if created else 'updated'
+        if existing:
+            if existing.user != user:
+                # Token was registered to a different user, update it
+                existing.user = user
+                existing.save()
+                print(f"[FCM] Token reassigned to user {user.id}")
+            action = 'updated'
+        else:
+            # New token, create it
+            FCMDevice.objects.create(user=user, fcm_token=token)
+            action = 'created'
+        
+        print(f"[FCM] Token {action} for user {user.id}: {token[:30]}...")
         return Response({
             'status': f'FCM token {action} successfully',
             'token': token
         }, status=status.HTTP_200_OK)
     except Exception as e:
+        print(f"[FCM] Error saving token: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

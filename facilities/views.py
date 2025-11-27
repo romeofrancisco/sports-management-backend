@@ -7,6 +7,7 @@ from .models import Facility, Reservation
 from .serializers import FacilitySerializer, ReservationSerializer
 from django.utils import timezone
 from django.db.models import Case, When, Value, IntegerField, Q
+from notifications.utils import send_reservation_created_notification, send_reservation_status_notification
 
 class IsCoachOrAdmin(permissions.BasePermission):
 	def has_permission(self, request, view):
@@ -193,12 +194,18 @@ class ReservationListCreateAPIView(generics.ListCreateAPIView):
 		user = self.request.user
 		# If coach creating, set coach to user
 		if user.is_coach:
-			serializer.save()
+			reservation = serializer.save()
 		elif user.is_admin:
 			# admins must supply a coach_id in payload
-			serializer.save()
+			reservation = serializer.save()
 		else:
 			raise permissions.PermissionDenied("Only coaches or admins can create reservations")
+		
+		# Send notification to admins about new reservation
+		try:
+			send_reservation_created_notification(reservation)
+		except Exception:
+			pass  # Don't fail the request if notification fails
 
 	def list(self, request, *args, **kwargs):
 		# Support full-list fetch for calendar consumers via ?no_pagination=1
@@ -215,8 +222,19 @@ class ReservationRetrieveUpdateAPIView(generics.RetrieveUpdateDestroyAPIView):
 	permission_classes = [permissions.IsAuthenticated]
 
 	def perform_update(self, serializer):
+		# Get the old status before update
+		old_status = serializer.instance.status
+		
 		# Delegate logic to serializer (it enforces admin-only status changes)
-		serializer.save()
+		reservation = serializer.save()
+		
+		# Check if status changed to approved or rejected
+		new_status = reservation.status
+		if old_status != new_status and new_status in ['approved', 'rejected']:
+			try:
+				send_reservation_status_notification(reservation, new_status)
+			except Exception:
+				pass  # Don't fail the request if notification fails
   
 	def get_object(self):
 		obj = super().get_object()
