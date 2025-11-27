@@ -183,6 +183,8 @@ def subscribe_to_push(request):
 @permission_classes([permissions.IsAuthenticated])
 def save_fcm_token(request):
     """Save or update FCM token for a user. Each browser/device gets its own token."""
+    from django.db import IntegrityError, transaction
+    
     token = request.data.get('token')
     user = request.user
 
@@ -190,26 +192,49 @@ def save_fcm_token(request):
         return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Check if this exact token already exists for this user
-        existing = FCMDevice.objects.filter(fcm_token=token).first()
+        with transaction.atomic():
+            # Use filter to handle potential duplicates in the database
+            existing_devices = FCMDevice.objects.filter(fcm_token=token)
+            device_count = existing_devices.count()
+            
+            if device_count == 0:
+                # No existing device, create new one
+                FCMDevice.objects.create(user=user, fcm_token=token)
+                print(f"[FCM] Token created for user {user.id}: {token[:30]}...")
+                action = 'created'
+            elif device_count == 1:
+                # Exactly one device exists
+                device = existing_devices.first()
+                if device.user_id != user.id:
+                    device.user = user
+                    device.save(update_fields=['user'])
+                    print(f"[FCM] Token reassigned to user {user.id}")
+                    action = 'reassigned'
+                else:
+                    action = 'already exists'
+            else:
+                # Multiple duplicates exist - clean them up, keep one
+                print(f"[FCM] Found {device_count} duplicate tokens, cleaning up...")
+                # Keep the first one, delete the rest
+                device_to_keep = existing_devices.first()
+                device_to_keep.user = user
+                device_to_keep.save(update_fields=['user'])
+                # Delete duplicates
+                existing_devices.exclude(pk=device_to_keep.pk).delete()
+                action = 'deduplicated'
         
-        if existing:
-            if existing.user != user:
-                # Token was registered to a different user, update it
-                existing.user = user
-                existing.save()
-                print(f"[FCM] Token reassigned to user {user.id}")
-            action = 'updated'
-        else:
-            # New token, create it
-            FCMDevice.objects.create(user=user, fcm_token=token)
-            action = 'created'
-        
-        print(f"[FCM] Token {action} for user {user.id}: {token[:30]}...")
         return Response({
-            'status': f'FCM token {action} successfully',
+            'status': f'FCM token {action}',
+            'token': token
+        }, status=status.HTTP_200_OK)
+        
+    except IntegrityError as e:
+        # Race condition - token was created by another request
+        print(f"[FCM] IntegrityError (race condition): {e}")
+        return Response({
+            'status': 'FCM token already registered',
             'token': token
         }, status=status.HTTP_200_OK)
     except Exception as e:
-        print(f"[FCM] Error saving token: {e}")
+        print(f"[FCM] Unexpected error saving token: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
