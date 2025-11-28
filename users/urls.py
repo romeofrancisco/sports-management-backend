@@ -4,6 +4,7 @@ from .views import (
     LoginView,
     LogoutView,
     CookieTokenRefreshView,
+    GoogleOneTapLoginView,
     change_password,
     set_password,
     reset_password,
@@ -20,4 +21,6 @@ urlpatterns = [
     path("change-password/", change_password, name="change-password"),
     path("reset-password/", reset_password, name="reset-password"),
     path("forgot-password/", forgot_password, name="forgot-password"),
+    
+    path('google-signin/', GoogleOneTapLoginView.as_view(), name='google-signin'),
 ]

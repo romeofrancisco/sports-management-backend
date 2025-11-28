@@ -17,6 +17,8 @@ from django.template.loader import render_to_string
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.utils.encoding import force_str
+from google.oauth2 import id_token
+from google.auth.transport import requests
 
 User = get_user_model()
 
@@ -64,6 +66,25 @@ class LoginView(GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data
+
+        # Validate player/team constraints first
+        try:
+            # Only enforce this for player role
+            if user.role == User.Role.PLAYER:
+                # Check if player profile exists and has a team
+                from teams.models import Player
+                try:
+                    player_profile = Player.objects.get(user=user)
+                    if not player_profile.team:
+                        return Response({
+                            "error": "Player account has no team assigned. Contact your administrator."},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except Player.DoesNotExist:
+                    return Response({"error": "Player profile not found. Contact your administrator."}, status=status.HTTP_403_FORBIDDEN)
+        except Exception as e:
+            print(f"Login validation error: {e}")
+            # Fall back to the standard login flow and let authentication proceed normally
 
         # Update last_login field manually since we're using custom JWT auth
         update_last_login(None, user)
@@ -224,3 +245,81 @@ def reset_password(request):
     user.save()
     return Response({"message": "Password has been reset successfully"}, status=status.HTTP_200_OK)
 
+GOOGLE_CLIENT_ID = settings.GOOGLE_CLIENT_ID 
+
+class GoogleOneTapLoginView(APIView):
+    permission_classes = (AllowAny,) # Allow unauthenticated access for login/signup
+
+    def post(self, request, *args, **kwargs):
+        id_token_credential = request.data.get("credential") # Name from the Google response
+
+        if not id_token_credential:
+            return Response({"error": "Google ID Token not provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 1. Verify the Google ID Token
+            # This is the crucial step where the token's authenticity is confirmed by Google's servers.
+            google_user_data = id_token.verify_oauth2_token(
+                id_token_credential, 
+                requests.Request(), 
+                GOOGLE_CLIENT_ID
+            )
+
+            # The 'aud' (audience) must match your client ID.
+            if google_user_data['aud'] != GOOGLE_CLIENT_ID:
+                raise ValueError('Audience mismatch.')
+            
+            email = google_user_data['email']
+            first_name = google_user_data.get('given_name', '')
+            last_name = google_user_data.get('family_name', '')
+            
+            print(f"Google login attempt for email: {email}")  # Debug log
+            
+            # 2. Only allow login for existing users - no auto-registration
+            user = User.objects.filter(email=email).first()
+            if not user:
+                print(f"User not found for email: {email}")  # Debug log
+                return Response(
+                    {"error": "No account found with this email. Please contact an administrator to create your account."}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            # Update name if changed
+            if user.first_name != first_name or user.last_name != last_name:
+                user.first_name = first_name
+                user.last_name = last_name
+                user.save()
+
+            # Additional validation: ensure Player has a team
+            try:
+                if user.role == User.Role.PLAYER:
+                    from teams.models import Player
+                    try:
+                        player_profile = Player.objects.get(user=user)
+                        if not player_profile.team:
+                            return Response({"error": "Player account has no team assigned. Contact your administrator."}, status=status.HTTP_403_FORBIDDEN)
+                    except Player.DoesNotExist:
+                        return Response({"error": "Player profile not found. Contact your administrator."}, status=status.HTTP_403_FORBIDDEN)
+            except Exception as e:
+                print(f"Google OneTap validation error: {e}")
+
+            # 3. Issue and Set Application's JWTs
+            update_last_login(None, user) # Manually update last login
+
+            refresh = RefreshToken.for_user(user)
+            access_token = str(refresh.access_token)
+            
+            response = Response(
+                UserSerializer(user, context={'request': request}).data, 
+                status=status.HTTP_200_OK
+            )
+            set_auth_cookies(response, access_token, str(refresh))
+            return response
+            
+        except ValueError as e:
+            # Handle invalid tokens, expired tokens, or other verification errors
+            print(f"Google Token Verification Failed: {e}")
+            return Response({"error": "Invalid Google login token."}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception as e:
+            # Catch other potential errors
+            print(f"Login processing error: {e}")
+            return Response({"error": "An unexpected error occurred during login."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
