@@ -232,7 +232,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'version', 'folder', 'folder_name', 'uploaded_by', 
+            'id', 'title', 'file', 'google_drive_id', 'version', 'folder', 'folder_name', 'uploaded_by', 
             'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status']
@@ -265,7 +265,7 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'folder', 'version', 'folder_detail', 'uploaded_by', 
+            'id', 'title', 'file', 'google_drive_id', 'folder', 'version', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
             'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 
             'file_extension', 'can_edit', 'can_delete'
@@ -312,7 +312,7 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
 
 
 class DocumentCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating/uploading documents"""
+    """Serializer for creating/uploading documents via Google Drive"""
     folder = serializers.PrimaryKeyRelatedField(
         queryset=Folder.objects.all(),
         required=False,
@@ -321,7 +321,8 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Document
-        fields = ['id', 'title', 'file', 'folder', 'description']
+        fields = ['id', 'title', 'google_drive_id', 'file_extension', 'folder', 'description']
+        read_only_fields = ['google_drive_id']  # Set by google_views.create_document_in_google_drive
     
     def validate(self, attrs):
         """Validate that document title is unique within the same folder"""
@@ -350,44 +351,31 @@ class DocumentCreateSerializer(serializers.ModelSerializer):
     
     def validate_folder(self, value):
         # Allow null folder for admins
+        user = self.context['request'].user
         if value is None:
-            user = self.context['request'].user
             if user.is_admin:
                 return value
             raise serializers.ValidationError("Folder is required for non-admin users")
-        
-        user = self.context['request'].user
-        
-        # Check if user can upload to this folder
-        if not user.is_admin:
-            if value.folder_type == Folder.FolderType.PUBLIC:
-                raise serializers.ValidationError("Only admins can upload to Public folder")
-            if value.folder_type == Folder.FolderType.COACHES:
-                raise serializers.ValidationError("Cannot upload directly to Coaches folder")
-            if value.folder_type == Folder.FolderType.PLAYERS:
-                raise serializers.ValidationError("Cannot upload directly to Players folder")
-            
-            # Users can only upload to their own personal folders
-            if value.owner != user:
-                raise serializers.ValidationError("You can only upload to your own folder")
-        
+
+        # Use the single source of truth for folder upload permissions
+        if not value.can_edit(user):
+            raise serializers.ValidationError("You don't have permission to upload to this folder")
+
         return value
-    
+
     def create(self, validated_data):
+        """Ensure owner/uploaded_by are set and infer extension when missing."""
         user = self.context['request'].user
         validated_data['uploaded_by'] = user
         validated_data['owner'] = user
 
-        file = validated_data.get('file')
-        if file:
-            # Extract extension from the uploaded file
-            _, ext = os.path.splitext(file.name)
-            ext = ext.lstrip(".").lower()
-            validated_data['file_extension'] = ext
-
-            # Ensure title does not already include the extension
-            if validated_data['title'].endswith(f".{ext}"):
-                validated_data['title'] = validated_data['title'][:-(len(ext)+1)]
+        # Infer file extension from title if not provided
+        ext = validated_data.get('file_extension')
+        title = validated_data.get('title') or ''
+        if not ext and title:
+            _, t_ext = os.path.splitext(title)
+            if t_ext:
+                validated_data['file_extension'] = t_ext.lstrip('.').lower()
 
         return super().create(validated_data)
 

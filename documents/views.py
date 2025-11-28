@@ -439,7 +439,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def copy(self, request, pk=None):
-        """Create a copy of a document"""
+        """Create a copy of a document in Google Drive and sync to app folder"""
         document = self.get_object()
 
         if not document.can_view(request.user):
@@ -452,11 +452,121 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         target_folder = serializer.validated_data["target_folder"]
+        token_data = request.data.get("tokens")
+        requires_google_copy = bool(document.google_drive_id)
+        if requires_google_copy:
+            if not token_data or not token_data.get("access_token"):
+                return Response({"error": "Google authentication required", "needsAuth": True}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Google Drive copy logic (similar to google_views.py open_document_in_google_drive)
+        from .google_views import get_credentials_from_tokens, get_or_create_app_folder, get_embed_url, MIME_TYPES, normalize_extension
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+        import requests
+        from io import BytesIO
 
         try:
-            copy = document.create_copy(request.user, target_folder)
+            # If the document is not linked to Google Drive, perform a local DB copy
+            if not requires_google_copy:
+                copy = document.create_copy(request.user, target_folder)
+                return Response(DocumentDetailSerializer(copy).data, status=status.HTTP_201_CREATED)
+            ext = normalize_extension(document.file_extension)
+            file_type = 'sheet' if ext in ['xlsx', 'xls'] else 'doc'
+            export_mime = MIME_TYPES['xlsx'] if file_type == 'sheet' else MIME_TYPES['docx']
+            google_mime = MIME_TYPES['google_sheet'] if file_type == 'sheet' else MIME_TYPES['google_doc']
+
+            export_url = f"https://docs.google.com/{'spreadsheets' if file_type == 'sheet' else 'document'}/d/{document.google_drive_id}/export?format={'xlsx' if file_type == 'sheet' else 'docx'}"
+            response = requests.get(export_url, timeout=30)
+            if response.status_code != 200:
+                raise Exception(f"Export failed with status {response.status_code}")
+
+            file_content = BytesIO(response.content)
+            credentials = get_credentials_from_tokens(token_data)
+            drive_service = build('drive', 'v3', credentials=credentials)
+            app_folder_id = get_or_create_app_folder(drive_service)
+
+            base_title = document.title.rsplit('.', 1)[0] if '.' in document.title else document.title
+            copy_name = f"{base_title} (Copy)"
+            file_metadata = {
+                'name': copy_name,
+                'mimeType': google_mime,
+            }
+            if app_folder_id:
+                file_metadata['parents'] = [app_folder_id]
+
+            media = MediaIoBaseUpload(file_content, mimetype=export_mime, resumable=True)
+            new_file = drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, name, mimeType, webViewLink'
+            ).execute()
+
+            # Set admin permissions for non-public folders
+            is_public = document.is_in_public_folder()
+            if is_public:
+                try:
+                    drive_service.files().update(
+                        fileId=new_file['id'],
+                        body={'copyRequiresWriterPermission': False},
+                        fields='id'
+                    ).execute()
+                    drive_service.permissions().create(
+                        fileId=new_file['id'],
+                        body={'type': 'anyone', 'role': 'writer'},
+                        fields='id'
+                    ).execute()
+                except Exception as perm_error:
+                    print(f"Failed to set public edit permissions: {perm_error}")
+            else:
+                # Share with all admins as writers
+                from users.models import User
+                admin_users = User.objects.filter(role=User.Role.ADMIN)
+                for admin in admin_users:
+                    if admin.email:
+                        try:
+                            drive_service.permissions().create(
+                                fileId=new_file['id'],
+                                body={
+                                    'type': 'user',
+                                    'role': 'writer',
+                                    'emailAddress': admin.email,
+                                },
+                                sendNotificationEmail=False,
+                                fields='id'
+                            ).execute()
+                        except Exception as share_error:
+                            print(f"Failed to share with admin {admin.email}: {share_error}")
+
+            # Create database record for the copy
+            from .folder_utils import get_user_personal_folder
+            user_folder = get_user_personal_folder(request.user) if target_folder is None else target_folder
+            copy_title_with_ext = f"{copy_name}{document.file_extension}"
+            existing_count = Document.objects.filter(folder=user_folder, title__startswith=copy_name).count()
+            if existing_count > 0:
+                copy_title_with_ext = f"{base_title} (Copy {existing_count + 1}){document.file_extension}"
+
+            db_copy = Document.objects.create(
+                title=copy_title_with_ext,
+                google_drive_id=new_file['id'],
+                file_extension=document.file_extension,
+                folder=user_folder,
+                uploaded_by=request.user,
+                owner=request.user,
+                status=Document.DocumentStatus.COPY,
+                original_document=document,
+                description=f"Copy of {document.title} from Public folder",
+            )
+
+            edit_url = get_embed_url(new_file['id'], file_type, edit=True)
             return Response(
-                DocumentDetailSerializer(copy).data, status=status.HTTP_201_CREATED
+                {**DocumentDetailSerializer(db_copy).data, **{
+                    'editUrl': edit_url,
+                    'webViewLink': new_file.get('webViewLink'),
+                    'isCopy': True,
+                    'copyId': db_copy.id,
+                    'originalGoogleFileId': document.google_drive_id,
+                }},
+                status=status.HTTP_201_CREATED
             )
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

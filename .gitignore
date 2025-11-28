@@ -4,6 +4,7 @@
 db.sqlite3
 /media
 firebase-*.json
+google-service-account.json
 
 # Python cache files
 __pycache__/

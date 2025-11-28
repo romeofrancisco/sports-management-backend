@@ -63,6 +63,7 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 
 # Application definition
 
@@ -324,6 +325,10 @@ if not DEBUG:
 
 # Google AI API Configuration
 GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
+
+# Google OAuth2 Configuration for Drive/Docs/Sheets
+GOOGLE_OAUTH2_CLIENT_ID = os.environ.get("GOOGLE_OAUTH2_CLIENT_ID") or os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_OAUTH2_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH2_CLIENT_SECRET")
 
 # Firebase Admin SDK Configuration
 FIREBASE_SERVICE_ACCOUNT_KEY = os.path.join(BASE_DIR, "firebase-service-account.json")

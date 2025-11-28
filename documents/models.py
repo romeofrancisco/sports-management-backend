@@ -144,9 +144,10 @@ class Document(models.Model):
         COPY = "copy", "Copy"
 
     title = models.CharField(max_length=255)
-    file = models.FileField(upload_to="documents/", storage=DocumentCloudinaryStorage(), max_length=255)
+    google_drive_id = models.CharField(max_length=100, blank=True, null=True, help_text="Google Drive file ID (primary storage)")
+    file = models.FileField(upload_to="documents/", storage=DocumentCloudinaryStorage(), max_length=255, blank=True, null=True, help_text="Legacy Cloudinary storage (deprecated)")
     file_extension = models.CharField(max_length=10, blank=True)
-    version = models.CharField(max_length=50, blank=True, null=True)
+    version = models.CharField(max_length=50, blank=True, null=True, help_text="Google Drive version/modified time")
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_documents')
@@ -179,73 +180,95 @@ class Document(models.Model):
             )
 
     def save(self, *args, **kwargs):
-        """Override save to update version info after upload"""
+        """Override save to extract file extension"""
         self.clean()
 
-        # Extract file extension if missing
-        if not self.file_extension and self.file:
-            _, ext = os.path.splitext(self.file.name)
-            self.file_extension = ext.lower()
+        # Extract file extension from title if missing
+        if not self.file_extension:
+            _, ext = os.path.splitext(self.title)
+            if ext:
+                self.file_extension = ext.lower()
 
         super().save(*args, **kwargs)
-
-        # If uploaded through Cloudinary storage, store the latest version
-        storage = getattr(self.file, "storage", None)
-        if storage and hasattr(storage, "_last_result"):
-            result = storage._last_result
-            if result:
-                version = str(result.get("version", "")) or None
-                if version and version != self.version:
-                    self.version = version
-                    super().save(update_fields=["version"])
     
-    def get_latest_url(self):
+    def get_google_drive_url(self, mode='view'):
         """
-        Return the current Cloudinary URL with the correct version.
-        This ensures the frontend always gets the updated file.
+        Return the Google Drive URL for this document.
+        mode: 'view', 'edit', or 'download'
         """
-        public_id = os.path.splitext(self.file.name)[0]
-        version = self.version
-        url, _ = cloudinary_url(
-            public_id,
-            resource_type="raw",
-            version=version if version else None,
-        )
-        return url
+        if not self.google_drive_id:
+            return None
+        
+        if self.file_extension in ['.xlsx', '.xls']:
+            base = 'https://docs.google.com/spreadsheets/d'
+        else:
+            base = 'https://docs.google.com/document/d'
+        
+        if mode == 'download':
+            return f"{base}/{self.google_drive_id}/export"
+        
+        return f"{base}/{self.google_drive_id}/{mode}"
 
     @property
     def file_url(self):
-        """Shortcut for templates or API responses"""
-        return self.get_latest_url()
+        """Return Google Drive view URL"""
+        return self.get_google_drive_url('view')
         
 
     def delete(self, *args, **kwargs):
-        """Override delete to remove the file from filesystem or cloud storage"""
-        # Delete the file from storage (works with local and cloud storage)
+        """Override delete to remove the file from Google Drive"""
+        # Note: Google Drive file deletion should be handled by the view layer
+        # with proper OAuth credentials, not here in the model
+        # Legacy Cloudinary files
         if self.file:
             try:
                 self.file.delete(save=False)
             except Exception as e:
-                # Log the error but don't prevent deletion
-                print(f"Error deleting file: {e}")
+                print(f"Error deleting legacy file: {e}")
 
-        # Call the parent delete method
         super().delete(*args, **kwargs)
 
     def can_view(self, user):
         """Check if user can view this document"""
+        # Documents without a folder (root-level) are only visible to admins or the owner/uploader
+        if not self.folder:
+            if getattr(user, 'is_admin', False):
+                return True
+            if self.owner == user or self.uploaded_by == user:
+                return True
+            return False
+
         return self.folder.can_access(user)
 
     def can_edit(self, user):
-        """Check if user can edit this document (save changes to original file)"""
+        """Check if user can open document in edit mode"""
+        # Admin can edit any document
         if user.is_admin:
             return True
 
-        # Only owner can edit their original files
-        if self.status == self.DocumentStatus.ORIGINAL:
-            return self.owner == user
+        # Owner can always edit their own documents
+        if self.owner == user:
+            return True
 
-        # Users can edit their copies
+        # Public documents: anyone can open in edit mode (Google Docs)
+        # But permission sharing in Google Drive determines actual edit capability
+        if self.is_in_public_folder():
+            return True
+        
+        # For non-public documents: only owner/admin can edit
+        return False
+    
+    def can_save_original(self, user):
+        """Only admin or owner can save changes back to the original file"""
+        if user.is_admin:
+            return True
+        return self.owner == user
+    
+    def can_modify_permissions(self, user):
+        """Check if user can change Google Drive sharing permissions"""
+        # Only admin and owner can modify permissions (make copies, change sharing)
+        if user.is_admin:
+            return True
         return self.owner == user
 
     def can_open_in_editor(self, user):
