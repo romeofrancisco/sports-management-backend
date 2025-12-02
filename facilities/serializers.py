@@ -117,15 +117,25 @@ class ReservationSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         user = request.user if request else None
 
-        # Allow admin to change status (approve/reject)
+        # Handle status changes
         new_status = validated_data.get("status")
         if new_status and new_status != instance.status:
-            # only admins should approve/reject
-            if not user or not user.is_admin:
-                raise serializers.ValidationError(
-                    "Only admins can change reservation status."
-                )
-            instance.status = new_status
+            # Coaches can cancel their own reservations
+            if new_status == "cancelled":
+                # Allow if user is admin OR if user is the coach who owns the reservation
+                if user and (user.is_admin or (user.is_coach and instance.coach == user)):
+                    instance.status = new_status
+                else:
+                    raise serializers.ValidationError(
+                        "You can only cancel your own reservations."
+                    )
+            else:
+                # Only admins can approve/reject
+                if not user or not user.is_admin:
+                    raise serializers.ValidationError(
+                        "Only admins can change reservation status."
+                    )
+                instance.status = new_status
 
         # Allow updating times/notes by requester or admin
         if "start_datetime" in validated_data:

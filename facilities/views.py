@@ -235,6 +235,12 @@ class ReservationRetrieveUpdateAPIView(generics.RetrieveUpdateDestroyAPIView):
 				send_reservation_status_notification(reservation, new_status)
 			except Exception:
 				pass  # Don't fail the request if notification fails
+		elif old_status == new_status:
+			# Status didn't change, this is a regular update - notify admins
+			try:
+				send_reservation_created_notification(reservation, is_update=True)
+			except Exception:
+				pass  # Don't fail the request if notification fails
   
 	def get_object(self):
 		obj = super().get_object()

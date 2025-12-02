@@ -542,8 +542,15 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """Only allow coaches to update training sessions for their own teams"""
+        from notifications.utils import send_training_session_notification
+        
         if self.request.user.is_admin:  # Admins can update any training session
-            serializer.save()
+            session = serializer.save()
+            # Send update notification
+            try:
+                send_training_session_notification(session, creator=self.request.user, is_update=True)
+            except Exception as e:
+                print(f"[DEBUG] Failed to send training session update notification: {e}")
         elif self.request.user.is_coach and hasattr(self.request.user, "coach_profile"):
             # Coaches can only update training sessions for their teams
             from django.db.models import Q
@@ -563,7 +570,12 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
                     raise PermissionDenied(
                         "You can only assign training sessions to your own teams"
                     )
-                serializer.save()
+                session = serializer.save()
+                # Send update notification
+                try:
+                    send_training_session_notification(session, creator=self.request.user, is_update=True)
+                except Exception as e:
+                    print(f"[DEBUG] Failed to send training session update notification: {e}")
             else:
                 raise PermissionDenied(
                     "You can only update training sessions for your own teams"
