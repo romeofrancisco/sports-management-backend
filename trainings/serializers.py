@@ -251,6 +251,7 @@ class PlayerTrainingSerializer(serializers.ModelSerializer):
 
 class TrainingSessionListSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source="team.name", read_only=True)
+    team_logo = serializers.SerializerMethodField()
     categories_count = serializers.IntegerField(
         source="categories.count", read_only=True
     )
@@ -274,6 +275,7 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
             "end_time",
             "team",
             "team_name",
+            "team_logo",
             "location",
             "status",
             "auto_status",
@@ -285,6 +287,15 @@ class TrainingSessionListSerializer(serializers.ModelSerializer):
             "can_record_metrics",
             "player_attendance_status",
         ]
+
+    def get_team_logo(self, obj):
+        """Safely get team logo URL"""
+        if obj.team and obj.team.logo:
+            try:
+                return obj.team.logo.url
+            except ValueError:
+                return None
+        return None
 
     def get_players_count(self, obj):
         return obj.player_records.count()
