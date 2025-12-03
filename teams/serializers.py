@@ -1,9 +1,9 @@
 from rest_framework.serializers import ModelSerializer, Serializer
 from rest_framework import serializers
-from .models import Team, Player, Coach, AcademicInfo
+from django.db import models, IntegrityError
+from .models import Team, Player, Coach, AcademicInfo, PlayerRegistration, PlayerRegistrationDocument
 from users.serializers import PlayerSerializer, CoachSerializer
 from users.models import User
-from django.db import IntegrityError
 from sports.models import Sport, Position
 from sports.serializers import SportSerializer, PositionSerializer
 
@@ -632,3 +632,296 @@ class CoachInfoSerializer(ModelSerializer):
             instance.save()
 
             return instance
+
+
+# ============== Player Registration Serializers ==============
+
+class PlayerRegistrationDocumentSerializer(ModelSerializer):
+    """Serializer for registration documents with Cloudinary URLs"""
+    document_type_display = serializers.CharField(source='get_document_type_display', read_only=True)
+    file_url = serializers.SerializerMethodField()
+    preview_url = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = PlayerRegistrationDocument
+        fields = [
+            'id', 'document_type', 'document_type_display', 'title', 
+            'file', 'file_url', 'preview_url', 'download_url',
+            'file_extension', 'uploaded_at', 'synced_document'
+        ]
+        read_only_fields = ['uploaded_at', 'file_extension', 'synced_document']
+    
+    def get_file_url(self, obj):
+        """Get the Cloudinary file URL"""
+        return obj.file_url
+    
+    def get_preview_url(self, obj):
+        """Get the Microsoft Office Online preview URL"""
+        return obj.preview_url
+    
+    def get_download_url(self, obj):
+        """Get the download URL"""
+        return obj.download_url
+
+
+class PlayerRegistrationDocumentUploadSerializer(ModelSerializer):
+    """Serializer for uploading registration documents"""
+    
+    class Meta:
+        model = PlayerRegistrationDocument
+        fields = ['document_type', 'title', 'file']
+    
+    def validate_file(self, value):
+        # Validate file size (max 10MB)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if value.size > max_size:
+            raise serializers.ValidationError("File size cannot exceed 10MB.")
+        
+        # Validate file extension
+        import os
+        _, ext = os.path.splitext(value.name)
+        allowed_extensions = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png']
+        if ext.lower() not in allowed_extensions:
+            raise serializers.ValidationError(
+                f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"
+            )
+        
+        return value
+
+
+class PlayerRegistrationListSerializer(ModelSerializer):
+    """Serializer for listing player registrations"""
+    sport = SportSerializer(read_only=True)
+    team = SimpleTeamSerializer(read_only=True)
+    positions = PositionSerializer(many=True, read_only=True, source='position')
+    academic_info = AcademicInfoSerializer(read_only=True)
+    documents_count = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = PlayerRegistration
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex',
+            'date_of_birth', 'phone_number', 'height', 'weight',
+            'sport', 'positions', 'academic_info', 'team', 'jersey_number',
+            'status', 'documents_count', 'created_at', 'updated_at',
+            'reviewed_by_name', 'reviewed_at', 'rejection_reason'
+        ]
+    
+    def get_documents_count(self, obj):
+        return obj.documents.count()
+    
+    def get_full_name(self, obj):
+        return obj.get_full_name()
+    
+    def get_reviewed_by_name(self, obj):
+        if obj.reviewed_by:
+            return obj.reviewed_by.get_full_name()
+        return None
+
+
+class PlayerRegistrationDetailSerializer(ModelSerializer):
+    """Serializer for detailed player registration view"""
+    sport = SportSerializer(read_only=True)
+    team = SimpleTeamSerializer(read_only=True)
+    positions = PositionSerializer(many=True, read_only=True, source='position')
+    academic_info = AcademicInfoSerializer(read_only=True)
+    documents = PlayerRegistrationDocumentSerializer(many=True, read_only=True)
+    full_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
+    approved_player_info = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = PlayerRegistration
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex',
+            'date_of_birth', 'phone_number', 'height', 'weight',
+            'sport', 'positions', 'academic_info', 'team', 'jersey_number',
+            'status', 'documents', 'created_at', 'updated_at',
+            'reviewed_by', 'reviewed_by_name', 'reviewed_at', 'rejection_reason',
+            'approved_player', 'approved_player_info'
+        ]
+    
+    def get_full_name(self, obj):
+        return obj.get_full_name()
+    
+    def get_reviewed_by_name(self, obj):
+        if obj.reviewed_by:
+            return obj.reviewed_by.get_full_name()
+        return None
+    
+    def get_approved_player_info(self, obj):
+        if obj.approved_player:
+            return {
+                'id': obj.approved_player.user.id,
+                'slug': obj.approved_player.slug,
+                'full_name': obj.approved_player.user.get_full_name(),
+            }
+        return None
+
+
+class PlayerRegistrationCreateSerializer(ModelSerializer):
+    """Serializer for creating a player registration (self-registration)"""
+    sport_id = serializers.PrimaryKeyRelatedField(
+        queryset=Sport.objects.all(),
+        source='sport',
+        write_only=True
+    )
+    position_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Position.objects.all(),
+        many=True,
+        required=False,
+        write_only=True
+    )
+    academic_info_id = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicInfo.objects.all(),
+        source='academic_info',
+        required=False,
+        allow_null=True,
+        write_only=True
+    )
+    documents = PlayerRegistrationDocumentUploadSerializer(many=True, required=False, write_only=True)
+    
+    # Read-only fields for response
+    sport = SportSerializer(read_only=True)
+    positions = PositionSerializer(many=True, read_only=True, source='position')
+    academic_info = AcademicInfoSerializer(read_only=True)
+    
+    class Meta:
+        model = PlayerRegistration
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'sex',
+            'date_of_birth', 'phone_number', 'height', 'weight',
+            'sport_id', 'sport', 'position_ids', 'positions',
+            'academic_info_id', 'academic_info',
+            'documents', 'status', 'created_at'
+        ]
+        read_only_fields = ['status', 'created_at']
+    
+    def validate_email(self, value):
+        # Check if email already exists in User model
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        
+        # Check if there's already a pending registration with this email
+        if PlayerRegistration.objects.filter(email=value, status=PlayerRegistration.Status.PENDING).exists():
+            raise serializers.ValidationError("A pending registration with this email already exists.")
+        
+        return value
+    
+    def validate_position_ids(self, value):
+        sport_id = self.initial_data.get('sport_id')
+        if sport_id:
+            try:
+                sport = Sport.objects.get(pk=sport_id)
+                if sport.requires_stats and not value:
+                    raise serializers.ValidationError(
+                        "At least one position is required for this sport."
+                    )
+            except Sport.DoesNotExist:
+                pass
+        return value
+    
+    def validate(self, attrs):
+        # Validate positions belong to the selected sport
+        positions = attrs.get('position_ids', [])
+        sport = attrs.get('sport')
+        
+        if positions and sport:
+            for position in positions:
+                if position.sport != sport:
+                    raise serializers.ValidationError({
+                        'position_ids': f"Position '{position.name}' does not belong to sport '{sport.name}'."
+                    })
+        
+        return attrs
+    
+    def create(self, validated_data):
+        from django.db import transaction
+        
+        positions = validated_data.pop('position_ids', [])
+        documents_data = validated_data.pop('documents', [])
+        
+        with transaction.atomic():
+            registration = PlayerRegistration.objects.create(**validated_data)
+            
+            if positions:
+                registration.position.set(positions)
+            
+            # Create documents
+            for doc_data in documents_data:
+                PlayerRegistrationDocument.objects.create(
+                    registration=registration,
+                    **doc_data
+                )
+            
+            return registration
+
+
+class PlayerRegistrationApproveSerializer(serializers.Serializer):
+    """Serializer for approving a player registration"""
+    team_id = serializers.PrimaryKeyRelatedField(
+        queryset=Team.objects.all(),
+        required=True
+    )
+    jersey_number = serializers.IntegerField(required=True, min_value=0, max_value=99)
+    
+    def validate(self, attrs):
+        team = attrs.get('team_id')
+        jersey_number = attrs.get('jersey_number')
+        
+        # Validate jersey number uniqueness within team
+        if Player.objects.filter(team=team, jersey_number=jersey_number).exists():
+            raise serializers.ValidationError({
+                'jersey_number': f"Jersey number {jersey_number} is already taken in team '{team.name}'."
+            })
+        
+        # Validate team capacity
+        registration = self.context.get('registration')
+        if registration and team:
+            sport = registration.sport
+            current_player_count = team.players.count()
+            if current_player_count >= sport.max_players_per_team:
+                raise serializers.ValidationError({
+                    'team_id': f"Team '{team.name}' has reached its maximum capacity of {sport.max_players_per_team} players."
+                })
+        
+        return attrs
+
+
+class PlayerRegistrationRejectSerializer(serializers.Serializer):
+    """Serializer for rejecting a player registration"""
+    rejection_reason = serializers.CharField(required=True, max_length=1000)
+
+
+class PlayerDocumentUploadSerializer(serializers.Serializer):
+    """Serializer for uploading documents to an existing player (coach-created)"""
+    
+    class DocumentType(models.TextChoices):
+        MEDICAL_CERT = "medical_cert", "Medical Certificate"
+        PARENT_CONSENT = "parent_consent", "Parent/Guardian Consent Form"
+        ID_DOCUMENT = "id_document", "ID Document"
+        OTHER = "other", "Other"
+    
+    document_type = serializers.ChoiceField(choices=DocumentType.choices, required=True)
+    title = serializers.CharField(max_length=255, required=True)
+    file = serializers.FileField(required=True)
+    
+    def validate_file(self, value):
+        # Validate file size (max 10MB)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if value.size > max_size:
+            raise serializers.ValidationError("File size cannot exceed 10MB.")
+        
+        # Validate file extension
+        import os
+        _, ext = os.path.splitext(value.name)
+        allowed_extensions = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png']
+        if ext.lower() not in allowed_extensions:
+            raise serializers.ValidationError(
+                f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"
+            )
+        
+        return value

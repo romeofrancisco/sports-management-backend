@@ -4,7 +4,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from teams.models import Coach, Player, Team
 from users.models import User
-from .models import Folder
+from .models import Folder, Document
 import threading
 
 # Thread-local storage to track when we're in a CASCADE deletion
@@ -379,3 +379,49 @@ def prevent_critical_folder_deletion(sender, instance, **kwargs):
         )
     
     # All other folders (user-created subfolders) can be deleted
+
+
+# ============== Player Registration Document Sync Signals ==============
+
+@receiver(pre_delete, sender=Player)
+def cleanup_registration_documents_on_player_delete(sender, instance, **kwargs):
+    """
+    When a player is deleted, also delete their synced registration documents.
+    This ensures the registration documents are cleaned up when the player is removed.
+    """
+    from teams.models import PlayerRegistration, PlayerRegistrationDocument
+    
+    # Find the registration associated with this player
+    try:
+        registration = PlayerRegistration.objects.get(approved_player=instance)
+        
+        # Delete synced documents in the Documents app
+        for reg_doc in registration.documents.all():
+            if reg_doc.synced_document:
+                try:
+                    # Delete the synced document
+                    synced_doc = reg_doc.synced_document
+                    reg_doc.synced_document = None
+                    reg_doc.save(update_fields=['synced_document'])
+                    synced_doc.delete()
+                except Exception as e:
+                    print(f"Error deleting synced document: {e}")
+    except PlayerRegistration.DoesNotExist:
+        pass  # Player was created without registration (legacy)
+
+
+@receiver(pre_delete, sender=Document)
+def sync_document_deletion_to_registration(sender, instance, **kwargs):
+    """
+    When a synced document is deleted from the Documents app,
+    update the registration document to clear the synced_document reference.
+    """
+    from teams.models import PlayerRegistrationDocument
+    
+    # Check if this document is linked to a registration document
+    try:
+        reg_doc = PlayerRegistrationDocument.objects.get(synced_document=instance)
+        reg_doc.synced_document = None
+        reg_doc.save(update_fields=['synced_document'])
+    except PlayerRegistrationDocument.DoesNotExist:
+        pass  # Not a registration document

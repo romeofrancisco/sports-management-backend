@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('documents', '0004_alter_document_file_alter_document_google_drive_id_and_more'),
+        ('documents', '0003_add_google_drive_id'),
     ]
 
     operations = [

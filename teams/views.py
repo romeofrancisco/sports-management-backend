@@ -6,10 +6,18 @@ from .serializers import (
     TeamSerializer,
     GameSummarySerializer,
     AcademicInfoSerializer,
+    PlayerRegistrationListSerializer,
+    PlayerRegistrationDetailSerializer,
+    PlayerRegistrationCreateSerializer,
+    PlayerRegistrationDocumentSerializer,
+    PlayerRegistrationDocumentUploadSerializer,
+    PlayerRegistrationApproveSerializer,
+    PlayerRegistrationRejectSerializer,
+    PlayerDocumentUploadSerializer,
 )
-from .models import Player, Coach, Team, AcademicInfo
+from .models import Player, Coach, Team, AcademicInfo, PlayerRegistration, PlayerRegistrationDocument
 from sports.models import Sport
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from rest_framework.response import Response
 from rest_framework import status
@@ -39,7 +47,6 @@ class Pagination(PageNumberPagination):
 class AcademicInfoViewSet(ModelViewSet):
     """
     ViewSet for managing AcademicInfo records.
-    - List/Retrieve: All authenticated users can view
     - Create/Update/Delete: Only admins can modify
     """
     queryset = AcademicInfo.objects.all()
@@ -55,7 +62,7 @@ class AcademicInfoViewSet(ModelViewSet):
         but restrict write operations to admins only
         """
         if self.action in ['list', 'retrieve']:
-            permission_classes = [IsAuthenticated]
+            permission_classes = [AllowAny]
         else:
             permission_classes = [IsAdminUser]
         return [permission() for permission in permission_classes]
@@ -1257,6 +1264,163 @@ class PlayerViews(ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrCoachUser], url_path='upload-document')
+    def upload_document(self, request, **kwargs):
+        """
+        Upload a document for an existing player (coach-created).
+        The document is stored directly in the player's personal folder in the Documents app.
+        """
+        from documents.models import Document, Folder
+        from documents.folder_utils import get_user_personal_folder
+        
+        player = self.get_object()
+        
+        # Verify permissions - coaches can only upload to players on their teams
+        if not request.user.is_admin and hasattr(request.user, 'coach_profile'):
+            coach = request.user.coach_profile
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
+            if player.team not in coached_teams:
+                return Response(
+                    {'error': 'You can only upload documents for players on your teams'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        serializer = PlayerDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        document_type = serializer.validated_data['document_type']
+        title = serializer.validated_data['title']
+        uploaded_file = serializer.validated_data['file']
+        
+        # Get file extension
+        import os
+        _, ext = os.path.splitext(uploaded_file.name)
+        file_extension = ext.lower() if ext else ''
+        
+        # Get or create the player's personal folder
+        player_folder = get_user_personal_folder(player.user)
+        
+        if not player_folder:
+            return Response(
+                {'error': 'Could not access player document folder'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Create the Document record
+        document = Document.objects.create(
+            title=title,
+            file_extension=file_extension,
+            folder=player_folder,
+            uploaded_by=request.user,
+            owner=player.user,
+            description=f"Player document: {dict(PlayerDocumentUploadSerializer.DocumentType.choices).get(document_type, document_type)}"
+        )
+        
+        return Response({
+            'message': 'Document uploaded successfully',
+            'document': {
+                'id': document.id,
+                'title': document.title,
+                'document_type': document_type,
+                'file_extension': document.file_extension,
+                'folder': player_folder.name if player_folder else None,
+                'uploaded_at': document.uploaded_at,
+            }
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAdminOrCoachUser], url_path='documents')
+    def list_documents(self, request, **kwargs):
+        """
+        List all documents for a player.
+        Returns documents from the player's personal folder.
+        """
+        from documents.models import Document
+        from documents.folder_utils import get_user_personal_folder
+        
+        player = self.get_object()
+        
+        # Verify permissions - coaches can only view documents for players on their teams
+        if not request.user.is_admin and hasattr(request.user, 'coach_profile'):
+            coach = request.user.coach_profile
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
+            if player.team not in coached_teams:
+                return Response(
+                    {'error': 'You can only view documents for players on your teams'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        # Get the player's personal folder
+        player_folder = get_user_personal_folder(player.user)
+        
+        if not player_folder:
+            return Response({'documents': []})
+        
+        # Get all documents in the player's folder
+        documents = Document.objects.filter(folder=player_folder).order_by('-uploaded_at')
+        
+        return Response({
+            'documents': [
+                {
+                    'id': doc.id,
+                    'title': doc.title,
+                    'file_extension': doc.file_extension,
+                    'description': doc.description,
+                    'uploaded_at': doc.uploaded_at,
+                    'uploaded_by': doc.uploaded_by.get_full_name() if doc.uploaded_by else None,
+                }
+                for doc in documents
+            ]
+        })
+    
+    @action(detail=True, methods=['delete'], permission_classes=[IsAdminOrCoachUser], url_path='documents/(?P<document_id>[^/.]+)')
+    def delete_document(self, request, document_id=None, **kwargs):
+        """
+        Delete a document from a player's personal folder.
+        """
+        from documents.models import Document
+        from documents.folder_utils import get_user_personal_folder
+        
+        player = self.get_object()
+        
+        # Verify permissions - coaches can only delete documents for players on their teams
+        if not request.user.is_admin and hasattr(request.user, 'coach_profile'):
+            coach = request.user.coach_profile
+            coached_teams = Team.objects.filter(
+                Q(head_coach=coach) | Q(assistant_coach=coach)
+            )
+            if player.team not in coached_teams:
+                return Response(
+                    {'error': 'You can only delete documents for players on your teams'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        # Get the player's personal folder
+        player_folder = get_user_personal_folder(player.user)
+        
+        if not player_folder:
+            return Response(
+                {'error': 'Player document folder not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Find the document
+        try:
+            document = Document.objects.get(id=document_id, folder=player_folder)
+        except Document.DoesNotExist:
+            return Response(
+                {'error': 'Document not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Delete the document
+        document.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CoachViews(ModelViewSet):
@@ -1327,3 +1491,375 @@ class CoachViews(ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class PlayerRegistrationViewSet(ModelViewSet):
+    """
+    ViewSet for managing player self-registrations.
+    - Public endpoint for player self-registration (create)
+    - Admin can see all registrations
+    - Coaches can only see registrations for sports they handle
+    - Approve/Reject actions for admin and coaches
+    """
+    queryset = PlayerRegistration.objects.all()
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ['first_name', 'last_name', 'email']
+    filterset_fields = ['status', 'sport']
+    pagination_class = Pagination
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return PlayerRegistrationCreateSerializer
+        elif self.action in ['retrieve', 'approve', 'reject']:
+            return PlayerRegistrationDetailSerializer
+        return PlayerRegistrationListSerializer
+    
+    def get_permissions(self):
+        """
+        - create: Allow anyone (public registration)
+        - list, retrieve: Admin or coaches
+        - approve, reject: Admin or coaches
+        - destroy: Admin only
+        """
+        if self.action == 'create':
+            permission_classes = [AllowAny]
+        elif self.action in ['destroy']:
+            permission_classes = [IsAdminUser]
+        elif self.action in ['upload_document']:
+            permission_classes = [AllowAny]  # Allow document upload during registration
+        else:
+            permission_classes = [IsAdminOrCoachUser]
+        return [permission() for permission in permission_classes]
+    
+    def get_queryset(self):
+        """
+        Return registrations based on user role:
+        - Admin: All registrations
+        - Coach: Only registrations for sports they handle
+        """
+        user = self.request.user
+        
+        # For public registration creation, return all
+        if not user.is_authenticated:
+            return PlayerRegistration.objects.none()
+        
+        base_queryset = PlayerRegistration.objects.select_related(
+            'sport', 'team', 'academic_info', 'reviewed_by', 'approved_player'
+        ).prefetch_related('position', 'documents')
+        
+        # Admin can see all
+        if user.is_admin:
+            return base_queryset
+        
+        # Coaches can only see registrations for sports they handle
+        if hasattr(user, 'coach_profile'):
+            coach = user.coach_profile
+            coach_sports = coach.sports.all()
+            return base_queryset.filter(sport__in=coach_sports)
+        
+        return PlayerRegistration.objects.none()
+    
+    def create(self, request, *args, **kwargs):
+        """
+        Public endpoint for player self-registration.
+        Players can register with their basic info and upload documents.
+        """
+        from utils.email import send_registration_pending_email
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        registration = serializer.save()
+        
+        # Send confirmation email
+        try:
+            send_registration_pending_email(registration)
+        except Exception as e:
+            # Log the error but don't fail the registration
+            print(f"Failed to send registration pending email: {e}")
+        
+        return Response(
+            {
+                'message': 'Registration submitted successfully. Please check your email and wait for approval.',
+                'registration': PlayerRegistrationDetailSerializer(registration).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=True, methods=['post'], url_path='upload-document')
+    def upload_document(self, request, pk=None):
+        """
+        Upload a document for a registration.
+        Can be called multiple times to upload multiple documents.
+        """
+        try:
+            registration = PlayerRegistration.objects.get(pk=pk)
+        except PlayerRegistration.DoesNotExist:
+            return Response(
+                {'error': 'Registration not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Only allow document upload for pending registrations
+        if registration.status != PlayerRegistration.Status.PENDING:
+            return Response(
+                {'error': 'Cannot upload documents for non-pending registrations'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = PlayerRegistrationDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        try:
+            document = PlayerRegistrationDocument.objects.create(
+                registration=registration,
+                **serializer.validated_data
+            )
+        except Exception as e:
+            # Handle Cloudinary upload errors
+            error_message = str(e)
+            if 'Unsupported' in error_message or 'Invalid' in error_message:
+                return Response(
+                    {'error': f'File upload failed: {error_message}. Please try a different file format (PDF, JPG, PNG recommended).'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            raise
+        
+        return Response(
+            PlayerRegistrationDocumentSerializer(document).data,
+            status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=True, methods=['delete'], url_path='documents/(?P<doc_id>[^/.]+)')
+    def delete_document(self, request, pk=None, doc_id=None):
+        """Delete a document from a registration"""
+        try:
+            registration = PlayerRegistration.objects.get(pk=pk)
+        except PlayerRegistration.DoesNotExist:
+            return Response(
+                {'error': 'Registration not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Only allow document deletion for pending registrations
+        if registration.status != PlayerRegistration.Status.PENDING:
+            return Response(
+                {'error': 'Cannot delete documents for non-pending registrations'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            document = registration.documents.get(pk=doc_id)
+        except PlayerRegistrationDocument.DoesNotExist:
+            return Response(
+                {'error': 'Document not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Delete the file
+        if document.file:
+            document.file.delete(save=False)
+        document.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrCoachUser])
+    def approve(self, request, pk=None):
+        """
+        Approve a player registration.
+        Creates the user and player, syncs documents to the Documents app.
+        """
+        from django.db import transaction
+        from users.models import User
+        from documents.models import Document, Folder
+        from documents.folder_utils import get_user_personal_folder
+        from utils.email import send_registration_approved_email
+        
+        registration = self.get_object()
+        
+        if registration.status != PlayerRegistration.Status.PENDING:
+            return Response(
+                {'error': f'Registration is already {registration.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate approval data
+        approve_serializer = PlayerRegistrationApproveSerializer(
+            data=request.data,
+            context={'request': request, 'registration': registration}
+        )
+        approve_serializer.is_valid(raise_exception=True)
+        
+        team = approve_serializer.validated_data['team_id']
+        jersey_number = approve_serializer.validated_data['jersey_number']
+        
+        # Verify coach can approve for this sport
+        user = request.user
+        if not user.is_admin and hasattr(user, 'coach_profile'):
+            coach = user.coach_profile
+            if not coach.sports.filter(id=registration.sport.id).exists():
+                return Response(
+                    {'error': 'You can only approve registrations for sports you handle'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            # Also verify the coach can assign to this team
+            if team.sport != registration.sport:
+                return Response(
+                    {'error': 'Team sport does not match registration sport'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        try:
+            with transaction.atomic():
+                # Create the User (don't send default set password email)
+                new_user = User(
+                    email=registration.email,
+                    first_name=registration.first_name,
+                    last_name=registration.last_name,
+                    sex=registration.sex,
+                    date_of_birth=registration.date_of_birth,
+                    phone_number=registration.phone_number,
+                    role=User.Role.PLAYER,
+                    is_staff=False,
+                )
+                new_user.set_unusable_password()
+                new_user.save()
+                
+                # Create the Player
+                player = Player.objects.create(
+                    user=new_user,
+                    height=registration.height,
+                    weight=registration.weight,
+                    sport=registration.sport,
+                    team=team,
+                    jersey_number=jersey_number,
+                    academic_info=registration.academic_info,
+                )
+                
+                # Set positions
+                player.position.set(registration.position.all())
+                
+                # Sync documents to the Documents app
+                player_folder = get_user_personal_folder(new_user)
+                
+                for reg_doc in registration.documents.all():
+                    # Create a Document record linked to the player's folder
+                    if player_folder:
+                        doc = Document.objects.create(
+                            title=reg_doc.title,
+                            file_extension=reg_doc.file_extension,
+                            folder=player_folder,
+                            uploaded_by=new_user,
+                            owner=new_user,
+                            description=f"Registration document: {reg_doc.get_document_type_display()}"
+                        )
+                        
+                        # Link the registration document to the synced document
+                        reg_doc.synced_document = doc
+                        reg_doc.save(update_fields=['synced_document'])
+                
+                # Update registration status
+                registration.status = PlayerRegistration.Status.APPROVED
+                registration.team = team
+                registration.jersey_number = jersey_number
+                registration.reviewed_by = request.user
+                registration.reviewed_at = timezone.now()
+                registration.approved_player = player
+                registration.save()
+                
+                # Send approval email with set password link
+                try:
+                    send_registration_approved_email(registration, new_user)
+                except Exception as e:
+                    # Log the error but don't fail the approval
+                    print(f"Failed to send registration approved email: {e}")
+                
+                return Response({
+                    'message': 'Registration approved successfully',
+                    'player': PlayerInfoSerializer(player, context={'request': request}).data,
+                    'registration': PlayerRegistrationDetailSerializer(registration).data
+                })
+                
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to approve registration: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrCoachUser])
+    def reject(self, request, pk=None):
+        """Reject a player registration"""
+        from utils.email import send_registration_rejected_email
+        
+        registration = self.get_object()
+        
+        if registration.status != PlayerRegistration.Status.PENDING:
+            return Response(
+                {'error': f'Registration is already {registration.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify coach can reject for this sport
+        user = request.user
+        if not user.is_admin and hasattr(user, 'coach_profile'):
+            coach = user.coach_profile
+            if not coach.sports.filter(id=registration.sport.id).exists():
+                return Response(
+                    {'error': 'You can only reject registrations for sports you handle'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        # Validate rejection reason
+        reject_serializer = PlayerRegistrationRejectSerializer(data=request.data)
+        reject_serializer.is_valid(raise_exception=True)
+        
+        registration.status = PlayerRegistration.Status.REJECTED
+        registration.rejection_reason = reject_serializer.validated_data['rejection_reason']
+        registration.reviewed_by = request.user
+        registration.reviewed_at = timezone.now()
+        registration.save()
+        
+        # Send rejection email
+        try:
+            send_registration_rejected_email(registration)
+        except Exception as e:
+            # Log the error but don't fail the rejection
+            print(f"Failed to send registration rejected email: {e}")
+        
+        return Response({
+            'message': 'Registration rejected',
+            'registration': PlayerRegistrationDetailSerializer(registration).data
+        })
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAdminOrCoachUser])
+    def pending(self, request):
+        """Get all pending registrations"""
+        queryset = self.get_queryset().filter(status=PlayerRegistration.Status.PENDING)
+        page = self.paginate_queryset(queryset)
+        
+        if page is not None:
+            serializer = PlayerRegistrationListSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = PlayerRegistrationListSerializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAdminOrCoachUser])
+    def stats(self, request):
+        """Get registration statistics"""
+        queryset = self.get_queryset()
+        
+        stats = {
+            'total': queryset.count(),
+            'pending': queryset.filter(status=PlayerRegistration.Status.PENDING).count(),
+            'approved': queryset.filter(status=PlayerRegistration.Status.APPROVED).count(),
+            'rejected': queryset.filter(status=PlayerRegistration.Status.REJECTED).count(),
+        }
+        
+        # Group by sport
+        by_sport = queryset.values('sport__name').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        stats['by_sport'] = list(by_sport)
+        
+        return Response(stats)
