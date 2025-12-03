@@ -232,7 +232,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'google_drive_id', 'version', 'folder', 'folder_name', 'uploaded_by', 
+            'id', 'title', 'google_drive_id', 'version', 'folder', 'folder_name', 'uploaded_by', 
             'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status']
@@ -265,7 +265,7 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'google_drive_id', 'folder', 'version', 'folder_detail', 'uploaded_by', 
+            'id', 'title', 'google_drive_id', 'folder', 'version', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
             'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 
             'file_extension', 'can_edit', 'can_delete'

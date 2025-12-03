@@ -1,14 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import FolderViewSet, DocumentViewSet, DocumentPermissionViewSet
-from .syncfusion_views import (
-    import_document,
-    export_document,
-    systemClipboard,
-    restrictediting,
-    spreadsheet_open,
-    spreadsheet_save,
-)
 from .google_views import (
     get_google_auth_url,
     exchange_google_token,
@@ -30,13 +22,6 @@ router.register(
 
 urlpatterns = [
     path("", include(router.urls)),
-    # Syncfusion Document Editor endpoints (legacy - can be removed later)
-    path("editor/import/", import_document, name="import-document"),
-    path("editor/export/", export_document, name="export-document"),
-    path("editor/SystemClipboard/", systemClipboard, name="system-clipboard"),
-    path("editor/RestrictEditing/", restrictediting, name="restrict-editing"),
-    path("spreadsheet/open/", spreadsheet_open, name="spreadsheet-open"),
-    path("spreadsheet/save/", spreadsheet_save, name="spreadsheet-save"),
     # Google Drive OAuth2 endpoints
     path("google/auth/", get_google_auth_url, name="google-auth"),
     path("google/token/", exchange_google_token, name="google-token"),

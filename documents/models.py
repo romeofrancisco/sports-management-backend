@@ -2,8 +2,6 @@ import os
 from django.db import models
 from users.models import User
 from django.core.exceptions import ValidationError
-from .storage import DocumentCloudinaryStorage
-from cloudinary.utils import cloudinary_url
 
 
 class Folder(models.Model):
@@ -145,7 +143,6 @@ class Document(models.Model):
 
     title = models.CharField(max_length=255)
     google_drive_id = models.CharField(max_length=100, blank=True, null=True, help_text="Google Drive file ID (primary storage)")
-    file = models.FileField(upload_to="documents/", storage=DocumentCloudinaryStorage(), max_length=255, blank=True, null=True, help_text="Legacy Cloudinary storage (deprecated)")
     file_extension = models.CharField(max_length=10, blank=True)
     version = models.CharField(max_length=50, blank=True, null=True, help_text="Google Drive version/modified time")
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
