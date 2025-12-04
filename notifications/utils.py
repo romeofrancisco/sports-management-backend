@@ -2,7 +2,7 @@ from django.conf import settings
 from teams.models import Team
 import firebase_admin
 from firebase_admin import credentials, messaging
-from .models import FCMDevice
+from .models import FCMDevice, NotificationLog
 
 # Initialize Firebase Admin SDK
 try:
@@ -11,6 +11,35 @@ try:
         firebase_admin.initialize_app(cred)
 except Exception as e:
     print(f"Firebase Admin initialization error: {e}")
+
+
+def log_notification(recipient, notification_type, action_type, title, body, related_object_id=None, related_object_type=None, click_action=None):
+    """
+    Create a notification log entry for a recipient.
+    
+    Args:
+        recipient: The User who received the notification
+        notification_type: Type of notification (from NotificationLog.NotificationType)
+        action_type: Action type (from NotificationLog.ActionType)
+        title: Notification title
+        body: Notification body
+        related_object_id: ID of the related object (game, event, etc.)
+        related_object_type: Type name of the related object
+        click_action: URL to navigate to when notification is clicked
+    """
+    try:
+        NotificationLog.objects.create(
+            recipient=recipient,
+            notification_type=notification_type,
+            action_type=action_type,
+            title=title,
+            body=body,
+            related_object_id=related_object_id,
+            related_object_type=related_object_type,
+            click_action=click_action
+        )
+    except Exception as e:
+        print(f"Error logging notification: {e}")
 
 
 def get_frontend_url():
@@ -39,13 +68,14 @@ def get_frontend_url():
     return url.rstrip('/')
 
 
-def send_game_notification(game, creator=None):
+def send_game_notification(game, creator=None, is_update=False):
     """
-    Send FCM push notifications to all players and coaches of both teams when a new game is scheduled.
+    Send FCM push notifications to all players and coaches of both teams when a game is scheduled or updated.
 
     Args:
-        game: The Game instance that was created
-        creator: The user who created the game (optional, to exclude from notifications)
+        game: The Game instance that was created or updated
+        creator: The user who created/updated the game (optional, to exclude from notifications)
+        is_update: Boolean indicating if this is an update notification
     """
     try:
         home_team = game.home_team
@@ -74,12 +104,6 @@ def send_game_notification(game, creator=None):
     if not team_users:
         return
 
-    # Get FCM tokens for these users
-    devices = FCMDevice.objects.filter(user__in=team_users)
-
-    if not devices.exists():
-        return
-
     # Prepare the notification payload
     game_date = game.date.strftime("%B %d, %Y") if game.date else "TBD"
     game_time = game.time.strftime("%I:%M %p") if game.time else "TBD"
@@ -99,9 +123,36 @@ def send_game_notification(game, creator=None):
         game_type_label = "Practice Game"
         click_action = f"{frontend_url}/games?gameId={game.id}"
     
-    notification_title = f"New {game_type_label} Scheduled"
+    action_word = "Updated" if is_update else "New"
+    notification_title = f"{action_word} {game_type_label} Scheduled"
     notification_body = f"{home_team.name} vs {away_team.name} on {game_date} at {game_time}"
 
+    # Determine notification type
+    if game.type == "league":
+        notif_type = NotificationLog.NotificationType.LEAGUE_GAME
+    elif game.type == "tournament":
+        notif_type = NotificationLog.NotificationType.TOURNAMENT_GAME
+    else:
+        notif_type = NotificationLog.NotificationType.PRACTICE_GAME
+
+    # Log notifications for ALL users (regardless of FCM device registration)
+    for user in team_users:
+        log_notification(
+            recipient=user,
+            notification_type=notif_type,
+            action_type=NotificationLog.ActionType.UPDATED if is_update else NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=game.id,
+            related_object_type='Game',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
 
     # Send individual messages to each token
     success_count = 0
@@ -115,6 +166,7 @@ def send_game_notification(game, creator=None):
                     "title": notification_title,
                     "body": notification_body,
                     "type": "game",
+                    "is_update": str(is_update).lower(),
                     "game_id": str(game.id),
                     "game_type": str(game.type),
                     "home_team_id": str(home_team.id),
@@ -139,14 +191,15 @@ def send_game_notification(game, creator=None):
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
 
 
-def send_bulk_game_notifications(games, creator=None):
+def send_bulk_game_notifications(games, creator=None, is_update=False):
     """
     Send FCM push notifications for multiple games at once (e.g., round robin creation).
     Sends a summary notification instead of one per game to avoid notification spam.
 
     Args:
-        games: List of Game instances that were created
-        creator: The user who created the games (optional, to exclude from notifications)
+        games: List of Game instances that were created or updated
+        creator: The user who created/updated the games (optional, to exclude from notifications)
+        is_update: Boolean indicating if this is an update notification
     """
     if not games:
         return
@@ -177,12 +230,6 @@ def send_bulk_game_notifications(games, creator=None):
     if not team_users:
         return
 
-    # Get FCM tokens for these users
-    devices = FCMDevice.objects.filter(user__in=team_users)
-
-    if not devices.exists():
-        return
-
     # Determine the context (tournament or league)
     first_game = games[0]
     frontend_url = get_frontend_url()
@@ -199,8 +246,28 @@ def send_bulk_game_notifications(games, creator=None):
         game_type_label = "League Games"
         click_action = f"{frontend_url}/leagues/{first_game.league.id}/seasons/{first_game.season.id}/games"
     
-    notification_title = f"{len(games)} New {game_type_label} Scheduled"
-    notification_body = f"New games have been scheduled for {context_name}. Check the schedule for details."
+    action_word = "Updated" if is_update else "New"
+    notification_title = f"{len(games)} {action_word} {game_type_label} Scheduled"
+    notification_body = f"{'Games have been updated' if is_update else 'New games have been scheduled'} for {context_name}. Check the schedule for details."
+
+    # Log notifications for ALL users (regardless of FCM device registration)
+    for user in team_users:
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.BULK_GAMES,
+            action_type=NotificationLog.ActionType.UPDATED if is_update else NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=first_game.id,
+            related_object_type='BulkGames',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
 
     # Send individual messages to each token
     success_count = 0
@@ -214,6 +281,7 @@ def send_bulk_game_notifications(games, creator=None):
                     "title": notification_title,
                     "body": notification_body,
                     "type": "bulk_games",
+                    "is_update": str(is_update).lower(),
                     "games_count": str(len(games)),
                     "game_type": str(first_game.type),
                     "context_name": context_name,
@@ -327,15 +395,17 @@ def send_fcm_notification(sender, team_id, message_text, message_id, team_name):
         print(f"🗑️ Removed {deleted_count} invalid FCM tokens")
 
 
-def send_training_session_notification(training_session, creator=None):
+def send_training_session_notification(training_session, creator=None, is_update=False):
     """
-    Send FCM push notifications to all players in a team when a new training session is created.
+    Send FCM push notifications to all players in a team when a training session is created or updated.
 
     Args:
-        training_session: The TrainingSession instance that was created
-        creator: The user who created the training session (optional, to exclude from notifications)
+        training_session: The TrainingSession instance that was created or updated
+        creator: The user who created/updated the training session (optional, to exclude from notifications)
+        is_update: Boolean indicating if this is an update notification
     """
-    print(f"[Training Notification] Starting notification for session: {training_session.title}")
+    action_word = "Updated" if is_update else "Starting"
+    print(f"[Training Notification] {action_word} notification for session: {training_session.title}")
     
     try:
         team = training_session.team
@@ -366,6 +436,29 @@ def send_training_session_notification(training_session, creator=None):
 
     print(f"[Training Notification] Will notify {len(player_users)} players (excluding creator)")
 
+    # Prepare the notification payload
+    session_date = training_session.date.strftime("%B %d, %Y") if training_session.date else "TBD"
+    session_time = training_session.start_time.strftime("%I:%M %p") if training_session.start_time else "TBD"
+    
+    action_word = "Updated" if is_update else "New"
+    notification_title = f"{action_word} Training Session: {training_session.title}"
+    notification_body = f"Scheduled for {session_date} at {session_time} - {training_session.location or 'Location TBD'}"
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/"
+
+    # Log notifications for ALL users (regardless of FCM device registration)
+    for user in player_users:
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.TRAINING,
+            action_type=NotificationLog.ActionType.UPDATED if is_update else NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=training_session.session_id,
+            related_object_type='TrainingSession',
+            click_action=click_action
+        )
+
     # Get FCM tokens for these users
     devices = FCMDevice.objects.filter(user__in=player_users)
 
@@ -374,15 +467,6 @@ def send_training_session_notification(training_session, creator=None):
         return
 
     print(f"[Training Notification] Found {devices.count()} FCM devices")
-
-    # Prepare the notification payload
-    session_date = training_session.date.strftime("%B %d, %Y") if training_session.date else "TBD"
-    session_time = training_session.start_time.strftime("%I:%M %p") if training_session.start_time else "TBD"
-    
-    notification_title = f"New Training Session: {training_session.title}"
-    notification_body = f"Scheduled for {session_date} at {session_time} - {training_session.location or 'Location TBD'}"
-    frontend_url = get_frontend_url()
-    click_action = f"{frontend_url}/"
 
     # Send individual messages to each token
     success_count = 0
@@ -396,6 +480,7 @@ def send_training_session_notification(training_session, creator=None):
                     "title": notification_title,
                     "body": notification_body,
                     "type": "training_session",
+                    "is_update": str(is_update).lower(),
                     "session_id": str(training_session.session_id),
                     "team_id": str(team.id),
                     "team_name": team.name,
@@ -422,16 +507,17 @@ def send_training_session_notification(training_session, creator=None):
         print(f"Removed {len(failed_tokens)} invalid FCM tokens")
 
 
-def send_event_notification(event, creator=None):
+def send_event_notification(event, creator=None, is_update=False):
     """
-    Send FCM push notifications for a new event.
+    Send FCM push notifications for a new or updated event.
     
-    - If admin creates the event: notify all coaches
-    - If coach creates the event: notify all players on teams they coach
+    - If admin creates/updates the event: notify all coaches
+    - If coach creates/updates the event: notify all players on teams they coach
 
     Args:
-        event: The Event instance that was created
-        creator: The user who created the event
+        event: The Event instance that was created or updated
+        creator: The user who created/updated the event
+        is_update: Boolean indicating if this is an update notification
     """
     from users.models import User
     from teams.models import Coach
@@ -444,9 +530,9 @@ def send_event_notification(event, creator=None):
     
     # Determine who to notify based on creator's role
     if creator.role == User.Role.ADMIN or creator.is_superuser:
-        # Admin created the event - notify all coaches
-        coaches = Coach.objects.select_related('user').all()
-        target_users = [coach.user for coach in coaches if coach.user and coach.user != creator]
+        # Admin created the event - notify all coaches and players
+        users = User.objects.all()
+        target_users = [user for user in users if user != creator]
     elif creator.role == User.Role.COACH or hasattr(creator, 'coach_profile'):
         # Coach created the event - notify all players on their teams
         try:
@@ -469,22 +555,36 @@ def send_event_notification(event, creator=None):
     if not target_users:
         return
 
-    # Get FCM tokens for these users
-    devices = FCMDevice.objects.filter(user__in=target_users)
-
-    if not devices.exists():
-        return
-
     # Prepare the notification payload
     event_date = event.startDate.strftime("%B %d, %Y") if event.startDate else "TBD"
     event_time = event.startDate.strftime("%I:%M %p") if event.startDate else "TBD"
     
-    notification_title = f"New Event: {event.title}"
+    action_word = "Updated" if is_update else "New"
+    notification_title = f"{action_word} Event: {event.title}"
     notification_body = f"Scheduled for {event_date} at {event_time}"
     if event.description:
         notification_body += f" - {event.description[:50]}{'...' if len(event.description) > 50 else ''}"
     frontend_url = get_frontend_url()
     click_action = f"{frontend_url}/calendar"
+
+    # Log notifications for ALL users (regardless of FCM device registration)
+    for user in target_users:
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.EVENT,
+            action_type=NotificationLog.ActionType.UPDATED if is_update else NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=event.id,
+            related_object_type='Event',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=target_users)
+
+    if not devices.exists():
+        return
 
     # Send individual messages to each token
     success_count = 0
@@ -498,6 +598,7 @@ def send_event_notification(event, creator=None):
                     "title": notification_title,
                     "body": notification_body,
                     "type": "event",
+                    "is_update": str(is_update).lower(),
                     "event_id": str(event.id),
                     "event_title": event.title,
                     "click_action": click_action
@@ -518,25 +619,20 @@ def send_event_notification(event, creator=None):
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
 
 
-def send_reservation_created_notification(reservation):
+def send_reservation_created_notification(reservation, is_update=False):
     """
-    Send FCM push notification to all admins when a new reservation is created.
+    Send FCM push notification to all admins when a reservation is created or updated.
 
     Args:
-        reservation: The Reservation instance that was created
+        reservation: The Reservation instance that was created or updated
+        is_update: Boolean indicating if this is an update notification
     """
     from users.models import User
     
     # Get all admin users
-    admin_users = User.objects.filter(role=User.Role.ADMIN)
+    admin_users = list(User.objects.filter(role=User.Role.ADMIN))
     
-    if not admin_users.exists():
-        return
-
-    # Get FCM tokens for admin users
-    devices = FCMDevice.objects.filter(user__in=admin_users)
-
-    if not devices.exists():
+    if not admin_users:
         return
 
     # Prepare the notification payload
@@ -545,10 +641,30 @@ def send_reservation_created_notification(reservation):
     reservation_date = reservation.start_datetime.strftime("%B %d, %Y") if reservation.start_datetime else "TBD"
     reservation_time = reservation.start_datetime.strftime("%I:%M %p") if reservation.start_datetime else "TBD"
     
-    notification_title = "New Facility Reservation Request"
-    notification_body = f"{coach_name} requested {facility_name} on {reservation_date} at {reservation_time}"
+    action_word = "Updated" if is_update else "New"
+    notification_title = f"{action_word} Facility Reservation Request"
+    notification_body = f"{coach_name} {'updated their request for' if is_update else 'requested'} {facility_name} on {reservation_date} at {reservation_time}"
     frontend_url = get_frontend_url()
     click_action = f"{frontend_url}/facility-reservation/approvals"
+
+    # Log notifications for ALL admin users (regardless of FCM device registration)
+    for user in admin_users:
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.FACILITY,
+            action_type=NotificationLog.ActionType.UPDATED if is_update else NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=reservation.id,
+            related_object_type='Reservation',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for admin users
+    devices = FCMDevice.objects.filter(user__in=admin_users)
+
+    if not devices.exists():
+        return
 
     # Send individual messages to each token
     success_count = 0
@@ -562,6 +678,7 @@ def send_reservation_created_notification(reservation):
                     "title": notification_title,
                     "body": notification_body,
                     "type": "reservation_request",
+                    "is_update": str(is_update).lower(),
                     "reservation_id": str(reservation.id),
                     "facility_id": str(reservation.facility.id) if reservation.facility else "",
                     "facility_name": facility_name,
@@ -593,12 +710,6 @@ def send_reservation_status_notification(reservation, new_status):
     """
     if not reservation.coach:
         return
-    
-    # Get FCM tokens for the coach
-    devices = FCMDevice.objects.filter(user=reservation.coach)
-
-    if not devices.exists():
-        return
 
     # Prepare the notification payload
     facility_name = reservation.facility.name if reservation.facility else "Unknown Facility"
@@ -612,6 +723,24 @@ def send_reservation_status_notification(reservation, new_status):
     notification_body = f"Your reservation for {facility_name} on {reservation_date} at {reservation_time} has been {new_status}"
     frontend_url = get_frontend_url()
     click_action = f"{frontend_url}/facility-reservation/approvals"
+
+    # Log notification for the coach (regardless of FCM device registration)
+    log_notification(
+        recipient=reservation.coach,
+        notification_type=NotificationLog.NotificationType.FACILITY_STATUS,
+        action_type=NotificationLog.ActionType.STATUS_CHANGE,
+        title=notification_title,
+        body=notification_body,
+        related_object_id=reservation.id,
+        related_object_type='Reservation',
+        click_action=click_action
+    )
+
+    # Get FCM tokens for the coach
+    devices = FCMDevice.objects.filter(user=reservation.coach)
+
+    if not devices.exists():
+        return
 
     # Send individual messages to each token
     success_count = 0

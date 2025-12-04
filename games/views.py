@@ -576,11 +576,18 @@ class GameViewSet(viewsets.ModelViewSet):
         # Deny access for other users
         raise PermissionDenied("You don't have permission to create games")
 
-    def _send_game_notification(self, game, creator=None):
-        """Send notification for a newly created game"""
+    def perform_update(self, serializer):
+        """Update game and send notification"""
+        user = self.request.user
+        game = serializer.save()
+        # Send update notification
+        self._send_game_notification(game, creator=user, is_update=True)
+
+    def _send_game_notification(self, game, creator=None, is_update=False):
+        """Send notification for a newly created or updated game"""
         try:
             from notifications.utils import send_game_notification
-            send_game_notification(game, creator=creator)
+            send_game_notification(game, creator=creator, is_update=is_update)
         except Exception as e:
             logger.error(f"Failed to send game notification for game {game.id}: {e}")
 

@@ -229,13 +229,186 @@ class AcademicInfo(models.Model):
         section_display = f" - {self.section}" if self.section else ""
         return f"{self.year_level} | {self.course}{section_display}"
 
+class PlayerRegistration(models.Model):
+    """
+    Model for player self-registration.
+    Players can register themselves and upload required documents.
+    Coaches/Admins can approve and assign to a team.
+    """
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+    
+    # User information (will be created upon approval)
+    email = models.EmailField(unique=True)
+    first_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150)
+    sex = models.CharField(max_length=10, choices=[("male", "Male"), ("female", "Female")], default="male")
+    date_of_birth = models.DateField(null=True, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    
+    # Player-specific information
+    height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
+    weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name='player_registrations')
+    position = models.ManyToManyField(Position, blank=True, related_name='player_registrations')
+    academic_info = models.ForeignKey(AcademicInfo, null=True, blank=True, on_delete=models.SET_NULL, related_name='player_registrations')
+    
+    # Registration status
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    
+    # Assigned by coach/admin upon approval
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name='pending_registrations')
+    jersey_number = models.IntegerField(null=True, blank=True)
+    
+    # Tracking
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        null=True, 
+        blank=True, 
+        on_delete=models.SET_NULL, 
+        related_name='reviewed_registrations'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    
+    # Link to the created player (after approval)
+    approved_player = models.OneToOneField(
+        'Player', 
+        null=True, 
+        blank=True, 
+        on_delete=models.SET_NULL, 
+        related_name='registration'
+    )
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.first_name} {self.last_name} - {self.sport.name} ({self.status})"
+    
+    def get_full_name(self):
+        return f"{self.first_name} {self.last_name}"
+
+from cloudinary_storage.storage import RawMediaCloudinaryStorage
+
+
+class PlayerRegistrationDocument(models.Model):
+    """
+    Documents uploaded during player self-registration.
+    Stored in Cloudinary for easy viewing and organization.
+    Uses RawMediaCloudinaryStorage to support all file types (PDF, DOCX, images, etc.)
+    """
+    class DocumentType(models.TextChoices):
+        MEDICAL_CERT = "medical_cert", "Medical Certificate"
+        PARENT_CONSENT = "parent_consent", "Parent/Guardian Consent Form"
+        ID_DOCUMENT = "id_document", "ID Document"
+        OTHER = "other", "Other"
+    
+    registration = models.ForeignKey(
+        PlayerRegistration, 
+        on_delete=models.CASCADE, 
+        related_name='documents'
+    )
+    document_type = models.CharField(max_length=50, choices=DocumentType.choices)
+    title = models.CharField(max_length=255)
+    file = models.FileField(
+        upload_to='registration_documents/',
+        storage=RawMediaCloudinaryStorage(),  # Use raw storage to support all file types
+        blank=True,
+        null=True
+    )
+    file_extension = models.CharField(max_length=10, blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    # Link to Document model after approval (synced)
+    synced_document = models.OneToOneField(
+        'documents.Document',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='registration_document'
+    )
+    
+    class Meta:
+        ordering = ['document_type', '-uploaded_at']
+    
+    def __str__(self):
+        return f"{self.title} ({self.get_document_type_display()}) - {self.registration.get_full_name()}"
+    
+    def save(self, *args, **kwargs):
+        # Extract file extension from file name or title
+        if not self.file_extension:
+            import os
+            if self.file:
+                _, ext = os.path.splitext(self.file.name)
+                if ext:
+                    self.file_extension = ext.lower()
+            elif self.title:
+                _, ext = os.path.splitext(self.title)
+                if ext:
+                    self.file_extension = ext.lower()
+        
+        super().save(*args, **kwargs)
+    
+    @property
+    def file_url(self):
+        """Get the Cloudinary file URL"""
+        if self.file:
+            return self.file.url
+        return None
+    
+    @property
+    def preview_url(self):
+        """
+        Get the Microsoft Office Online preview URL for documents.
+        Works for PDF, Word, Excel, PowerPoint files.
+        For images, returns the direct URL.
+        """
+        if not self.file:
+            return None
+        
+        file_url = self.file.url
+        ext = self.file_extension.lower().replace('.', '') if self.file_extension else ''
+        
+        # For images, return direct URL
+        if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']:
+            return file_url
+        
+        # For Office documents and PDFs, use Microsoft Office Online Viewer
+        if ext in ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']:
+            return f"https://view.officeapps.live.com/op/embed.aspx?src={file_url}"
+        
+        # For other files, return direct URL
+        return file_url
+    
+    @property
+    def download_url(self):
+        """Get the direct download URL (same as file_url for Cloudinary)"""
+        if self.file:
+            return self.file.url
+        return None
+    
+    def delete(self, *args, **kwargs):
+        """Delete the file when the document is deleted"""
+        if self.file:
+            try:
+                self.file.delete(save=False)
+            except Exception as e:
+                print(f"Error deleting file: {e}")
+        super().delete(*args, **kwargs)
+
+
 class Player(models.Model):
     user = models.OneToOneField( settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='player_profile', primary_key=True)
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
     slug = models.SlugField(max_length=255, unique=True)
     team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL, related_name="players")
-    jersey_number = models.IntegerField(blank=False)
+    jersey_number = models.IntegerField(blank=True, null=True)
     position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
     academic_info = models.ForeignKey(AcademicInfo, null=True, blank=True, on_delete=models.SET_NULL, related_name='players')

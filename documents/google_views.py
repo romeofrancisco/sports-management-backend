@@ -579,9 +579,12 @@ def upload_to_google_drive(request):
                 document.save(update_fields=['google_drive_id'])
         
         # Download from Cloudinary
-        file_url = document.file.url
-        if document.version:
-            file_url = f"{file_url}?v={document.version}"
+        file_url = document.cloudinary_url
+        if not file_url:
+            return Response(
+                {'error': 'Document has no file to upload. The source file may be missing.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         response = requests.get(file_url, timeout=30)
         if response.status_code != 200:
@@ -1131,18 +1134,15 @@ def open_document_in_google_drive(request):
         # Document doesn't have a Google Drive ID yet
         # This means it's a legacy Cloudinary document that needs to be uploaded
         
-        # Check if document has a Cloudinary file (legacy)
-        if not document.file:
+        # Check if document has a Cloudinary URL
+        file_url = document.cloudinary_url
+        if not file_url:
             return Response(
                 {'error': 'Document has no file to open. The file may have been deleted.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         # Download from Cloudinary
-        file_url = document.file.url
-        if document.version:
-            file_url = f"{file_url}?v={document.version}"
-        
         response = requests.get(file_url, timeout=30)
         if response.status_code != 200:
             return Response(

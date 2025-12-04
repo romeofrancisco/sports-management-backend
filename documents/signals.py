@@ -4,7 +4,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from teams.models import Coach, Player, Team
 from users.models import User
-from .models import Folder
+from .models import Folder, Document
 import threading
 
 # Thread-local storage to track when we're in a CASCADE deletion
@@ -17,6 +17,75 @@ def set_cascade_deletion_active(active=True):
 def is_cascade_deletion_active():
     """Check if CASCADE deletion is in progress"""
     return getattr(_thread_locals, 'cascade_deletion_active', False)
+
+
+# ============== User Name Change - Update Folder Name ==============
+
+@receiver(pre_save, sender=User)
+def track_user_name_change(sender, instance, **kwargs):
+    """Track the old name before saving to detect changes"""
+    if instance.pk:  # Only for existing users
+        try:
+            old_instance = User.objects.get(pk=instance.pk)
+            instance._old_first_name = old_instance.first_name
+            instance._old_last_name = old_instance.last_name
+            instance._old_full_name = old_instance.get_full_name()
+        except User.DoesNotExist:
+            instance._old_first_name = None
+            instance._old_last_name = None
+            instance._old_full_name = None
+    else:
+        instance._old_first_name = None
+        instance._old_last_name = None
+        instance._old_full_name = None
+
+
+@receiver(post_save, sender=User)
+def update_folder_name_on_user_name_change(sender, instance, created, **kwargs):
+    """
+    When a user's name changes, update their folder name to match.
+    This applies to both coaches and players.
+    """
+    if created:
+        return  # Skip for new users - folders haven't been created yet
+    
+    # Check if name actually changed
+    old_full_name = getattr(instance, '_old_full_name', None)
+    new_full_name = instance.get_full_name()
+    
+    if old_full_name == new_full_name:
+        return  # Name hasn't changed, nothing to do
+    
+    # Find user's personal folder and update name
+    if instance.is_coach:
+        # Update coach's personal folder
+        folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.COACH_PERSONAL,
+            owner=instance
+        ).first()
+    elif instance.is_player:
+        # Update player's personal folder
+        folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.PLAYER_PERSONAL,
+            owner=instance
+        ).first()
+    else:
+        folder = None
+    
+    if folder:
+        # Check for name conflicts in the same parent
+        folder_name = new_full_name
+        counter = 2
+        while Folder.objects.filter(name=folder_name, parent=folder.parent).exclude(pk=folder.pk).exists():
+            folder_name = f"{new_full_name} ({counter})"
+            counter += 1
+        
+        folder.name = folder_name
+        folder.save(update_fields=['name'])
+        print(f"✓ Updated folder name from '{old_full_name}' to '{folder_name}'")
+
+
+# ============== Root Folders Creation ==============
 
 
 @receiver(post_migrate)
@@ -379,3 +448,49 @@ def prevent_critical_folder_deletion(sender, instance, **kwargs):
         )
     
     # All other folders (user-created subfolders) can be deleted
+
+
+# ============== Player Registration Document Sync Signals ==============
+
+@receiver(pre_delete, sender=Player)
+def cleanup_registration_documents_on_player_delete(sender, instance, **kwargs):
+    """
+    When a player is deleted, also delete their synced registration documents.
+    This ensures the registration documents are cleaned up when the player is removed.
+    """
+    from teams.models import PlayerRegistration, PlayerRegistrationDocument
+    
+    # Find the registration associated with this player
+    try:
+        registration = PlayerRegistration.objects.get(approved_player=instance)
+        
+        # Delete synced documents in the Documents app
+        for reg_doc in registration.documents.all():
+            if reg_doc.synced_document:
+                try:
+                    # Delete the synced document
+                    synced_doc = reg_doc.synced_document
+                    reg_doc.synced_document = None
+                    reg_doc.save(update_fields=['synced_document'])
+                    synced_doc.delete()
+                except Exception as e:
+                    print(f"Error deleting synced document: {e}")
+    except PlayerRegistration.DoesNotExist:
+        pass  # Player was created without registration (legacy)
+
+
+@receiver(pre_delete, sender=Document)
+def sync_document_deletion_to_registration(sender, instance, **kwargs):
+    """
+    When a synced document is deleted from the Documents app,
+    update the registration document to clear the synced_document reference.
+    """
+    from teams.models import PlayerRegistrationDocument
+    
+    # Check if this document is linked to a registration document
+    try:
+        reg_doc = PlayerRegistrationDocument.objects.get(synced_document=instance)
+        reg_doc.synced_document = None
+        reg_doc.save(update_fields=['synced_document'])
+    except PlayerRegistrationDocument.DoesNotExist:
+        pass  # Not a registration document

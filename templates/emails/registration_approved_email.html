@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    /* Basic reset */
+    body { margin:0; padding:0; background-color:#f5f6fa; font-family: Arial, Helvetica, sans-serif; }
+    img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }
+
+    /* Container */
+    .email-wrapper { width:100%; background-color:#f5f6fa; padding:20px 0; }
+    .email-container { max-width:600px; margin:0 auto; background-color:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+
+    /* Content */
+    .content { padding:32px; text-align:center; color:#333333; }
+    .logo { width:100%; max-width:320px; height:auto; display:block; margin:0 auto 50px auto; }
+    h3 { margin:10px 0 6px 0; font-size:20px; }
+    p { margin:8px 0 12px 0; line-height:1.4; color:#444444; }
+
+    /* Status badge */
+    .status-badge { display:inline-block; padding:8px 16px; background-color:#28a745; color:#ffffff; border-radius:20px; font-weight:700; margin:16px 0; }
+
+    /* Info box */
+    .info-box { background-color:#f8f9fa; border-radius:8px; padding:20px; margin:20px 0; text-align:left; }
+    .info-box h4 { margin:0 0 12px 0; color:#333333; font-size:16px; }
+    .info-box ul { margin:0; padding-left:20px; }
+    .info-box li { margin:6px 0; color:#555555; }
+
+    /* Button */
+    .button { display:inline-block; padding:10px 20px; background-color:#800000; color:#ffffff !important; text-decoration:none; border-radius:6px; font-weight:700; margin-top:14px; }
+
+    /* Footer */
+    .footer { background-color:#fafafa; padding:14px; text-align:center; font-size:12px; color:#777777; }
+
+    /* Responsive */
+    @media only screen and (max-width:480px) {
+      .content { padding:20px; }
+      .logo { max-width:260px; margin-bottom:14px; }
+      .button { padding:12px 20px; }
+      h3 { font-size:18px; }
+      .info-box { padding:16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrapper">
+    <!-- Use a centered table for better compatibility with some email clients -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;">
+            <tr>
+              <td>
+                <div class="email-container">
+                  <div class="content">
+                    <img src="https://res.cloudinary.com/dzebi1atl/image/upload/v1762704275/assets/UPHSD-logo_ws9qmx.png" class="logo" alt="UPHSD logo" />
+                    <h3>Congratulations {{ registration.first_name }}!</h3>
+                    <p>Your player registration has been approved!</p>
+
+                    <div class="status-badge">✓ Approved</div>
+
+                    <p>Welcome to the team! You have been assigned to:</p>
+
+                    <div class="info-box">
+                      <h4>Your Player Details:</h4>
+                      <ul>
+                        <li><strong>Team:</strong> {{ registration.team.name }}</li>
+                        <li><strong>Sport:</strong> {{ registration.sport.name }}</li>
+                        <li><strong>Jersey Number:</strong> #{{ registration.jersey_number }}</li>
+                      </ul>
+                    </div>
+
+                    <p>Your account has been created. Please click the button below to set your password and start using the system.</p>
+
+                    <!-- Button : compatible clickable area -->
+                    <p>
+                      <a href="{{ reset_link }}" class="button" target="_blank" rel="noopener noreferrer">Set Password & Login</a>
+                    </p>
+
+                    <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                    <p style="word-break:break-all;"><a href="{{ reset_link }}">{{ reset_link }}</a></p>
+
+                    <p style="color:#777777; font-size:13px; margin-top:20px;">We're excited to have you on the team!</p>
+                  </div>
+                  <div class="footer">&copy; {{ now|date:"Y" }} UPHSD Sports Management. All rights reserved.</div>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>

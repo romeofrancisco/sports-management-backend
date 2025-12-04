@@ -28,28 +28,60 @@ def ensure_coach_folder_structure(coach):
             defaults={'owner': None}
         )
     
-    # Create personal folder for the coach
-    coach_folder, coach_created = Folder.objects.get_or_create(
-        name=f"{coach.user.get_full_name()}",
+    # Check if coach already has a folder (by owner)
+    existing_coach_folder = Folder.objects.filter(
+        folder_type=Folder.FolderType.COACH_PERSONAL,
+        owner=coach.user
+    ).first()
+    
+    if existing_coach_folder:
+        # Update folder name if it doesn't match current name
+        current_name = coach.user.get_full_name()
+        if existing_coach_folder.name != current_name:
+            # Check for conflicts
+            folder_name = current_name
+            counter = 2
+            while Folder.objects.filter(name=folder_name, parent=coaches_folder).exclude(pk=existing_coach_folder.pk).exists():
+                folder_name = f"{current_name} ({counter})"
+                counter += 1
+            existing_coach_folder.name = folder_name
+            existing_coach_folder.save(update_fields=['name'])
+        
+        # Ensure Players subfolder exists
+        players_folder, players_created = Folder.objects.get_or_create(
+            name='Players',
+            folder_type=Folder.FolderType.PLAYERS,
+            parent=existing_coach_folder,
+            owner=coach.user
+        )
+        
+        return existing_coach_folder, players_folder, players_created
+    
+    # Create new personal folder for the coach
+    folder_name = coach.user.get_full_name()
+    counter = 2
+    while Folder.objects.filter(name=folder_name, parent=coaches_folder).exists():
+        folder_name = f"{coach.user.get_full_name()} ({counter})"
+        counter += 1
+    
+    coach_folder = Folder.objects.create(
+        name=folder_name,
         folder_type=Folder.FolderType.COACH_PERSONAL,
         parent=coaches_folder,
         owner=coach.user
     )
     
     # Create Players subfolder inside coach's personal folder
-    players_folder, players_created = Folder.objects.get_or_create(
+    players_folder = Folder.objects.create(
         name='Players',
         folder_type=Folder.FolderType.PLAYERS,
         parent=coach_folder,
         owner=coach.user
     )
     
-    created = coach_created or players_created
+    print(f"✓ Restored folder structure for coach: {coach.user.get_full_name()}")
     
-    if created:
-        print(f"✓ Restored folder structure for coach: {coach.user.get_full_name()}")
-    
-    return coach_folder, players_folder, created
+    return coach_folder, players_folder, True
 
 
 def ensure_player_folder_structure(player):
@@ -57,10 +89,17 @@ def ensure_player_folder_structure(player):
     Ensure a player has their personal folder.
     Creates missing folder if it doesn't exist.
     Handles duplicate names by appending email or counter.
+    Also updates folder name if player's name has changed.
     
     Returns: (player_folder, created)
     """
     player_name = player.user.get_full_name()
+    
+    # Check if player already has a folder (by owner)
+    existing_folder = Folder.objects.filter(
+        folder_type=Folder.FolderType.PLAYER_PERSONAL,
+        owner=player.user
+    ).first()
     
     # Check if player has a team with a coach
     if player.team and player.team.head_coach:
@@ -69,23 +108,37 @@ def ensure_player_folder_structure(player):
         # Ensure coach folder structure exists first
         coach_folder, players_folder, _ = ensure_coach_folder_structure(coach)
         
-        # Check if player already has a folder (by owner)
-        existing_folder = Folder.objects.filter(
-            folder_type=Folder.FolderType.PLAYER_PERSONAL,
-            parent=players_folder,
-            owner=player.user
-        ).first()
-        
         if existing_folder:
+            # Update folder name if it doesn't match current name
+            if existing_folder.name != player_name:
+                folder_name = player_name
+                counter = 2
+                while Folder.objects.filter(name=folder_name, parent=existing_folder.parent).exclude(pk=existing_folder.pk).exists():
+                    folder_name = f"{player_name} ({counter})"
+                    counter += 1
+                existing_folder.name = folder_name
+                existing_folder.save(update_fields=['name'])
+            
+            # Move folder if it's not already under the correct coach
+            if existing_folder.parent != players_folder:
+                # Check for name conflicts in new location
+                folder_name = existing_folder.name
+                counter = 2
+                while Folder.objects.filter(name=folder_name, parent=players_folder).exclude(pk=existing_folder.pk).exists():
+                    folder_name = f"{player_name} ({counter})"
+                    counter += 1
+                existing_folder.name = folder_name
+                existing_folder.parent = players_folder
+                existing_folder.save(update_fields=['name', 'parent'])
+                print(f"✓ Moved folder for player {player_name} to coach {coach.user.get_full_name()}'s folder")
+            
             return existing_folder, False
         
         # Create unique folder name to avoid conflicts
         folder_name = player_name
-        
-        # Check if a folder with this name already exists under this Players folder
         counter = 2
         while Folder.objects.filter(name=folder_name, parent=players_folder).exists():
-            folder_name = f"{player_name} {counter}"
+            folder_name = f"{player_name} ({counter})"
             counter += 1
         
         # Create player's personal folder inside the Players folder
@@ -96,23 +149,45 @@ def ensure_player_folder_structure(player):
             owner=player.user
         )
         
-        folder_created = True
-        
-        if folder_created:
-            print(f"✓ Restored folder for player {player_name} under coach {coach.user.get_full_name()}")
+        print(f"✓ Restored folder for player {player_name} under coach {coach.user.get_full_name()}")
+        return player_folder, True
     else:
-        # No team or coach, create standalone player folder
-        player_folder, folder_created = Folder.objects.get_or_create(
-            name=player_name,
+        # No team or coach
+        if existing_folder:
+            # Update folder name if it doesn't match current name
+            if existing_folder.name != player_name:
+                folder_name = player_name
+                counter = 2
+                while Folder.objects.filter(name=folder_name, parent=None).exclude(pk=existing_folder.pk).exists():
+                    folder_name = f"{player_name} ({counter})"
+                    counter += 1
+                existing_folder.name = folder_name
+                existing_folder.save(update_fields=['name'])
+            
+            # Move to root if not already there
+            if existing_folder.parent is not None:
+                existing_folder.parent = None
+                existing_folder.save(update_fields=['parent'])
+                print(f"✓ Moved folder for player {player_name} to root (no coach)")
+            
+            return existing_folder, False
+        
+        # Create standalone player folder
+        folder_name = player_name
+        counter = 2
+        while Folder.objects.filter(name=folder_name, parent=None).exists():
+            folder_name = f"{player_name} ({counter})"
+            counter += 1
+        
+        player_folder = Folder.objects.create(
+            name=folder_name,
             folder_type=Folder.FolderType.PLAYER_PERSONAL,
             parent=None,
             owner=player.user
         )
         
-        if folder_created:
-            print(f"✓ Restored standalone folder for player: {player_name}")
-    
-    return player_folder, folder_created
+        print(f"✓ Restored standalone folder for player: {player_name}")
+        return player_folder, True
 
 
 def ensure_root_folders():

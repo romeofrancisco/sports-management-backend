@@ -17,7 +17,7 @@ from rest_framework.filters import SearchFilter
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from django.db.models import Count
-from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
+from rest_framework.permissions import IsAuthenticated, SAFE_METHODS, AllowAny
 from django.db import IntegrityError, transaction
 from rest_framework.exceptions import ValidationError
 
@@ -34,7 +34,7 @@ class SportsViewSet(ModelViewSet):
         - POST/PUT/DELETE requests require admin permissions
         """
         if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
-            return [IsAuthenticated()]  # Any authenticated user can read
+            return [AllowAny()]  # Any authenticated user can read
         return [IsAdminUser()]  # Admin permission required for write operations
 
     def get_queryset(self):
@@ -48,7 +48,9 @@ class SportsViewSet(ModelViewSet):
         
         if not show_inactive and self.action == 'list':
             # For regular list view, only show active sports unless explicitly requested
-            if not self.request.user.is_admin:
+            # Check if user is authenticated and is admin before showing inactive
+            user = self.request.user
+            if not user.is_authenticated or not getattr(user, 'is_admin', False):
                 queryset = queryset.filter(is_active=True)
         
         return queryset
@@ -243,7 +245,7 @@ class PositionViewSet(ModelViewSet):
         - POST/PUT/DELETE requests require admin permissions
         """
         if self.request.method in SAFE_METHODS:  # GET, HEAD, OPTIONS
-            return [IsAuthenticated()]  # Any authenticated user can read
+            return [AllowAny()]  # Any authenticated user can read
         return [IsAdminUser()]  # Admin permission required for write operations
 
     def perform_create(self, serializer):

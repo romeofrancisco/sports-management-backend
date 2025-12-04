@@ -30,6 +30,16 @@ class EventViewSet(viewsets.ModelViewSet):
         except Exception:
             pass  # Don't fail the request if notification fails
 
+    def perform_update(self, serializer):
+        """Update event and send notifications based on creator's role."""
+        event = serializer.save()
+        
+        # Send update notification asynchronously
+        try:
+            send_event_notification(event, creator=self.request.user, is_update=True)
+        except Exception:
+            pass  # Don't fail the request if notification fails
+
     def get_queryset(self):
         user = self.request.user
 

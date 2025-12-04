@@ -228,12 +228,16 @@ class DocumentListSerializer(serializers.ModelSerializer):
     folder_name = serializers.CharField(source='folder.name', read_only=True)
     file_size = serializers.SerializerMethodField()
     file_extension = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
+    is_in_google_drive = serializers.BooleanField(read_only=True)
+    needs_google_drive_upload = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'google_drive_id', 'version', 'folder', 'folder_name', 'uploaded_by', 
-            'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description'
+            'id', 'title', 'google_drive_id', 'cloudinary_url', 'version', 'folder', 'folder_name', 'uploaded_by', 
+            'owner', 'status', 'uploaded_at', 'updated_at', 'file_size', 'file_extension', 'description',
+            'file_url', 'is_in_google_drive', 'needs_google_drive_upload'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status']
     
@@ -248,6 +252,10 @@ class DocumentListSerializer(serializers.ModelSerializer):
         if obj.file_extension:
             return obj.file_extension.upper()
         return 'FILE'
+    
+    def get_file_url(self, obj):
+        """Return the file URL (Google Drive or Cloudinary)"""
+        return obj.file_url
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):
@@ -261,16 +269,23 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
     file_extension = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
+    is_in_google_drive = serializers.BooleanField(read_only=True)
+    needs_google_drive_upload = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'file', 'google_drive_id', 'folder', 'version', 'folder_detail', 'uploaded_by', 
+            'id', 'title', 'google_drive_id', 'cloudinary_url', 'folder', 'version', 'folder_detail', 'uploaded_by', 
             'owner', 'status', 'original_document', 'original_document_detail',
             'uploaded_at', 'updated_at', 'description', 'copies_count', 'file_size', 
-            'file_extension', 'can_edit', 'can_delete'
+            'file_extension', 'can_edit', 'can_delete', 'file_url', 'is_in_google_drive', 'needs_google_drive_upload'
         ]
         read_only_fields = ['uploaded_at', 'updated_at', 'status', 'original_document']
+    
+    def get_file_url(self, obj):
+        """Return the file URL (Google Drive or Cloudinary)"""
+        return obj.file_url
     
     def get_can_edit(self, obj):
         """Check if current user can edit this document"""
