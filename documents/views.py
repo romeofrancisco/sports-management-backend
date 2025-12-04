@@ -424,11 +424,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        file_url = str(document.file)
-        if "res.cloudinary.com" in file_url:
+        # Delete from Cloudinary if stored there
+        if document.cloudinary_url and "res.cloudinary.com" in document.cloudinary_url:
             try:
-                # Extract Cloudinary public_id
-                path = file_url.split("/upload/")[1]
+                # Extract Cloudinary public_id from URL
+                path = document.cloudinary_url.split("/upload/")[1]
                 public_id = "/".join(path.split("/")[1:]).rsplit(".", 1)[0]
                 cloudinary.uploader.destroy(public_id, resource_type="raw")
             except Exception as e:

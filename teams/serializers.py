@@ -866,14 +866,14 @@ class PlayerRegistrationApproveSerializer(serializers.Serializer):
         queryset=Team.objects.all(),
         required=True
     )
-    jersey_number = serializers.IntegerField(required=True, min_value=0, max_value=99)
+    jersey_number = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=99)
     
     def validate(self, attrs):
         team = attrs.get('team_id')
         jersey_number = attrs.get('jersey_number')
         
-        # Validate jersey number uniqueness within team
-        if Player.objects.filter(team=team, jersey_number=jersey_number).exists():
+        # Validate jersey number uniqueness within team (only if provided)
+        if jersey_number is not None and Player.objects.filter(team=team, jersey_number=jersey_number).exists():
             raise serializers.ValidationError({
                 'jersey_number': f"Jersey number {jersey_number} is already taken in team '{team.name}'."
             })

@@ -19,6 +19,75 @@ def is_cascade_deletion_active():
     return getattr(_thread_locals, 'cascade_deletion_active', False)
 
 
+# ============== User Name Change - Update Folder Name ==============
+
+@receiver(pre_save, sender=User)
+def track_user_name_change(sender, instance, **kwargs):
+    """Track the old name before saving to detect changes"""
+    if instance.pk:  # Only for existing users
+        try:
+            old_instance = User.objects.get(pk=instance.pk)
+            instance._old_first_name = old_instance.first_name
+            instance._old_last_name = old_instance.last_name
+            instance._old_full_name = old_instance.get_full_name()
+        except User.DoesNotExist:
+            instance._old_first_name = None
+            instance._old_last_name = None
+            instance._old_full_name = None
+    else:
+        instance._old_first_name = None
+        instance._old_last_name = None
+        instance._old_full_name = None
+
+
+@receiver(post_save, sender=User)
+def update_folder_name_on_user_name_change(sender, instance, created, **kwargs):
+    """
+    When a user's name changes, update their folder name to match.
+    This applies to both coaches and players.
+    """
+    if created:
+        return  # Skip for new users - folders haven't been created yet
+    
+    # Check if name actually changed
+    old_full_name = getattr(instance, '_old_full_name', None)
+    new_full_name = instance.get_full_name()
+    
+    if old_full_name == new_full_name:
+        return  # Name hasn't changed, nothing to do
+    
+    # Find user's personal folder and update name
+    if instance.is_coach:
+        # Update coach's personal folder
+        folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.COACH_PERSONAL,
+            owner=instance
+        ).first()
+    elif instance.is_player:
+        # Update player's personal folder
+        folder = Folder.objects.filter(
+            folder_type=Folder.FolderType.PLAYER_PERSONAL,
+            owner=instance
+        ).first()
+    else:
+        folder = None
+    
+    if folder:
+        # Check for name conflicts in the same parent
+        folder_name = new_full_name
+        counter = 2
+        while Folder.objects.filter(name=folder_name, parent=folder.parent).exclude(pk=folder.pk).exists():
+            folder_name = f"{new_full_name} ({counter})"
+            counter += 1
+        
+        folder.name = folder_name
+        folder.save(update_fields=['name'])
+        print(f"✓ Updated folder name from '{old_full_name}' to '{folder_name}'")
+
+
+# ============== Root Folders Creation ==============
+
+
 @receiver(post_migrate)
 def create_root_folders(sender, **kwargs):
     """

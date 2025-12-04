@@ -1269,10 +1269,12 @@ class PlayerViews(ModelViewSet):
     def upload_document(self, request, **kwargs):
         """
         Upload a document for an existing player (coach-created).
-        The document is stored directly in the player's personal folder in the Documents app.
+        The document is stored in Cloudinary and a record is created in the player's personal folder.
         """
         from documents.models import Document, Folder
         from documents.folder_utils import get_user_personal_folder
+        import cloudinary.uploader
+        import os
         
         player = self.get_object()
         
@@ -1296,7 +1298,6 @@ class PlayerViews(ModelViewSet):
         uploaded_file = serializer.validated_data['file']
         
         # Get file extension
-        import os
         _, ext = os.path.splitext(uploaded_file.name)
         file_extension = ext.lower() if ext else ''
         
@@ -1309,9 +1310,28 @@ class PlayerViews(ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
+        # Upload file to Cloudinary
+        try:
+            # Use the raw resource type for documents
+            cloudinary_response = cloudinary.uploader.upload(
+                uploaded_file,
+                resource_type='raw',
+                folder=f'player_documents/{player.slug}',
+                public_id=f'{document_type}_{os.path.splitext(uploaded_file.name)[0]}',
+                use_filename=True,
+                unique_filename=True,
+            )
+            cloudinary_url = cloudinary_response.get('secure_url')
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to upload file to storage: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
         # Create the Document record
         document = Document.objects.create(
             title=title,
+            cloudinary_url=cloudinary_url,
             file_extension=file_extension,
             folder=player_folder,
             uploaded_by=request.user,
@@ -1326,6 +1346,8 @@ class PlayerViews(ModelViewSet):
                 'title': document.title,
                 'document_type': document_type,
                 'file_extension': document.file_extension,
+                'cloudinary_url': document.cloudinary_url,
+                'file_url': document.file_url,
                 'folder': player_folder.name if player_folder else None,
                 'uploaded_at': document.uploaded_at,
             }
@@ -1369,6 +1391,8 @@ class PlayerViews(ModelViewSet):
                     'id': doc.id,
                     'title': doc.title,
                     'file_extension': doc.file_extension,
+                    'cloudinary_url': doc.cloudinary_url,
+                    'file_url': doc.file_url,
                     'description': doc.description,
                     'uploaded_at': doc.uploaded_at,
                     'uploaded_by': doc.uploaded_by.get_full_name() if doc.uploaded_by else None,
@@ -1666,12 +1690,13 @@ class PlayerRegistrationViewSet(ModelViewSet):
     def approve(self, request, pk=None):
         """
         Approve a player registration.
-        Creates the user and player, syncs documents to the Documents app.
+        Creates the user and player, transfers documents from Cloudinary to Google Drive.
         """
         from django.db import transaction
         from users.models import User
         from documents.models import Document, Folder
         from documents.folder_utils import get_user_personal_folder
+        from documents.document_transfer_service import transfer_all_registration_documents
         from utils.email import send_registration_approved_email
         
         registration = self.get_object()
@@ -1738,24 +1763,19 @@ class PlayerRegistrationViewSet(ModelViewSet):
                 # Set positions
                 player.position.set(registration.position.all())
                 
-                # Sync documents to the Documents app
+                # Get player's personal folder
                 player_folder = get_user_personal_folder(new_user)
                 
-                for reg_doc in registration.documents.all():
-                    # Create a Document record linked to the player's folder
-                    if player_folder:
-                        doc = Document.objects.create(
-                            title=reg_doc.title,
-                            file_extension=reg_doc.file_extension,
-                            folder=player_folder,
-                            uploaded_by=new_user,
-                            owner=new_user,
-                            description=f"Registration document: {reg_doc.get_document_type_display()}"
+                # Transfer documents from Cloudinary to Google Drive
+                if player_folder and registration.documents.exists():
+                    try:
+                        transferred_docs = transfer_all_registration_documents(
+                            registration, player_folder, new_user
                         )
-                        
-                        # Link the registration document to the synced document
-                        reg_doc.synced_document = doc
-                        reg_doc.save(update_fields=['synced_document'])
+                        print(f"✓ Transferred {len(transferred_docs)} documents to Google Drive")
+                    except Exception as e:
+                        # Log but don't fail the approval if document transfer fails
+                        print(f"Warning: Document transfer failed: {e}")
                 
                 # Update registration status
                 registration.status = PlayerRegistration.Status.APPROVED
@@ -1781,7 +1801,7 @@ class PlayerRegistrationViewSet(ModelViewSet):
                 
         except Exception as e:
             return Response(
-                {'error': f'Failed to approve registration: {str(e)}'},
+                {'error': f'Failed to approve registration: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     

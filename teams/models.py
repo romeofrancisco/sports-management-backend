@@ -408,7 +408,7 @@ class Player(models.Model):
     weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kg
     slug = models.SlugField(max_length=255, unique=True)
     team = models.ForeignKey(Team, null=True, on_delete=models.SET_NULL, related_name="players")
-    jersey_number = models.IntegerField(blank=False)
+    jersey_number = models.IntegerField(blank=True, null=True)
     position = models.ManyToManyField(Position, blank=True)
     sport = models.ForeignKey(Sport, null=True, on_delete=models.SET_NULL)
     academic_info = models.ForeignKey(AcademicInfo, null=True, blank=True, on_delete=models.SET_NULL, related_name='players')

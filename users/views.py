@@ -259,10 +259,12 @@ class GoogleOneTapLoginView(APIView):
         try:
             # 1. Verify the Google ID Token
             # This is the crucial step where the token's authenticity is confirmed by Google's servers.
+            # Allow 30 seconds of clock skew to handle minor time differences between servers
             google_user_data = id_token.verify_oauth2_token(
                 id_token_credential, 
                 requests.Request(), 
-                GOOGLE_CLIENT_ID
+                GOOGLE_CLIENT_ID,
+                clock_skew_in_seconds=30
             )
 
             # The 'aud' (audience) must match your client ID.

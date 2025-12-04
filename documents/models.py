@@ -143,6 +143,7 @@ class Document(models.Model):
 
     title = models.CharField(max_length=255)
     google_drive_id = models.CharField(max_length=100, blank=True, null=True, help_text="Google Drive file ID (primary storage)")
+    cloudinary_url = models.URLField(max_length=500, blank=True, null=True, help_text="Cloudinary URL for documents not yet in Google Drive")
     file_extension = models.CharField(max_length=10, blank=True)
     version = models.CharField(max_length=50, blank=True, null=True, help_text="Google Drive version/modified time")
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='documents', null=True, blank=True)
@@ -208,21 +209,28 @@ class Document(models.Model):
 
     @property
     def file_url(self):
-        """Return Google Drive view URL"""
-        return self.get_google_drive_url('view')
+        """Return file URL - Google Drive if available, otherwise Cloudinary"""
+        google_url = self.get_google_drive_url('view')
+        if google_url:
+            return google_url
+        # Fallback to Cloudinary URL
+        return self.cloudinary_url
+    
+    @property
+    def is_in_google_drive(self):
+        """Check if document has been uploaded to Google Drive"""
+        return bool(self.google_drive_id)
+    
+    @property
+    def needs_google_drive_upload(self):
+        """Check if document needs to be uploaded to Google Drive for editing"""
+        return self.cloudinary_url and not self.google_drive_id
         
 
     def delete(self, *args, **kwargs):
         """Override delete to remove the file from Google Drive"""
         # Note: Google Drive file deletion should be handled by the view layer
         # with proper OAuth credentials, not here in the model
-        # Legacy Cloudinary files
-        if self.file:
-            try:
-                self.file.delete(save=False)
-            except Exception as e:
-                print(f"Error deleting legacy file: {e}")
-
         super().delete(*args, **kwargs)
 
     def can_view(self, user):
