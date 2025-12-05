@@ -1715,7 +1715,8 @@ class PlayerRegistrationViewSet(ModelViewSet):
         approve_serializer.is_valid(raise_exception=True)
         
         team = approve_serializer.validated_data['team_id']
-        jersey_number = approve_serializer.validated_data['jersey_number']
+        jersey_number = approve_serializer.validated_data.get('jersey_number')
+        position_ids = approve_serializer.validated_data.get('position_ids', [])
         
         # Verify coach can approve for this sport
         user = request.user
@@ -1747,6 +1748,11 @@ class PlayerRegistrationViewSet(ModelViewSet):
                     is_staff=False,
                 )
                 new_user.set_unusable_password()
+                
+                # Transfer profile image if exists
+                if registration.profile:
+                    new_user.profile = registration.profile
+                
                 new_user.save()
                 
                 # Create the Player
@@ -1760,8 +1766,11 @@ class PlayerRegistrationViewSet(ModelViewSet):
                     academic_info=registration.academic_info,
                 )
                 
-                # Set positions
-                player.position.set(registration.position.all())
+                # Set positions - use provided positions or fallback to registration positions
+                if position_ids:
+                    player.position.set(position_ids)
+                else:
+                    player.position.set(registration.position.all())
                 
                 # Get player's personal folder
                 player_folder = get_user_personal_folder(new_user)

@@ -479,11 +479,23 @@ def create_document_in_google_drive(request):
         }, status=status.HTTP_201_CREATED)
         
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Document creation error: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Check if it's a token expiration/revocation error
+        if 'invalid_grant' in error_str or 'Token has been expired or revoked' in error_str:
+            return Response(
+                {
+                    'error': 'Your Google authorization has expired. Please sign in with Google again.',
+                    'code': 'TOKEN_EXPIRED'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
         return Response(
-            {'error': str(e)},
+            {'error': error_str},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -661,9 +673,21 @@ def upload_to_google_drive(request):
         })
         
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Upload error: {e}")
+        
+        # Check if it's a token expiration/revocation error
+        if 'invalid_grant' in error_str or 'Token has been expired or revoked' in error_str:
+            return Response(
+                {
+                    'error': 'Your Google authorization has expired. Please sign in with Google again.',
+                    'code': 'TOKEN_EXPIRED'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
         return Response(
-            {'error': str(e)},
+            {'error': error_str},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -762,8 +786,20 @@ def sync_from_google_drive(request):
                 os.remove(tmp_file_path)
                 
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Sync error: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Check if it's a token expiration/revocation error
+        if 'invalid_grant' in error_str or 'Token has been expired or revoked' in error_str:
+            return Response(
+                {
+                    'error': 'Your Google authorization has expired. Please sign in with Google again.',
+                    'code': 'TOKEN_EXPIRED'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        return Response({'error': error_str}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])

@@ -248,9 +248,21 @@ def upload_to_google_drive(request):
         })
         
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Error uploading to Google Drive: {e}")
+        
+        # Check if it's a token expiration/revocation error
+        if 'invalid_grant' in error_str or 'Token has been expired or revoked' in error_str:
+            return Response(
+                {
+                    'error': 'Your Google authorization has expired. Please sign in with Google again.',
+                    'code': 'TOKEN_EXPIRED'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
         return Response(
-            {'error': f'Error uploading to Google Drive: {str(e)}'},
+            {'error': f'Error uploading to Google Drive: {error_str}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -378,9 +390,21 @@ def sync_from_google_drive(request):
                 os.remove(tmp_file_path)
         
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Error syncing from Google Drive: {e}")
+        
+        # Check if it's a token expiration/revocation error
+        if 'invalid_grant' in error_str or 'Token has been expired or revoked' in error_str:
+            return Response(
+                {
+                    'error': 'Your Google authorization has expired. Please sign in with Google again.',
+                    'code': 'TOKEN_EXPIRED'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
         return Response(
-            {'error': f'Error syncing from Google Drive: {str(e)}'},
+            {'error': f'Error syncing from Google Drive: {error_str}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

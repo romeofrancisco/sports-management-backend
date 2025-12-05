@@ -10,14 +10,15 @@ def cleanup_registration_documents_on_registration_delete(sender, instance, **kw
     and the registration document files.
     """
     for reg_doc in instance.documents.all():
-        # Delete synced document in the Documents app
-        if reg_doc.synced_document:
+        # Delete synced document in the Documents app (check FK id first to avoid query)
+        if reg_doc.synced_document_id:
             try:
                 synced_doc = reg_doc.synced_document
                 reg_doc.synced_document = None
                 reg_doc.save(update_fields=['synced_document'])
                 synced_doc.delete()
             except Exception as e:
+                # Document may already be deleted
                 print(f"Error deleting synced document: {e}")
         
         # Delete the uploaded file
@@ -34,13 +35,15 @@ def cleanup_synced_document_on_registration_doc_delete(sender, instance, **kwarg
     When a registration document is deleted, also delete the synced document
     in the Documents app if it exists.
     """
-    if instance.synced_document:
+    # Check FK id first to avoid triggering a query that might raise DoesNotExist
+    if instance.synced_document_id:
         try:
             synced_doc = instance.synced_document
             instance.synced_document = None
             # Don't save here as the instance is being deleted
             synced_doc.delete()
         except Exception as e:
+            # Document may already be deleted
             print(f"Error deleting synced document: {e}")
     
     # Delete the uploaded file
