@@ -108,6 +108,7 @@ class UserSerializer(ModelSerializer):
 
 class PlayerSerializer(ModelSerializer):
     profile = serializers.ImageField(required=False)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
     class Meta:
         model = User
         fields = (
@@ -117,6 +118,7 @@ class PlayerSerializer(ModelSerializer):
             "last_name",
             "sex",
             "email",
+            "date_of_birth",
         )
         read_only_fields = ("id",)
 

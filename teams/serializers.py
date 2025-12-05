@@ -277,6 +277,7 @@ class PlayerInfoSerializer(ModelSerializer):
     profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
+    date_of_birth = serializers.DateField(source="user.date_of_birth", required=False, allow_null=True)
     sex = serializers.CharField(source="user.sex", required=True)
     slug = serializers.CharField(read_only=True)
     email = serializers.EmailField(source="user.email", required=True)
@@ -326,6 +327,7 @@ class PlayerInfoSerializer(ModelSerializer):
             "sex",
             "email",
             "slug",
+            "date_of_birth",
             "academic_info_id",
             "academic_info",
             "height",
@@ -399,7 +401,7 @@ class PlayerInfoSerializer(ModelSerializer):
         internal_value = super().to_internal_value(data)
 
         # Extract user-related fields and group them
-        user_fields = ["profile", "first_name", "last_name", "sex", "email"]
+        user_fields = ["profile", "first_name", "last_name", "sex", "email", "date_of_birth"]
         user_data = {}
 
         for field in user_fields:
