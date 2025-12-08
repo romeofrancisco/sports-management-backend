@@ -9,6 +9,7 @@ from .serializers import TeamChatSerializer, ChatMessageSerializer
 from teams.models import Team, Coach, Player
 from django.db.models import Q
 from notifications.models import FCMDevice
+from notifications.utils import send_broadcast_chat_notification
 from django.db import transaction
 
 # -------------------------
@@ -341,6 +342,13 @@ class BroadcastMessageView(APIView):
                         'team_name': team.name,
                         'error': str(e)
                     })
+        
+        # Send notifications to all team members (after transaction completes)
+        if created_messages:
+            try:
+                send_broadcast_chat_notification(target_teams, user, message_text)
+            except Exception as e:
+                print(f"[Broadcast] Error sending notifications: {e}")
         
         return Response({
             'status': 'Broadcast sent',
