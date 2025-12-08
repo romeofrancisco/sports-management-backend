@@ -14,10 +14,10 @@ from django.conf import settings
 
 
 # OAuth2 Scopes
+# Using only drive.file scope (non-sensitive) - allows access to files created/opened by this app
+# This avoids the "Google hasn't verified this app" warning for sensitive scopes
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
-    'https://www.googleapis.com/auth/documents',
-    'https://www.googleapis.com/auth/spreadsheets',
 ]
 
 # MIME type mappings
@@ -68,8 +68,8 @@ def get_authorization_url(redirect_uri, state=None):
     
     authorization_url, state = flow.authorization_url(
         access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent',
+        include_granted_scopes='false',  # Don't include old scopes - use only current SCOPES
+        prompt='consent',  # Always show consent screen to get new tokens with updated scopes
         state=state
     )
     

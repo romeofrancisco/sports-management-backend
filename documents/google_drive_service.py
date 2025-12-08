@@ -16,11 +16,11 @@ from django.conf import settings
 class GoogleDriveService:
     """Service class for Google Drive operations"""
     
-    # Scopes required for Drive, Docs, and Sheets access
+    # Scopes required for Drive access
+    # Using only drive.file scope (non-sensitive) to avoid 'Google hasn't verified this app' warning
+    # Note: This class uses service account, so these scopes are for service account operations
     SCOPES = [
-        'https://www.googleapis.com/auth/drive',
-        'https://www.googleapis.com/auth/documents',
-        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive.file',
     ]
     
     # Default shared folder ID - service account must have access to this folder
