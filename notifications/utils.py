@@ -774,3 +774,240 @@ def send_reservation_status_notification(reservation, new_status):
     # Remove invalid tokens
     if failed_tokens:
         FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
+def send_broadcast_chat_notification(teams, sender, message_text):
+    """
+    Send FCM push notifications to all players and coaches of specified teams
+    when a broadcast message is sent.
+
+    Args:
+        teams: QuerySet or list of Team instances to notify
+        sender: The user who sent the broadcast message
+        message_text: The message content
+    """
+    if not teams:
+        return
+
+    # Get all users from all specified teams (players and coaches)
+    team_users = []
+    team_ids = []
+    team_names = []
+    
+    for team in teams:
+        team_ids.append(team.id)
+        team_names.append(team.name)
+        
+        # Add coaches
+        if team.head_coach and team.head_coach.user:
+            team_users.append(team.head_coach.user)
+        if team.assistant_coach and team.assistant_coach.user:
+            team_users.append(team.assistant_coach.user)
+        # Add players
+        team_users.extend([player.user for player in team.players.all() if player.user])
+
+    # Remove duplicates and exclude sender
+    team_users = list(set([u for u in team_users if u and u != sender]))
+
+    if not team_users:
+        return
+
+    # Prepare the notification payload
+    sender_name = sender.get_full_name() or sender.username
+    sender_role = sender.role if hasattr(sender, 'role') else 'Admin'
+    
+    frontend_url = get_frontend_url()
+    
+    # Truncate message for notification body
+    truncated_message = message_text[:100] + "..." if len(message_text) > 100 else message_text
+    
+    notification_title = f"Broadcast from {sender_name}"
+    notification_body = truncated_message
+
+    # Log notifications for ALL users (regardless of FCM device registration)
+    for user in team_users:
+        # Find which team this user belongs to for the click action
+        user_team_id = None
+        for team in teams:
+            # Check if user is a coach of this team
+            if team.head_coach and team.head_coach.user == user:
+                user_team_id = team.id
+                break
+            if team.assistant_coach and team.assistant_coach.user == user:
+                user_team_id = team.id
+                break
+            # Check if user is a player on this team
+            if hasattr(user, 'player') and user.player and user.player.team == team:
+                user_team_id = team.id
+                break
+        
+        # Default to first team if not found
+        if not user_team_id and team_ids:
+            user_team_id = team_ids[0]
+        
+        click_action = f"{frontend_url}/chat/team/{user_team_id}" if user_team_id else f"{frontend_url}/chat"
+        
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.CHAT,
+            action_type=NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=str(user_team_id) if user_team_id else None,
+            related_object_type='TeamChat',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            # Determine the team for this user's click action
+            user = device.user
+            user_team_id = None
+            for team in teams:
+                if team.head_coach and team.head_coach.user == user:
+                    user_team_id = team.id
+                    break
+                if team.assistant_coach and team.assistant_coach.user == user:
+                    user_team_id = team.id
+                    break
+                if hasattr(user, 'player') and user.player and user.player.team == team:
+                    user_team_id = team.id
+                    break
+            
+            if not user_team_id and team_ids:
+                user_team_id = team_ids[0]
+            
+            click_action = f"{frontend_url}/chat/team/{user_team_id}" if user_team_id else f"{frontend_url}/chat"
+            
+            # Use data-only message - service worker will handle notification display
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "broadcast_chat",
+                    "sender_name": sender_name,
+                    "sender_role": sender_role,
+                    "team_count": str(len(team_ids)),
+                    "team_id": str(user_team_id) if user_team_id else "",
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
+
+
+def send_chat_message_notification(team, sender, message_text, message_id):
+    """
+    Send FCM push notification to all players and coaches of a team
+    when a chat message is sent.
+
+    Args:
+        team: The Team instance
+        sender: The user who sent the message
+        message_text: The message content
+        message_id: The ID of the chat message
+    """
+    if not team:
+        return
+
+    # Get all users from the team (players and coaches)
+    team_users = []
+    
+    # Add coaches
+    if team.head_coach and team.head_coach.user:
+        team_users.append(team.head_coach.user)
+    if team.assistant_coach and team.assistant_coach.user:
+        team_users.append(team.assistant_coach.user)
+    # Add players
+    team_users.extend([player.user for player in team.players.all() if player.user])
+
+    # Remove duplicates and exclude sender
+    team_users = list(set([u for u in team_users if u and u != sender]))
+
+    if not team_users:
+        return
+
+    # Prepare the notification payload
+    sender_name = sender.get_full_name() or sender.username
+    
+    frontend_url = get_frontend_url()
+    click_action = f"{frontend_url}/chat/team/{team.id}"
+    
+    # Truncate message for notification body
+    truncated_message = message_text[:100] + "..." if len(message_text) > 100 else message_text
+    
+    notification_title = f"{team.name} - {sender_name}"
+    notification_body = truncated_message
+
+    # Log notifications for ALL users
+    for user in team_users:
+        log_notification(
+            recipient=user,
+            notification_type=NotificationLog.NotificationType.CHAT,
+            action_type=NotificationLog.ActionType.CREATED,
+            title=notification_title,
+            body=notification_body,
+            related_object_id=str(message_id),
+            related_object_type='ChatMessage',
+            click_action=click_action
+        )
+
+    # Get FCM tokens for these users
+    devices = FCMDevice.objects.filter(user__in=team_users)
+
+    if not devices.exists():
+        return
+
+    # Send individual messages to each token
+    success_count = 0
+    failed_tokens = []
+
+    for device in devices:
+        try:
+            # Use data-only message - service worker will handle notification display
+            message = messaging.Message(
+                data={
+                    "title": notification_title,
+                    "body": notification_body,
+                    "type": "chat",
+                    "sender_name": sender_name,
+                    "team_id": str(team.id),
+                    "team_name": team.name,
+                    "message_id": str(message_id),
+                    "click_action": click_action
+                },
+                token=device.fcm_token,
+            )
+
+            response = messaging.send(message)
+            success_count += 1
+
+        except Exception as e:
+            error_msg = str(e)
+            if 'unregistered' in error_msg.lower() or 'invalid' in error_msg.lower() or 'auth error' in error_msg.lower():
+                failed_tokens.append(device.fcm_token)
+
+    # Remove invalid tokens
+    if failed_tokens:
+        FCMDevice.objects.filter(fcm_token__in=failed_tokens).delete()
