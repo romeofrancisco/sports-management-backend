@@ -229,6 +229,15 @@ class AcademicInfo(models.Model):
         section_display = f" - {self.section}" if self.section else ""
         return f"{self.year_level} | {self.course}{section_display}"
 
+def registration_profile_upload_path(instance, filename):
+    """Generate upload path for registration profile images"""
+    import os
+    from uuid import uuid4
+    ext = os.path.splitext(filename)[1]
+    safe_name = f"registration_{instance.email.split('@')[0]}_{uuid4().hex[:8]}{ext}"
+    return f"registration_profiles/{safe_name}"
+
+
 class PlayerRegistration(models.Model):
     """
     Model for player self-registration.
@@ -247,6 +256,7 @@ class PlayerRegistration(models.Model):
     sex = models.CharField(max_length=10, choices=[("male", "Male"), ("female", "Female")], default="male")
     date_of_birth = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
+    profile = models.ImageField(upload_to=registration_profile_upload_path, null=True, blank=True)
     
     # Player-specific information
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in cm
@@ -318,6 +328,7 @@ class PlayerRegistrationDocument(models.Model):
     file = models.FileField(
         upload_to='registration_documents/',
         storage=RawMediaCloudinaryStorage(),  # Use raw storage to support all file types
+        max_length=500,  # Increase max_length for Cloudinary URLs
         blank=True,
         null=True
     )
@@ -340,9 +351,30 @@ class PlayerRegistrationDocument(models.Model):
         return f"{self.title} ({self.get_document_type_display()}) - {self.registration.get_full_name()}"
     
     def save(self, *args, **kwargs):
+        import os
+        from django.core.files.base import ContentFile
+        
+        # Truncate title if too long
+        if self.title and len(self.title) > 100:
+            name, ext = os.path.splitext(self.title)
+            max_name_len = 100 - len(ext)
+            self.title = name[:max_name_len] + ext
+        
+        # Truncate file name if too long to prevent Cloudinary/DB errors
+        if self.file and hasattr(self.file, 'name') and self.file.name:
+            original_name = os.path.basename(self.file.name)
+            if len(original_name) > 80:
+                name, ext = os.path.splitext(original_name)
+                max_name_len = 80 - len(ext)
+                new_name = name[:max_name_len] + ext
+                # Only rename if file content is accessible
+                if hasattr(self.file, 'read'):
+                    content = self.file.read()
+                    self.file.seek(0)  # Reset file pointer
+                    self.file.name = new_name
+        
         # Extract file extension from file name or title
         if not self.file_extension:
-            import os
             if self.file:
                 _, ext = os.path.splitext(self.file.name)
                 if ext:
@@ -374,17 +406,8 @@ class PlayerRegistrationDocument(models.Model):
         file_url = self.file.url
         ext = self.file_extension.lower().replace('.', '') if self.file_extension else ''
         
-        # For images, return direct URL
-        if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']:
-            return file_url
-        
-        # For Office documents and PDFs, use Microsoft Office Online Viewer
-        if ext in ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']:
-            return f"https://view.officeapps.live.com/op/embed.aspx?src={file_url}"
-        
-        # For other files, return direct URL
         return file_url
-    
+        
     @property
     def download_url(self):
         """Get the direct download URL (same as file_url for Cloudinary)"""

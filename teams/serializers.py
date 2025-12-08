@@ -277,6 +277,7 @@ class PlayerInfoSerializer(ModelSerializer):
     profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
     last_name = serializers.CharField(source="user.last_name", required=True)
+    date_of_birth = serializers.DateField(source="user.date_of_birth", required=False, allow_null=True)
     sex = serializers.CharField(source="user.sex", required=True)
     slug = serializers.CharField(read_only=True)
     email = serializers.EmailField(source="user.email", required=True)
@@ -326,6 +327,7 @@ class PlayerInfoSerializer(ModelSerializer):
             "sex",
             "email",
             "slug",
+            "date_of_birth",
             "academic_info_id",
             "academic_info",
             "height",
@@ -343,21 +345,7 @@ class PlayerInfoSerializer(ModelSerializer):
         ]
 
     def validate_position_ids(self, value):
-        # Get the sport from the validated data to check if it requires stats
-        sport_slug = self.initial_data.get("sport_slug")
-        if sport_slug:
-            try:
-                sport = Sport.objects.get(slug=sport_slug)
-                # Only require positions for sports that require stats
-                if sport.requires_stats and not value:
-                    raise serializers.ValidationError(
-                        "At least one position is required for this sport."
-                    )
-            except Sport.DoesNotExist:
-                pass
-        elif not value:
-            # Default behavior if sport not found - require positions
-            raise serializers.ValidationError("At least one position is required.")
+        # Positions are optional - no validation required
         return value
 
     def validate(self, data):
@@ -386,9 +374,9 @@ class PlayerInfoSerializer(ModelSerializer):
                     }
                 )
 
-        # Validate jersey number uniqueness within the team
+        # Validate jersey number uniqueness within the team (only if provided)
         jersey_number = data.get("jersey_number")
-        if team and jersey_number:
+        if team and jersey_number is not None:
             existing_player = Player.objects.filter(
                 team=team, jersey_number=jersey_number
             )
@@ -413,7 +401,7 @@ class PlayerInfoSerializer(ModelSerializer):
         internal_value = super().to_internal_value(data)
 
         # Extract user-related fields and group them
-        user_fields = ["profile", "first_name", "last_name", "sex", "email"]
+        user_fields = ["profile", "first_name", "last_name", "sex", "email", "date_of_birth"]
         user_data = {}
 
         for field in user_fields:
@@ -672,6 +660,16 @@ class PlayerRegistrationDocumentUploadSerializer(ModelSerializer):
         model = PlayerRegistrationDocument
         fields = ['document_type', 'title', 'file']
     
+    def validate_title(self, value):
+        # Truncate title to max 100 characters to prevent database errors
+        if value and len(value) > 100:
+            # Keep extension if present
+            import os
+            name, ext = os.path.splitext(value)
+            max_name_len = 100 - len(ext)
+            value = name[:max_name_len] + ext
+        return value
+    
     def validate_file(self, value):
         # Validate file size (max 10MB)
         max_size = 10 * 1024 * 1024  # 10MB
@@ -699,11 +697,12 @@ class PlayerRegistrationListSerializer(ModelSerializer):
     documents_count = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     reviewed_by_name = serializers.SerializerMethodField()
+    profile = serializers.ImageField(use_url=True, required=False)
     
     class Meta:
         model = PlayerRegistration
         fields = [
-            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex',
+            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex', 'profile',
             'date_of_birth', 'phone_number', 'height', 'weight',
             'sport', 'positions', 'academic_info', 'team', 'jersey_number',
             'status', 'documents_count', 'created_at', 'updated_at',
@@ -732,11 +731,12 @@ class PlayerRegistrationDetailSerializer(ModelSerializer):
     full_name = serializers.SerializerMethodField()
     reviewed_by_name = serializers.SerializerMethodField()
     approved_player_info = serializers.SerializerMethodField()
+    profile = serializers.ImageField(use_url=True, required=False)
     
     class Meta:
         model = PlayerRegistration
         fields = [
-            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex',
+            'id', 'email', 'first_name', 'last_name', 'full_name', 'sex', 'profile',
             'date_of_birth', 'phone_number', 'height', 'weight',
             'sport', 'positions', 'academic_info', 'team', 'jersey_number',
             'status', 'documents', 'created_at', 'updated_at',
@@ -783,6 +783,7 @@ class PlayerRegistrationCreateSerializer(ModelSerializer):
         write_only=True
     )
     documents = PlayerRegistrationDocumentUploadSerializer(many=True, required=False, write_only=True)
+    profile = serializers.ImageField(required=False, allow_null=True)
     
     # Read-only fields for response
     sport = SportSerializer(read_only=True)
@@ -792,7 +793,7 @@ class PlayerRegistrationCreateSerializer(ModelSerializer):
     class Meta:
         model = PlayerRegistration
         fields = [
-            'id', 'email', 'first_name', 'last_name', 'sex',
+            'id', 'email', 'first_name', 'last_name', 'sex', 'profile',
             'date_of_birth', 'phone_number', 'height', 'weight',
             'sport_id', 'sport', 'position_ids', 'positions',
             'academic_info_id', 'academic_info',
@@ -812,17 +813,42 @@ class PlayerRegistrationCreateSerializer(ModelSerializer):
         return value
     
     def validate_position_ids(self, value):
-        sport_id = self.initial_data.get('sport_id')
-        if sport_id:
-            try:
-                sport = Sport.objects.get(pk=sport_id)
-                if sport.requires_stats and not value:
-                    raise serializers.ValidationError(
-                        "At least one position is required for this sport."
-                    )
-            except Sport.DoesNotExist:
-                pass
+        # Positions are optional - no validation required
         return value
+    
+    def to_internal_value(self, data):
+        # Handle position_ids from FormData/QueryDict
+        # QueryDict stores multiple values under same key, need to use getlist()
+        if hasattr(data, 'getlist'):
+            # It's a QueryDict (from FormData)
+            mutable_data = data.copy()
+            position_ids = data.getlist('position_ids')
+            
+            # Filter out empty strings and ensure we have a list
+            position_ids = [pid for pid in position_ids if pid and pid.strip()]
+            
+            # Set as proper list in a regular dict for the serializer
+            internal_data = {}
+            for key in set(mutable_data.keys()):
+                if key == 'position_ids':
+                    continue  # Handle separately
+                # Get the value
+                internal_data[key] = mutable_data.get(key)
+            
+            # Add position_ids as a proper list (even if empty)
+            internal_data['position_ids'] = position_ids if position_ids else []
+            
+            return super().to_internal_value(internal_data)
+        
+        # Handle regular dict (e.g., from JSON)
+        if isinstance(data, dict):
+            position_ids = data.get('position_ids', [])
+            # If it's a string (single value), convert to list
+            if isinstance(position_ids, str):
+                data = data.copy()
+                data['position_ids'] = [position_ids] if position_ids.strip() else []
+        
+        return super().to_internal_value(data)
     
     def validate(self, attrs):
         # Validate positions belong to the selected sport
@@ -867,6 +893,11 @@ class PlayerRegistrationApproveSerializer(serializers.Serializer):
         required=True
     )
     jersey_number = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=99)
+    position_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Position.objects.all(),
+        many=True,
+        required=False
+    )
     
     def validate(self, attrs):
         team = attrs.get('team_id')
