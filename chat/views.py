@@ -3,11 +3,13 @@ from rest_framework import generics, permissions, status, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.views import APIView
 from .models import TeamChat, ChatMessage
 from .serializers import TeamChatSerializer, ChatMessageSerializer
 from teams.models import Team, Coach, Player
 from django.db.models import Q
 from notifications.models import FCMDevice
+from django.db import transaction
 
 # -------------------------
 # PAGINATION
@@ -238,3 +240,112 @@ def save_fcm_token(request):
     except Exception as e:
         print(f"[FCM] Unexpected error saving token: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# -------------------------
+# BROADCAST MESSAGE TO MULTIPLE TEAMS
+# -------------------------
+class BroadcastMessageView(APIView):
+    """
+    Allows admins to broadcast a message to all teams,
+    and coaches to broadcast to teams they handle.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_accessible_teams(self, user):
+        """Get teams the user can broadcast to."""
+        if user.is_admin:
+            return Team.objects.all()
+        
+        if user.role == 'Coach':
+            try:
+                coach = Coach.objects.get(user=user)
+                return Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach)
+                )
+            except Coach.DoesNotExist:
+                return Team.objects.none()
+        
+        return Team.objects.none()
+
+    def get(self, request):
+        """Get list of teams that the user can broadcast to."""
+        teams = self.get_accessible_teams(request.user)
+        
+        team_list = [
+            {
+                'id': team.id,
+                'name': team.name,
+                'logo': request.build_absolute_uri(team.logo.url) if team.logo else None,
+            }
+            for team in teams
+        ]
+        
+        return Response({
+            'teams': team_list,
+            'can_broadcast_all': request.user.is_admin,
+        })
+
+    def post(self, request):
+        """Broadcast a message to selected teams."""
+        message_text = request.data.get('message', '').strip()
+        team_ids = request.data.get('team_ids', [])
+        broadcast_all = request.data.get('broadcast_all', False)
+        
+        if not message_text:
+            return Response(
+                {'error': 'Message is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        accessible_teams = self.get_accessible_teams(user)
+        
+        # Determine target teams
+        if broadcast_all and user.is_admin:
+            target_teams = accessible_teams
+        elif team_ids:
+            # Filter to only accessible teams
+            target_teams = accessible_teams.filter(id__in=team_ids)
+        else:
+            return Response(
+                {'error': 'No teams selected for broadcast'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not target_teams.exists():
+            return Response(
+                {'error': 'No valid teams to broadcast to'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        created_messages = []
+        failed_teams = []
+        
+        with transaction.atomic():
+            for team in target_teams:
+                try:
+                    team_chat, _ = TeamChat.objects.get_or_create(team=team)
+                    message = ChatMessage.objects.create(
+                        team_chat=team_chat,
+                        sender=user,
+                        message=message_text
+                    )
+                    created_messages.append({
+                        'team_id': team.id,
+                        'team_name': team.name,
+                        'message_id': message.id
+                    })
+                except Exception as e:
+                    failed_teams.append({
+                        'team_id': team.id,
+                        'team_name': team.name,
+                        'error': str(e)
+                    })
+        
+        return Response({
+            'status': 'Broadcast sent',
+            'successful': len(created_messages),
+            'failed': len(failed_teams),
+            'messages': created_messages,
+            'errors': failed_teams if failed_teams else None
+        }, status=status.HTTP_201_CREATED)
