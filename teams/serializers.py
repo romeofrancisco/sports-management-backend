@@ -276,7 +276,7 @@ class PlayerInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
     profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
-    last_name = serializers.CharField(source="user.last_name", required=True)
+    last_name = serializers.CharField(source="user.last_name", required=False, allow_blank=True)
     date_of_birth = serializers.DateField(source="user.date_of_birth", required=False, allow_null=True)
     sex = serializers.CharField(source="user.sex", required=True)
     slug = serializers.CharField(read_only=True)
@@ -481,7 +481,7 @@ class CoachInfoSerializer(ModelSerializer):
     id = serializers.IntegerField(source="user.id", read_only=True)
     profile = serializers.ImageField(source="user.profile", required=False)
     first_name = serializers.CharField(source="user.first_name", required=True)
-    last_name = serializers.CharField(source="user.last_name", required=True)
+    last_name = serializers.CharField(source="user.last_name", required=False, allow_blank=True)
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex", required=True)
     # Combined teams field
@@ -784,6 +784,7 @@ class PlayerRegistrationCreateSerializer(ModelSerializer):
     )
     documents = PlayerRegistrationDocumentUploadSerializer(many=True, required=False, write_only=True)
     profile = serializers.ImageField(required=False, allow_null=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
     
     # Read-only fields for response
     sport = SportSerializer(read_only=True)
