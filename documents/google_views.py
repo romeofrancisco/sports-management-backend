@@ -137,10 +137,9 @@ def get_google_auth_url(request):
         }
     }
     
+    # Using only drive.file scope (non-sensitive) to avoid 'Google hasn't verified this app' warning
     scopes = [
         'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/documents',
-        'https://www.googleapis.com/auth/spreadsheets',
     ]
     
     flow = Flow.from_client_config(client_config, scopes=scopes, redirect_uri=redirect_uri)
@@ -153,6 +152,7 @@ def get_google_auth_url(request):
     
     auth_url, _ = flow.authorization_url(
         access_type='offline',
+        include_granted_scopes='false',  # Don't include old scopes
         prompt='consent',
         state=state
     )

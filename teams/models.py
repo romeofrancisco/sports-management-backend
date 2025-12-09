@@ -252,7 +252,7 @@ class PlayerRegistration(models.Model):
     # User information (will be created upon approval)
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150)
-    last_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150, blank=True)
     sex = models.CharField(max_length=10, choices=[("male", "Male"), ("female", "Female")], default="male")
     date_of_birth = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)

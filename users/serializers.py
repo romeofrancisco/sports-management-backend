@@ -7,6 +7,12 @@ from teams.models import Player, Team
 
 class UserProfileUpdateSerializer(ModelSerializer):
     """Serializer for updating user profile information"""
+    
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+    profile = serializers.ImageField(required=False, allow_null=True)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = User
@@ -25,6 +31,22 @@ class UserProfileUpdateSerializer(ModelSerializer):
         if User.objects.exclude(pk=user.pk).filter(email=value).exists():
             raise serializers.ValidationError("This email is already in use.")
         return value
+    
+    def update(self, instance, validated_data):
+        """Custom update method to handle profile image and other fields"""
+        # Handle profile image separately
+        profile = validated_data.pop('profile', None)
+        
+        # Update all other fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Update profile image if provided
+        if profile is not None:
+            instance.profile = profile
+        
+        instance.save()
+        return instance
 
 
 class UserSerializer(ModelSerializer):

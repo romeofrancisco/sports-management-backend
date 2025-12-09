@@ -9,6 +9,7 @@ from .views import (
     set_password,
     reset_password,
     forgot_password,
+    get_admin_contact_info,
 )
 
 urlpatterns = [
@@ -21,6 +22,7 @@ urlpatterns = [
     path("change-password/", change_password, name="change-password"),
     path("reset-password/", reset_password, name="reset-password"),
     path("forgot-password/", forgot_password, name="forgot-password"),
+    path("contact-info/", get_admin_contact_info, name="admin-contact-info"),
     
     path('google-signin/', GoogleOneTapLoginView.as_view(), name='google-signin'),
 ]

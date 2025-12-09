@@ -53,7 +53,7 @@ class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150)
-    last_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150, blank=True)
     sex = models.CharField(max_length=10, choices=Sex.choices, default=Sex.MALE)
     profile = models.ImageField(upload_to=user_profile_upload_path, null=True, blank=True)
     role = models.CharField(choices=Role, default=Role.PLAYER, max_length=10)
@@ -61,7 +61,7 @@ class User(AbstractUser):
     phone_number = models.CharField(max_length=20, blank=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["first_name", "last_name", "sex"]
+    REQUIRED_FIELDS = ["first_name", "sex"]
 
     objects = CustomUserManager()
 

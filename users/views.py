@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from datetime import timedelta, datetime, timezone
 from django.contrib.auth.models import update_last_login
 from django.conf import settings
@@ -49,6 +50,7 @@ def set_auth_cookies(response, access_token, refresh_token):
 class UserInfoView(RetrieveUpdateAPIView):
     permission_classes = (IsAuthenticated,)
     serializer_class = UserSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_object(self):
         return self.request.user
@@ -57,6 +59,22 @@ class UserInfoView(RetrieveUpdateAPIView):
         if self.request.method in ['PUT', 'PATCH']:
             return UserProfileUpdateSerializer
         return UserSerializer
+    
+    def update(self, request, *args, **kwargs):
+        """Override update to handle partial updates properly"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        # Return the updated user data using UserSerializer
+        return Response(UserSerializer(instance, context={'request': request}).data)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Handle PATCH requests"""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
 
 class LoginView(GenericAPIView):
@@ -325,3 +343,18 @@ class GoogleOneTapLoginView(APIView):
             # Catch other potential errors
             print(f"Login processing error: {e}")
             return Response({"error": "An unexpected error occurred during login."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_admin_contact_info(request):
+    """Get contact information for all admin users"""
+    admins = User.objects.filter(role=User.Role.ADMIN, is_active=True)
+    
+    emails = [admin.email for admin in admins if admin.email]
+    phone_numbers = [admin.phone_number for admin in admins if admin.phone_number]
+    
+    return Response({
+        'emails': emails,
+        'phone_numbers': phone_numbers
+    }, status=status.HTTP_200_OK)
+
