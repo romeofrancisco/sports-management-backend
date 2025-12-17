@@ -14,13 +14,26 @@ class PlayerStatsSummaryService:
         self.team_filter = team_filter
         self.teams = self._get_teams()
         
+        # Get stat codes that have actual recorded data for this game
+        self.recorded_stat_codes = set(
+            PlayerStat.objects.filter(game=self.game)
+            .values_list('stat_type__code', flat=True)
+            .distinct()
+        )
+        
         # Get all stats for this sport
-        self.all_stats = SportStatType.objects.filter(
+        # Filter out inactive stats that have no recorded data for this game
+        all_stats_query = SportStatType.objects.filter(
             sport=self.game.sport
         ).prefetch_related(
             'formula', 
             'formula__components',
             'formula__components__stat_type'
+        )
+        
+        # Filter: include active stats OR inactive stats that have recorded data
+        self.all_stats = all_stats_query.filter(
+            Q(is_active=True) | Q(code__in=self.recorded_stat_codes)
         )
         
         # Separate recording stats and formula stats

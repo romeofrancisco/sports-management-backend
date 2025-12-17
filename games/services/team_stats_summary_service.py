@@ -1,5 +1,5 @@
 from collections import defaultdict
-from django.db.models import Count
+from django.db.models import Count, Q
 from games.models import Game, PlayerStat
 from sports.models import Sport, SportStatType
 
@@ -9,13 +9,26 @@ class TeamStatsSummaryService:
         self.game = Game.objects.select_related("home_team", "away_team").get(pk=game_id)
         self.teams = [self.game.home_team, self.game.away_team]
         
+        # Get stat codes that have actual recorded data for this game
+        self.recorded_stat_codes = set(
+            PlayerStat.objects.filter(game=self.game)
+            .values_list('stat_type__code', flat=True)
+            .distinct()
+        )
+        
         # Get ALL stats for this sport without filtering is_team_summary
-        self.all_stats = SportStatType.objects.filter(
+        # Filter out inactive stats that have no recorded data for this game
+        all_stats_query = SportStatType.objects.filter(
             sport=self.game.sport
         ).prefetch_related(
             'formula', 
             'formula__components',
             'formula__components__stat_type'
+        )
+        
+        # Filter: include active stats OR inactive stats that have recorded data
+        self.all_stats = all_stats_query.filter(
+            Q(is_active=True) | Q(code__in=self.recorded_stat_codes)
         )
         
         # Separate recording stats and formula stats
