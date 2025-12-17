@@ -168,9 +168,45 @@ class Formula(models.Model):
         default=3, help_text="Number of decimal places to round the result to"
     )
     sport = models.ForeignKey(Sport, on_delete=models.CASCADE)
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this formula is active and can be used for new stats",
+    )
 
     def __str__(self):
         return f"{self.name} - {self.expression}"
+
+    def has_associated_games(self):
+        """
+        Check if this formula is used by any SportStatType that has recorded stats
+        """
+        # Check if any stat types using this formula have player stats
+        return self.sportstattype_set.filter(
+            playerstat__isnull=False
+        ).exists()
+
+    def soft_delete(self):
+        """
+        Soft delete the formula by setting is_active to False
+        This preserves historical data while preventing new usage
+        """
+        if self.has_associated_games():
+            self.is_active = False
+            self.save(update_fields=["is_active"])
+            return True
+        return False
+
+    def can_hard_delete(self):
+        """
+        Check if this formula can be safely hard deleted
+        (has no associated data)
+        """
+        return not self.has_associated_games()
+
+    def reactivate(self):
+        """Reactivate a soft-deleted formula"""
+        self.is_active = True
+        self.save(update_fields=["is_active"])
 
 
 class FormulaComponent(models.Model):
@@ -259,6 +295,10 @@ class SportStatType(models.Model):
         default=False,
         help_text="If True, this stat represents a negative action (like turnovers)",
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this stat type is active and can be used for new games",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -266,6 +306,35 @@ class SportStatType(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.code}"
+
+    def has_associated_games(self):
+        """
+        Check if this stat type has any recorded stats in games
+        """
+        return self.playerstat_set.exists()
+
+    def soft_delete(self):
+        """
+        Soft delete the stat type by setting is_active to False
+        This preserves historical data while preventing new usage
+        """
+        if self.has_associated_games():
+            self.is_active = False
+            self.save(update_fields=["is_active"])
+            return True
+        return False
+
+    def can_hard_delete(self):
+        """
+        Check if this stat type can be safely hard deleted
+        (has no associated data)
+        """
+        return not self.has_associated_games()
+
+    def reactivate(self):
+        """Reactivate a soft-deleted stat type"""
+        self.is_active = True
+        self.save(update_fields=["is_active"])
 
 
 class Position(models.Model):
