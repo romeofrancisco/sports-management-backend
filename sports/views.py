@@ -132,6 +132,43 @@ class SportStatTypeViewSet(ModelViewSet):
             
         return queryset
     
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to implement soft delete for stats with associated games"""
+        instance = self.get_object()
+        
+        if instance.has_associated_games():
+            # Soft delete
+            instance.soft_delete()
+            return Response({
+                'message': 'Stat type has been deactivated due to associated game data',
+                'status': 'deactivated',
+                'stat_type_name': instance.name
+            }, status=status.HTTP_200_OK)
+        else:
+            # Hard delete
+            instance.delete()
+            return Response({
+                'message': 'Stat type has been permanently deleted',
+                'status': 'deleted'
+            }, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Reactivate a deactivated stat type"""
+        stat_type = self.get_object()
+        
+        if stat_type.is_active:
+            return Response({
+                'error': 'Stat type is already active'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        stat_type.reactivate()
+        return Response({
+            'message': 'Stat type has been reactivated',
+            'status': 'reactivated',
+            'stat_type_name': stat_type.name
+        }, status=status.HTTP_200_OK)
+    
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """Get overview statistics for sport stat types"""
@@ -230,6 +267,43 @@ class FormulaViewSet(ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         return Response(serializer.data)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to implement soft delete for formulas with associated games"""
+        instance = self.get_object()
+        
+        if instance.has_associated_games():
+            # Soft delete
+            instance.soft_delete()
+            return Response({
+                'message': 'Formula has been deactivated due to associated game data',
+                'status': 'deactivated',
+                'formula_name': instance.name
+            }, status=status.HTTP_200_OK)
+        else:
+            # Hard delete
+            instance.delete()
+            return Response({
+                'message': 'Formula has been permanently deleted',
+                'status': 'deleted'
+            }, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Reactivate a deactivated formula"""
+        formula = self.get_object()
+        
+        if formula.is_active:
+            return Response({
+                'error': 'Formula is already active'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        formula.reactivate()
+        return Response({
+            'message': 'Formula has been reactivated',
+            'status': 'reactivated',
+            'formula_name': formula.name
+        }, status=status.HTTP_200_OK)
 
 
 class PositionViewSet(ModelViewSet):

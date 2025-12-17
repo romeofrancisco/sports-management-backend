@@ -45,7 +45,7 @@ class FormulaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Formula
-        fields = ['id', 'is_ratio', 'uses_point_value', 'decimal_places', 'name', 'category_name', 'category', 'expression', 'sport_slug', 'sport_name', 'components']
+        fields = ['id', 'is_ratio', 'is_active', 'uses_point_value', 'decimal_places', 'name', 'category_name', 'category', 'expression', 'sport_slug', 'sport_name', 'components']
         extra_kwargs = {
             'sport': {'write_only': True}  # This will be set via sport_slug
         }

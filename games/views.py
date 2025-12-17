@@ -103,7 +103,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
         try:
             game = Game.objects.get(pk=game_id)
             stats = SportStatType.objects.filter(
-                sport=game.sport, is_record=True
+                sport=game.sport, is_record=True, is_active=True
             ).annotate(
                 current_period=Value(game.current_period, output_field=IntegerField())
             )
