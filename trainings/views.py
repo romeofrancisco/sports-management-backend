@@ -2,14 +2,13 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from sports_management.permissions import IsAdminUser, IsCoachUser, IsAdminOrCoachUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Avg, Max, Min, Q
 from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from django.core.exceptions import PermissionDenied
 import logging
 import time
 
@@ -87,25 +86,25 @@ class MetricUnitViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Return metric units based on user role:
-        - Admin: All metric units
-        - Coach: Only admin-created units (system defaults) and their own units
-        - Others: Only admin-created units (system defaults)
+        - Admin: All metric units (including inactive)
+        - Coach: Active system defaults + their own units (including inactive ones they created)
+        - Others: Only active system defaults
         """
         user = self.request.user
         base_queryset = MetricUnit.objects.all().order_by("name")
 
-        # Admin can see all units
+        # Admin can see all units (including inactive)
         if user.is_admin:
             return base_queryset
         
-        # Coach can see admin-created units (system defaults) and their own units
+        # Coach can see active admin-created units (system defaults) and their own units (including inactive ones they created)
         if hasattr(user, 'coach_profile') and user.is_coach:
             return base_queryset.filter(
-                Q(is_default=True) | Q(created_by=user)
+                Q(is_default=True, is_active=True) | Q(created_by=user)
             )
         
-        # Others (players, etc.) can only see admin-created units (system defaults)
-        return base_queryset.filter(is_default=True)
+        # Others (players, etc.) can only see active admin-created units (system defaults)
+        return base_queryset.filter(is_default=True, is_active=True)
 
     def get_permissions(self):
         """
@@ -155,28 +154,53 @@ class MetricUnitViewSet(viewsets.ModelViewSet):
 
             raise PermissionDenied("You don't have permission to update metric units")
 
-    def perform_destroy(self, instance):
-        """Allow deletion based on user role and ownership"""
-        user = self.request.user
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to implement soft delete for units with associated data"""
+        instance = self.get_object()
+        user = request.user
 
-        # Admin can delete any unit (including system defaults)
-        if user.is_admin:
-            instance.delete()
-        # Coach can only delete units they created (non-default)
-        elif user.is_coach:
-            if instance.is_default:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("Coaches cannot delete system default units")
-            if instance.created_by != user:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("You can only delete units you created")
-            instance.delete()
+        # Permission checks
+        if not user.is_admin:
+            if user.is_coach:
+                if instance.is_default:
+                    raise PermissionDenied("Coaches cannot delete system default units")
+                if instance.created_by != user:
+                    raise PermissionDenied("You can only delete units you created")
+            else:
+                raise PermissionDenied("You don't have permission to delete metric units")
+        
+        if instance.has_associated_data():
+            # Soft delete
+            instance.soft_delete()
+            return Response({
+                'message': 'Metric unit has been deactivated due to associated data',
+                'status': 'deactivated',
+                'unit_name': instance.name
+            }, status=status.HTTP_200_OK)
         else:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("You don't have permission to delete metric units")
+            # Hard delete
+            instance.delete()
+            return Response({
+                'message': 'Metric unit has been permanently deleted',
+                'status': 'deleted'
+            }, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Reactivate a deactivated metric unit"""
+        unit = self.get_object()
+        
+        if unit.is_active:
+            return Response({
+                'error': 'Metric unit is already active'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        unit.reactivate()
+        return Response({
+            'message': 'Metric unit has been reactivated',
+            'status': 'reactivated',
+            'unit_name': unit.name
+        }, status=status.HTTP_200_OK)
 
 
 class TrainingCategoryViewSet(viewsets.ModelViewSet):
@@ -196,18 +220,18 @@ class TrainingCategoryViewSet(viewsets.ModelViewSet):
         user = self.request.user
         base_queryset = TrainingCategory.objects.all().order_by("name")
 
-        # Admin can see all categories
+        # Admin can see all categories (including inactive)
         if user.is_admin:
             return base_queryset
         
-        # Coach can see admin-created categories (system defaults) and their own categories
+        # Coach can see active admin-created categories (system defaults) and their own categories (including inactive ones they created)
         if hasattr(user, 'coach_profile') and user.is_coach:
             return base_queryset.filter(
-                Q(is_default=True) | Q(created_by=user)
+                Q(is_default=True, is_active=True) | Q(created_by=user)
             )
         
-        # Others (players, etc.) can only see admin-created categories (system defaults)
-        return base_queryset.filter(is_default=True)
+        # Others (players, etc.) can only see active admin-created categories (system defaults)
+        return base_queryset.filter(is_default=True, is_active=True)
 
     def get_permissions(self):
         """
@@ -257,28 +281,53 @@ class TrainingCategoryViewSet(viewsets.ModelViewSet):
 
             raise PermissionDenied("You don't have permission to update training categories")
 
-    def perform_destroy(self, instance):
-        """Allow deletion based on user role and ownership"""
-        user = self.request.user
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to implement soft delete for categories with associated data"""
+        instance = self.get_object()
+        user = request.user
 
-        # Admin can delete any category (including system defaults)
-        if user.is_admin:
-            instance.delete()
-        # Coach can only delete categories they created (non-default)
-        elif user.is_coach:
-            if instance.is_default:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("Coaches cannot delete system default categories")
-            if instance.created_by != user:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("You can only delete categories you created")
-            instance.delete()
+        # Permission checks
+        if not user.is_admin:
+            if user.is_coach:
+                if instance.is_default:
+                    raise PermissionDenied("Coaches cannot delete system default categories")
+                if instance.created_by != user:
+                    raise PermissionDenied("You can only delete categories you created")
+            else:
+                raise PermissionDenied("You don't have permission to delete training categories")
+        
+        if instance.has_associated_data():
+            # Soft delete
+            instance.soft_delete()
+            return Response({
+                'message': 'Training category has been deactivated due to associated data',
+                'status': 'deactivated',
+                'category_name': instance.name
+            }, status=status.HTTP_200_OK)
         else:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("You don't have permission to delete training categories")
+            # Hard delete
+            instance.delete()
+            return Response({
+                'message': 'Training category has been permanently deleted',
+                'status': 'deleted'
+            }, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Reactivate a deactivated training category"""
+        category = self.get_object()
+        
+        if category.is_active:
+            return Response({
+                'error': 'Training category is already active'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        category.reactivate()
+        return Response({
+            'message': 'Training category has been reactivated',
+            'status': 'reactivated',
+            'category_name': category.name
+        }, status=status.HTTP_200_OK)
 
 
 class TrainingMetricViewSet(viewsets.ModelViewSet):
@@ -292,25 +341,25 @@ class TrainingMetricViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Return training metrics based on user role:
-        - Admin: All training metrics
-        - Coach: Only admin-created metrics (system defaults) and their own metrics
-        - Others: Only admin-created metrics (system defaults)
+        - Admin: All training metrics (including inactive)
+        - Coach: Active system defaults + their own metrics (including inactive ones they created)
+        - Others: Only active system defaults
         """
         user = self.request.user
         base_queryset = TrainingMetric.objects.all().order_by("name")
 
-        # Admin can see all metrics
+        # Admin can see all metrics (including inactive)
         if user.is_admin:
             return base_queryset
         
-        # Coach can see admin-created metrics (system defaults) and their own metrics
+        # Coach can see active admin-created metrics (system defaults) and their own metrics (including inactive ones they created)
         if hasattr(user, 'coach_profile') and user.is_coach:
             return base_queryset.filter(
-                Q(is_default=True) | Q(created_by=user)
+                Q(is_default=True, is_active=True) | Q(created_by=user)
             )
         
-        # Others (players, etc.) can only see admin-created metrics (system defaults)
-        return base_queryset.filter(is_default=True)
+        # Others (players, etc.) can only see active admin-created metrics (system defaults)
+        return base_queryset.filter(is_default=True, is_active=True)
 
     def get_permissions(self):
         """
@@ -360,28 +409,53 @@ class TrainingMetricViewSet(viewsets.ModelViewSet):
 
             raise PermissionDenied("You don't have permission to update training metrics")
 
-    def perform_destroy(self, instance):
-        """Allow deletion based on user role and ownership"""
-        user = self.request.user
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to implement soft delete for metrics with associated data"""
+        instance = self.get_object()
+        user = request.user
 
-        # Admin can delete any metric (including system defaults)
-        if user.is_admin:
-            instance.delete()
-        # Coach can only delete metrics they created (non-default)
-        elif user.is_coach:
-            if instance.is_default:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("Coaches cannot delete system default metrics")
-            if instance.created_by != user:
-                from rest_framework.exceptions import PermissionDenied
-
-                raise PermissionDenied("You can only delete metrics you created")
-            instance.delete()
+        # Permission checks
+        if not user.is_admin:
+            if user.is_coach:
+                if instance.is_default:
+                    raise PermissionDenied("Coaches cannot delete system default metrics")
+                if instance.created_by != user:
+                    raise PermissionDenied("You can only delete metrics you created")
+            else:
+                raise PermissionDenied("You don't have permission to delete training metrics")
+        
+        if instance.has_associated_data():
+            # Soft delete
+            instance.soft_delete()
+            return Response({
+                'message': 'Training metric has been deactivated due to associated data',
+                'status': 'deactivated',
+                'metric_name': instance.name
+            }, status=status.HTTP_200_OK)
         else:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("You don't have permission to delete training metrics")
+            # Hard delete
+            instance.delete()
+            return Response({
+                'message': 'Training metric has been permanently deleted',
+                'status': 'deleted'
+            }, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        """Reactivate a deactivated training metric"""
+        metric = self.get_object()
+        
+        if metric.is_active:
+            return Response({
+                'error': 'Training metric is already active'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        metric.reactivate()
+        return Response({
+            'message': 'Training metric has been reactivated',
+            'status': 'reactivated',
+            'metric_name': metric.name
+        }, status=status.HTTP_200_OK)
 
 
 class TrainingSessionViewSet(viewsets.ModelViewSet):

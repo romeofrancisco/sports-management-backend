@@ -20,6 +20,10 @@ class MetricUnit(models.Model):
         default=False,
         help_text="System default units that cannot be deleted by regular users",
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this unit is active and can be used for new metrics",
+    )
     created_by = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -35,6 +39,27 @@ class MetricUnit(models.Model):
     class Meta:
         ordering = ["name"]
 
+    def has_associated_data(self):
+        """Check if this unit has any associated metrics with recorded data"""
+        return self.metrics.filter(records__isnull=False).exists()
+
+    def soft_delete(self):
+        """Soft delete the unit by setting is_active to False"""
+        if self.has_associated_data():
+            self.is_active = False
+            self.save(update_fields=["is_active"])
+            return True
+        return False
+
+    def can_hard_delete(self):
+        """Check if this unit can be safely hard deleted"""
+        return not self.has_associated_data()
+
+    def reactivate(self):
+        """Reactivate a soft-deleted unit"""
+        self.is_active = True
+        self.save(update_fields=["is_active"])
+
 
 class TrainingCategory(models.Model):
     """Training categories like 'Endurance', 'Speed', 'Strength', etc."""
@@ -44,6 +69,10 @@ class TrainingCategory(models.Model):
     is_default = models.BooleanField(
         default=False,
         help_text="System default categories that cannot be deleted by regular users",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this category is active and can be used for new sessions/metrics",
     )
     created_by = models.ForeignKey(
         "users.User",
@@ -60,6 +89,31 @@ class TrainingCategory(models.Model):
     class Meta:
         verbose_name_plural = "Training Categories"
         ordering = ["name"]
+
+    def has_associated_data(self):
+        """Check if this category has any associated metrics with recorded data or sessions"""
+        # Check if any metrics in this category have recorded data
+        has_metric_records = self.metrics.filter(records__isnull=False).exists()
+        # Check if any sessions use this category
+        has_sessions = self.sessions.exists()
+        return has_metric_records or has_sessions
+
+    def soft_delete(self):
+        """Soft delete the category by setting is_active to False"""
+        if self.has_associated_data():
+            self.is_active = False
+            self.save(update_fields=["is_active"])
+            return True
+        return False
+
+    def can_hard_delete(self):
+        """Check if this category can be safely hard deleted"""
+        return not self.has_associated_data()
+
+    def reactivate(self):
+        """Reactivate a soft-deleted category"""
+        self.is_active = True
+        self.save(update_fields=["is_active"])
 
 
 class TrainingSession(models.Model):
@@ -253,6 +307,10 @@ class TrainingMetric(models.Model):
         default=False,
         help_text="System default metrics that cannot be deleted by regular users",
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this metric is active and can be used for new sessions",
+    )
     created_by = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -272,6 +330,33 @@ class TrainingMetric(models.Model):
 
     class Meta:
         ordering = ["name"]
+
+    def has_associated_data(self):
+        """Check if this metric has any recorded data or is assigned to sessions/players"""
+        # Check if any records exist for this metric
+        has_records = self.records.exists()
+        # Check if assigned to any sessions
+        has_sessions = self.sessions.exists()
+        # Check if assigned to any player trainings
+        has_player_assignments = self.assigned_player_trainings.exists()
+        return has_records or has_sessions or has_player_assignments
+
+    def soft_delete(self):
+        """Soft delete the metric by setting is_active to False"""
+        if self.has_associated_data():
+            self.is_active = False
+            self.save(update_fields=["is_active"])
+            return True
+        return False
+
+    def can_hard_delete(self):
+        """Check if this metric can be safely hard deleted"""
+        return not self.has_associated_data()
+
+    def reactivate(self):
+        """Reactivate a soft-deleted metric"""
+        self.is_active = True
+        self.save(update_fields=["is_active"])
 
 
 class PlayerMetricRecord(models.Model):
