@@ -30,10 +30,11 @@ class MetricUnitSerializer(serializers.ModelSerializer):
             "normalization_weight",
             "description",
             "is_default",
+            "is_active",
             "created_by",
             "created_by_name",
         ]
-        read_only_fields = ["created_by", "created_by_name"]
+        read_only_fields = ["created_by", "created_by_name", "is_active"]
 
 
 class TrainingCategorySerializer(serializers.ModelSerializer):
@@ -48,9 +49,11 @@ class TrainingCategorySerializer(serializers.ModelSerializer):
             "name",
             "description",
             "is_default",
+            "is_active",
             "created_by",
             "created_by_name",
         ]
+        read_only_fields = ["created_by", "created_by_name", "is_active"]
 
 
 class TrainingMetricSerializer(serializers.ModelSerializer):
@@ -73,9 +76,11 @@ class TrainingMetricSerializer(serializers.ModelSerializer):
             "is_lower_better",
             "weight",
             "is_default",
+            "is_active",
             "created_by",
             "created_by_name",
         ]
+        read_only_fields = ["created_by", "created_by_name", "is_active"]
 
 
 class PlayerMetricRecordSerializer(serializers.ModelSerializer):
