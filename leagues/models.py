@@ -38,7 +38,15 @@ class League(models.Model):
         sport = self.sport
         scoring_type = sport.scoring_type  # "points", "sets", or "goals"
         seasons = self.seasons.prefetch_related("teams", "games").all()
-        all_games = Game.objects.filter(season__in=seasons, status="completed")
+        
+        # Include completed games, default wins, and forfeited games
+        finished_statuses = [
+            Game.Status.COMPLETED,
+            Game.Status.DEFAULT_HOME_WIN,
+            Game.Status.DEFAULT_AWAY_WIN,
+            Game.Status.FORFEITED,
+        ]
+        all_games = Game.objects.filter(season__in=seasons, status__in=finished_statuses)
 
         teams = set()
         for season in seasons:
@@ -50,23 +58,61 @@ class League(models.Model):
             team_seasons = seasons.filter(teams=team)
             seasons_participated = team_seasons.count()
 
-            matches_played = all_games.filter(
-                Q(home_team=team) | Q(away_team=team)
-            ).count()
+            # Filter games involving this team
+            team_games = all_games.filter(Q(home_team=team) | Q(away_team=team))
+            matches_played = team_games.count()
 
-            wins = all_games.filter(
+            # Regular wins (by score in completed games)
+            regular_wins = team_games.filter(
+                status=Game.Status.COMPLETED
+            ).filter(
                 Q(home_team=team, home_team_score__gt=F("away_team_score"))
                 | Q(away_team=team, away_team_score__gt=F("home_team_score"))
             ).count()
 
-            losses = all_games.filter(
+            # Default wins (team won because opponent didn't show)
+            default_wins = team_games.filter(
+                Q(status=Game.Status.DEFAULT_HOME_WIN, home_team=team) |
+                Q(status=Game.Status.DEFAULT_AWAY_WIN, away_team=team)
+            ).count()
+
+            # Forfeit wins (opponent forfeited)
+            forfeit_wins = team_games.filter(
+                status=Game.Status.FORFEITED,
+                winner_team=team
+            ).count()
+
+            # Total wins
+            wins = regular_wins + default_wins + forfeit_wins
+
+            # Regular losses
+            regular_losses = team_games.filter(
+                status=Game.Status.COMPLETED
+            ).filter(
                 Q(home_team=team, home_team_score__lt=F("away_team_score"))
                 | Q(away_team=team, away_team_score__lt=F("home_team_score"))
             ).count()
 
+            # Default losses (team didn't show up)
+            default_losses = team_games.filter(
+                Q(status=Game.Status.DEFAULT_HOME_WIN, away_team=team) |
+                Q(status=Game.Status.DEFAULT_AWAY_WIN, home_team=team)
+            ).count()
+
+            # Forfeit losses (team forfeited)
+            forfeit_losses = team_games.filter(
+                status=Game.Status.FORFEITED,
+                forfeited_by=team
+            ).count()
+
+            # Total losses
+            losses = regular_losses + default_losses + forfeit_losses
+
             ties = 0
             if sport.has_tie:
-                ties = all_games.filter(
+                ties = team_games.filter(
+                    status=Game.Status.COMPLETED
+                ).filter(
                     Q(home_team=team, home_team_score=F("away_team_score"))
                     | Q(away_team=team, away_team_score=F("home_team_score"))
                 ).count()
@@ -93,6 +139,10 @@ class League(models.Model):
                 "matches_played": matches_played,
                 "wins": wins,
                 "losses": losses,
+                "default_wins": default_wins,
+                "default_losses": default_losses,
+                "forfeit_wins": forfeit_wins,
+                "forfeit_losses": forfeit_losses,
                 "win_ratio": win_ratio,
             }
 
@@ -345,8 +395,15 @@ class Season(models.Model):
 
     @property
     def games_played(self):
-        """Return the number of completed games in the season"""
-        return self.games.filter(status="completed").count()
+        """Return the number of finished games in the season (including defaults and forfeits)"""
+        from games.models import Game
+        finished_statuses = [
+            Game.Status.COMPLETED,
+            Game.Status.DEFAULT_HOME_WIN,
+            Game.Status.DEFAULT_AWAY_WIN,
+            Game.Status.FORFEITED,
+        ]
+        return self.games.filter(status__in=finished_statuses).count()
 
     @property
     def avg_points_per_game(self):
@@ -414,27 +471,72 @@ class Season(models.Model):
 
         sport = self.league.sport
         scoring_type = sport.scoring_type  # "points", "sets", or "goals"
-        games = self.games.filter(status="completed", season=self.id)
+        
+        # Include completed games, default wins, and forfeited games
+        finished_statuses = [
+            Game.Status.COMPLETED,
+            Game.Status.DEFAULT_HOME_WIN,
+            Game.Status.DEFAULT_AWAY_WIN,
+            Game.Status.FORFEITED,
+        ]
+        games = self.games.filter(status__in=finished_statuses, season=self.id)
         standings = []
 
         for team in self.teams.all():
             team_games = games.filter(Q(home_team=team) | Q(away_team=team))
             matches_played = team_games.count()
 
-            # Calculate match wins/losses
-            wins = team_games.filter(
+            # Regular wins (by score in completed games)
+            regular_wins = team_games.filter(
+                status=Game.Status.COMPLETED
+            ).filter(
                 Q(home_team=team, home_team_score__gt=F("away_team_score"))
                 | Q(away_team=team, away_team_score__gt=F("home_team_score"))
             ).count()
 
-            losses = team_games.filter(
+            # Default wins (team won because opponent didn't show)
+            default_wins = team_games.filter(
+                Q(status=Game.Status.DEFAULT_HOME_WIN, home_team=team) |
+                Q(status=Game.Status.DEFAULT_AWAY_WIN, away_team=team)
+            ).count()
+
+            # Forfeit wins (opponent forfeited)
+            forfeit_wins = team_games.filter(
+                status=Game.Status.FORFEITED,
+                winner_team=team
+            ).count()
+
+            # Total wins
+            wins = regular_wins + default_wins + forfeit_wins
+
+            # Regular losses
+            regular_losses = team_games.filter(
+                status=Game.Status.COMPLETED
+            ).filter(
                 Q(home_team=team, home_team_score__lt=F("away_team_score"))
                 | Q(away_team=team, away_team_score__lt=F("home_team_score"))
             ).count()
 
+            # Default losses (team didn't show up)
+            default_losses = team_games.filter(
+                Q(status=Game.Status.DEFAULT_HOME_WIN, away_team=team) |
+                Q(status=Game.Status.DEFAULT_AWAY_WIN, home_team=team)
+            ).count()
+
+            # Forfeit losses (team forfeited)
+            forfeit_losses = team_games.filter(
+                status=Game.Status.FORFEITED,
+                forfeited_by=team
+            ).count()
+
+            # Total losses
+            losses = regular_losses + default_losses + forfeit_losses
+
             ties = 0
             if sport.has_tie:
                 ties = team_games.filter(
+                    status=Game.Status.COMPLETED
+                ).filter(
                     Q(home_team=team, home_team_score=F("away_team_score"))
                     | Q(away_team=team, away_team_score=F("home_team_score"))
                 ).count()
@@ -451,6 +553,10 @@ class Season(models.Model):
                 "matches_played": matches_played,
                 "wins": wins,
                 "losses": losses,
+                "default_wins": default_wins,
+                "default_losses": default_losses,
+                "forfeit_wins": forfeit_wins,
+                "forfeit_losses": forfeit_losses,
             }
 
             if sport.has_tie:
@@ -463,9 +569,10 @@ class Season(models.Model):
                     round(wins / matches_played, 3) if matches_played else 0
                 )
 
-                # Calculate points per game and point differential
-                home_games = team_games.filter(home_team=team)
-                away_games = team_games.filter(away_team=team)
+                # Calculate points per game and point differential (only from completed games)
+                completed_team_games = team_games.filter(status=Game.Status.COMPLETED)
+                home_games = completed_team_games.filter(home_team=team)
+                away_games = completed_team_games.filter(away_team=team)
 
                 total_points_scored = 0
                 total_points_conceded = 0
@@ -513,15 +620,16 @@ class Season(models.Model):
                 # 2. Sets won/lost
                 # 3. Set ratio
 
-                # Get sets from completed games involving this team
+                # Get sets from completed games involving this team (not defaults/forfeits)
+                completed_team_games = team_games.filter(status=Game.Status.COMPLETED)
                 sets_won = 0
                 sets_lost = 0
                 points = (
                     wins * 2
                 )  # Standard 2 points for match win in volleyball/tennis
 
-                # Count sets won and lost by this team
-                for game in team_games:
+                # Count sets won and lost by this team (only from completed games)
+                for game in completed_team_games:
                     if game.home_team == team:
                         sets_won += GameSet.objects.filter(
                             game=game, winner=team

@@ -712,6 +712,19 @@ class GameViewSet(viewsets.ModelViewSet):
             game.complete_game()
         elif action == "next_period":
             game.next_period()
+        elif action == "default_home_win":
+            game.default_win(winning_team=game.home_team)
+        elif action == "default_away_win":
+            game.default_win(winning_team=game.away_team)
+        elif action == "double_default":
+            game.default_win(winning_team=None, no_show_team=None)
+        elif action == "forfeit":
+            forfeiting_team_id = serializer.validated_data.get("forfeiting_team_id")
+            if forfeiting_team_id == game.home_team_id:
+                forfeiting_team = game.home_team
+            else:
+                forfeiting_team = game.away_team
+            game.forfeit(forfeiting_team=forfeiting_team)
 
         # Send WebSocket update if status or period changed
         if game.status != old_status or game.current_period != old_period:
@@ -926,9 +939,9 @@ class GameViewSet(viewsets.ModelViewSet):
     def game_flow(self, request, pk=None):
         game = self.get_object()
 
-        if game.status != Game.Status.COMPLETED:
+        if game.status != Game.Status.COMPLETED and game.status != Game.Status.FORFEITED:
             return Response(
-                {"error": "Game flow data is only available for completed games"},
+                {"error": "Game flow data is only available for completed or forfeited games"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

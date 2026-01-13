@@ -222,6 +222,7 @@ class GameSerializer(serializers.ModelSerializer):
     away_team = TeamSerializer(read_only=True)
     status = serializers.ChoiceField(choices=Game.Status.choices, required=False)
     winner = serializers.SerializerMethodField()
+    forfeited_by = serializers.SerializerMethodField()
     lineup_status = serializers.SerializerMethodField()
     score_summary = serializers.SerializerMethodField()
     sport_slug = serializers.CharField(source="sport.slug", read_only=True)
@@ -291,6 +292,7 @@ class GameSerializer(serializers.ModelSerializer):
             "away_team_score",
             "current_period",
             "winner",
+            "forfeited_by",
             "assigned_coaches",
             "recent_score_updates",
             "created_at",
@@ -299,6 +301,7 @@ class GameSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "winner",
+            "forfeited_by",
         ]
 
     def create(self, validated_data):
@@ -306,6 +309,10 @@ class GameSerializer(serializers.ModelSerializer):
 
     def get_winner(self, obj):
         return obj.winner.id if obj.winner else None
+    
+    def get_forfeited_by(self, obj):
+        """Return the ID of the team that forfeited, if any"""
+        return obj.forfeited_by.id if obj.forfeited_by else None
     
     def get_tournament(self, obj):
         """Return tournament data with name only for frontend display"""
@@ -413,16 +420,26 @@ class GameDetailSerializer(GameSerializer):
 
 class GameActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
-        choices=["start", "complete", "postpone", "next_period"], required=True
+        choices=[
+            "start", "complete", "postpone", "next_period",
+            "default_home_win", "default_away_win", "double_default", "forfeit"
+        ],
+        required=True
     )
+    # For forfeit action, specify which team is forfeiting
+    forfeiting_team_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_action(self, value):
         game = self.context["game"]
         valid_transitions = {
-            Game.Status.SCHEDULED: ["start"],
-            Game.Status.IN_PROGRESS: ["complete", "postpone", "next_period"],
-            Game.Status.POSTPONED: ["start"],
+            Game.Status.SCHEDULED: ["start", "default_home_win", "default_away_win", "double_default"],
+            Game.Status.IN_PROGRESS: ["complete", "postpone", "next_period", "forfeit"],
+            Game.Status.POSTPONED: ["start", "default_home_win", "default_away_win", "double_default"],
             Game.Status.COMPLETED: [],
+            Game.Status.DEFAULT_HOME_WIN: [],
+            Game.Status.DEFAULT_AWAY_WIN: [],
+            Game.Status.DOUBLE_DEFAULT: [],
+            Game.Status.FORFEITED: [],
         }
 
         current_status = game.status
@@ -435,6 +452,25 @@ class GameActionSerializer(serializers.Serializer):
             )
 
         return value
+
+    def validate(self, data):
+        action = data.get("action")
+        game = self.context["game"]
+        
+        # For forfeit action, forfeiting_team_id is required
+        if action == "forfeit":
+            forfeiting_team_id = data.get("forfeiting_team_id")
+            if not forfeiting_team_id:
+                raise serializers.ValidationError(
+                    {"forfeiting_team_id": "This field is required for forfeit action"}
+                )
+            # Validate that the team is part of the game
+            if forfeiting_team_id not in [game.home_team_id, game.away_team_id]:
+                raise serializers.ValidationError(
+                    {"forfeiting_team_id": "Team must be one of the teams in this game"}
+                )
+        
+        return data
 
 
 class GamePlayerSerializer(serializers.ModelSerializer):

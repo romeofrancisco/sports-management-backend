@@ -41,6 +41,20 @@ class Game(models.Model):
         IN_PROGRESS = "in_progress", "In Progress"
         COMPLETED = "completed", "Completed"
         POSTPONED = "postponed", "Postponed"
+        DEFAULT_HOME_WIN = "default_home_win", "Default Win (Home)"  # Away team didn't show
+        DEFAULT_AWAY_WIN = "default_away_win", "Default Win (Away)"  # Home team didn't show
+        DOUBLE_DEFAULT = "double_default", "Double Default"  # Both teams didn't show
+        FORFEITED = "forfeited", "Forfeited"  # Game stopped early, one team can't continue
+
+    # Team that forfeited (only set when status is FORFEITED)
+    forfeited_by = models.ForeignKey(
+        "teams.Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="games_forfeited",
+        help_text="The team that forfeited the game (only set when status is 'forfeited')"
+    )
 
     class Type(models.TextChoices):
         LEAGUE = "league", "League"
@@ -647,6 +661,94 @@ class Game(models.Model):
 
         self.save(update_fields=updates)
 
+    def default_win(self, winning_team=None, no_show_team=None):
+        """
+        Handle default win when one or both teams don't show up.
+        
+        Args:
+            winning_team: The team that wins by default (if only one team shows)
+            no_show_team: The team that didn't show up (optional, for clarity)
+        
+        If neither team shows, this results in a DOUBLE_DEFAULT status.
+        """
+        if self.status not in [self.Status.SCHEDULED, self.Status.POSTPONED]:
+            raise ValidationError(
+                {"error": "Default can only be declared for scheduled or postponed games"}
+            )
+
+        # Double default - neither team showed up
+        if winning_team is None and no_show_team is None:
+            self.status = self.Status.DOUBLE_DEFAULT
+            self.home_team_score = 0
+            self.away_team_score = 0
+            self.winner_team = None
+            self.ended_at = timezone.now()
+            self.save(update_fields=["status", "home_team_score", "away_team_score", 
+                                      "winner_team", "ended_at", "updated_at"])
+            return
+
+        # Validate winning team
+        if winning_team is not None:
+            if winning_team not in [self.home_team, self.away_team]:
+                raise ValidationError(
+                    {"error": "Winning team must be one of the teams in this game"}
+                )
+
+        # Determine which team didn't show
+        if winning_team == self.home_team:
+            self.status = self.Status.DEFAULT_HOME_WIN
+            self.winner_team = self.home_team
+            # Typically, default wins are recorded as a standard win score
+            # You can customize these values based on sport rules
+            self.home_team_score = 1  # Default score for winner
+            self.away_team_score = 0
+        elif winning_team == self.away_team:
+            self.status = self.Status.DEFAULT_AWAY_WIN
+            self.winner_team = self.away_team
+            self.home_team_score = 0
+            self.away_team_score = 1  # Default score for winner
+        else:
+            raise ValidationError(
+                {"error": "Must specify a winning team for default win"}
+            )
+
+        self.ended_at = timezone.now()
+        self.save(update_fields=["status", "home_team_score", "away_team_score",
+                                  "winner_team", "ended_at", "updated_at"])
+
+    def forfeit(self, forfeiting_team):
+        """
+        Handle forfeit when a team can't continue playing.
+        This allows ending a game before the max period is reached.
+        
+        Args:
+            forfeiting_team: The team that is forfeiting the game
+        """
+        if self.status != self.Status.IN_PROGRESS:
+            raise ValidationError(
+                {"error": "Forfeit can only be declared for games in progress"}
+            )
+
+        if forfeiting_team not in [self.home_team, self.away_team]:
+            raise ValidationError(
+                {"error": "Forfeiting team must be one of the teams in this game"}
+            )
+
+        # Determine the winner (the team that didn't forfeit)
+        if forfeiting_team == self.home_team:
+            self.winner_team = self.away_team
+        else:
+            self.winner_team = self.home_team
+
+        self.status = self.Status.FORFEITED
+        self.forfeited_by = forfeiting_team
+        self.ended_at = timezone.now()
+        self.duration = self.ended_at - self.started_at if self.started_at else None
+        
+        # Keep the current scores as they are - this reflects the game state when forfeited
+        self.save(update_fields=["status", "forfeited_by", "winner_team", 
+                                  "ended_at", "duration", "updated_at"])
+
     def validate_starting_lineup(self):
         sport = self.sport
         
@@ -703,7 +805,23 @@ class Game(models.Model):
         if self.winner_team is not None:
             return self.winner_team
 
+        # Handle special game statuses with explicit winners
+        if self.status == self.Status.DEFAULT_HOME_WIN:
+            return self.home_team
+        elif self.status == self.Status.DEFAULT_AWAY_WIN:
+            return self.away_team
+        elif self.status == self.Status.FORFEITED:
+            # For forfeited games, winner is the team that didn't forfeit
+            if self.forfeited_by == self.home_team:
+                return self.away_team
+            elif self.forfeited_by == self.away_team:
+                return self.home_team
+            return None
+        elif self.status == self.Status.DOUBLE_DEFAULT:
+            return None  # No winner when both teams didn't show
+
         # If no explicit winner is set, calculate based on scores
+        # Only calculate for completed games
         if self.status != self.Status.COMPLETED:
             return None  # Match is still in progress
 
