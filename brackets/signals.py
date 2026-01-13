@@ -14,6 +14,78 @@ logger = logging.getLogger(__name__)
 _bulk_games_cache = {}
 
 
+def _advance_bye_winner(current_match, bye_winner):
+    """
+    Recursively advance a bye winner through subsequent matches.
+    This handles the case where a team gets a bye and their next opponent
+    also comes from a double default or bye situation.
+    """
+    if not current_match.next_match:
+        return
+    
+    next_match = BracketMatch.objects.select_for_update().get(id=current_match.next_match.id)
+    
+    # Find parent matches
+    parent_matches = list(BracketMatch.objects.filter(
+        next_match=next_match
+    ).order_by('id'))
+    
+    # Determine position and assign team
+    parent_ids = [pm.id for pm in parent_matches]
+    try:
+        position = parent_ids.index(current_match.id)
+        if position == 0:
+            if next_match.home_team != bye_winner:
+                next_match.home_team = bye_winner
+                next_match.save(update_fields=["home_team"])
+        else:
+            if next_match.away_team != bye_winner:
+                next_match.away_team = bye_winner
+                next_match.save(update_fields=["away_team"])
+    except ValueError:
+        pass
+    
+    # Check if the other parent match had a double default or no winner
+    other_parent = None
+    for pm in parent_matches:
+        if pm.id != current_match.id:
+            other_parent = pm
+            break
+    
+    if other_parent:
+        # Check if other parent's game was a double default
+        other_had_double_default = (
+            other_parent.game and 
+            other_parent.game.status == Game.Status.DOUBLE_DEFAULT
+        )
+        # Or if other parent has no winner and its game is finished
+        other_finished_no_winner = (
+            other_parent.game and 
+            other_parent.game.status in [Game.Status.DOUBLE_DEFAULT] and
+            other_parent.winner is None
+        )
+        
+        if other_had_double_default or other_finished_no_winner:
+            # Bye winner advances through this match too
+            logger.info(f"Bye winner {bye_winner.name} also advances through match {next_match.id} (opponent had double default)")
+            next_match.winner = bye_winner
+            next_match.save(update_fields=["winner"])
+            
+            # Mark the game as default win if scheduled
+            if next_match.game and next_match.game.status == Game.Status.SCHEDULED:
+                bye_game = next_match.game
+                if bye_game.home_team == bye_winner:
+                    bye_game.status = Game.Status.DEFAULT_HOME_WIN
+                else:
+                    bye_game.status = Game.Status.DEFAULT_AWAY_WIN
+                bye_game.winner_team = bye_winner
+                bye_game.save(update_fields=["status", "winner_team"])
+                logger.info(f"Marked game {bye_game.id} as default win for {bye_winner.name}")
+            
+            # Continue advancing
+            _advance_bye_winner(next_match, bye_winner)
+
+
 def _send_game_notification_async(game):
     """Helper to send game notification in a separate thread to avoid blocking"""
     try:
@@ -32,10 +104,20 @@ def _send_bulk_game_notifications_async(games):
         logger.error(f"Failed to send bulk game notifications: {e}")
 
 
+# Game statuses that count as "finished" for bracket advancement
+FINISHED_GAME_STATUSES = [
+    Game.Status.COMPLETED,
+    Game.Status.DEFAULT_HOME_WIN,
+    Game.Status.DEFAULT_AWAY_WIN,
+    Game.Status.DOUBLE_DEFAULT,
+    Game.Status.FORFEITED,
+]
+
+
 @receiver(post_save, sender=Game)
 def update_match_winner(sender, instance, **kwargs):
-    # Only process completed games that are part of a tournament or league
-    if instance.status != Game.Status.COMPLETED or instance.type == Game.Type.PRACTICE:
+    # Only process finished games that are part of a tournament or league
+    if instance.status not in FINISHED_GAME_STATUSES or instance.type == Game.Type.PRACTICE:
         return
 
     try:
@@ -45,6 +127,71 @@ def update_match_winner(sender, instance, **kwargs):
 
         match = instance.bracket_match
         winner = instance.winner
+        is_double_default = instance.status == Game.Status.DOUBLE_DEFAULT
+
+        # Handle double default - special case where there's no winner
+        if is_double_default:
+            logger.info(f"Processing double default for game {instance.id}, match {match.id}")
+            
+            with transaction.atomic():
+                # Mark match as having no winner (both teams eliminated)
+                match.winner = None
+                match.save(update_fields=["winner"])
+                
+                # Handle advancement: the next match gets a "bye" situation
+                # The opponent in the next match will need to wait for the other feeder match
+                if match.next_match:
+                    next_match = BracketMatch.objects.select_for_update().get(id=match.next_match.id)
+                    
+                    # Find all parent matches that feed into this next_match
+                    parent_matches = list(BracketMatch.objects.filter(
+                        next_match=next_match
+                    ).order_by('id'))
+                    
+                    # Check if the OTHER parent match has a winner
+                    other_parent = None
+                    for pm in parent_matches:
+                        if pm.id != match.id:
+                            other_parent = pm
+                            break
+                    
+                    if other_parent and other_parent.winner:
+                        bye_winner = other_parent.winner
+                        # The other match already has a winner - they get a bye (advance without playing)
+                        logger.info(f"Double default in match {match.id}: {bye_winner.name} advances via bye from match {next_match.id}")
+                        
+                        # Ensure the winner is in the next match
+                        if not next_match.home_team:
+                            next_match.home_team = bye_winner
+                        if not next_match.away_team and next_match.home_team != bye_winner:
+                            next_match.away_team = bye_winner
+                        
+                        # Mark the next match with the winner directly (bye)
+                        next_match.winner = bye_winner
+                        next_match.save()
+                        
+                        # If this next match has a scheduled game, mark it as default win
+                        if next_match.game and next_match.game.status == Game.Status.SCHEDULED:
+                            bye_game = next_match.game
+                            if bye_game.home_team == bye_winner:
+                                bye_game.status = Game.Status.DEFAULT_HOME_WIN
+                            else:
+                                bye_game.status = Game.Status.DEFAULT_AWAY_WIN
+                            bye_game.winner_team = bye_winner
+                            bye_game.save(update_fields=["status", "winner_team"])
+                            logger.info(f"Marked game {bye_game.id} as default win for {bye_winner.name} (bye due to double default)")
+                        
+                        # Recursively advance if the next_match also has a next_match
+                        _advance_bye_winner(next_match, bye_winner)
+                    else:
+                        logger.info(f"Double default in match {match.id}: waiting for other parent match to complete")
+                
+                # For double elimination: both teams are eliminated, no one goes to loser bracket
+                if match.next_loser_match:
+                    logger.info(f"Double default in match {match.id}: no team advances to loser bracket (both eliminated)")
+                    # We don't send anyone to loser bracket
+                
+            return  # Exit early for double default
 
         # If winner hasn't changed, no need to proceed
         if match.winner == winner:
@@ -100,6 +247,15 @@ def update_match_winner(sender, instance, **kwargs):
                 
                 parent_match_ids = list(parent_matches.values_list('id', flat=True))
                 
+                # Check if the sibling match had a double default (no winner but game is finished)
+                sibling_had_double_default = False
+                for pm in parent_matches:
+                    if pm.id != match.id and pm.game:
+                        if pm.game.status == Game.Status.DOUBLE_DEFAULT:
+                            sibling_had_double_default = True
+                            logger.info(f"Sibling match {pm.id} had double default - {winner.name} gets a bye")
+                            break
+                
                 try:
                     # Find this match's position among parent matches
                     position = parent_match_ids.index(match.id)
@@ -137,6 +293,27 @@ def update_match_winner(sender, instance, **kwargs):
                 
                 if update_fields:
                     next_match.save(update_fields=update_fields)
+                
+                # If sibling had double default, this team gets a bye (auto-advance)
+                if sibling_had_double_default:
+                    logger.info(f"Granting bye to {winner.name} - advancing directly through match {next_match.id}")
+                    next_match.winner = winner
+                    next_match.save(update_fields=["winner"])
+                    
+                    # If the next match has a scheduled game, mark it as default win for the bye team
+                    if next_match.game and next_match.game.status == Game.Status.SCHEDULED:
+                        bye_game = next_match.game
+                        # Determine which team gets the default win
+                        if bye_game.home_team == winner:
+                            bye_game.status = Game.Status.DEFAULT_HOME_WIN
+                        else:
+                            bye_game.status = Game.Status.DEFAULT_AWAY_WIN
+                        bye_game.winner_team = winner
+                        bye_game.save(update_fields=["status", "winner_team"])
+                        logger.info(f"Marked game {bye_game.id} as default win for {winner.name} (bye)")
+                    
+                    # Recursively advance if the next_match also has opponents from double defaults
+                    _advance_bye_winner(next_match, winner)
             
             # Handle double elimination: move loser to lower bracket
             if match.next_loser_match and winner:
