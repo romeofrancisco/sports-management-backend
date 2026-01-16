@@ -10,7 +10,7 @@ import time
 genai.configure(api_key=settings.GOOGLE_AI_API_KEY)
 
 # Initialize the model with the latest version
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 def _create_cache_key(prefix, *args, **kwargs):
     """Create a unique cache key from function arguments"""
