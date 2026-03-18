@@ -83,8 +83,8 @@ class Folder(models.Model):
             return True
 
         if self.folder_type == self.FolderType.COACHES:
-            # Admin and coaches can access Coaches type folders
-            return user.is_admin or user.is_coach
+            # Coaches root is admin-only; coaches use their personal root content.
+            return user.is_admin
 
         if self.folder_type == self.FolderType.COACH_PERSONAL and user.is_coach:
             # Coach can only access their own personal folder
