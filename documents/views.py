@@ -52,7 +52,6 @@ class FolderViewSet(viewsets.ModelViewSet):
                 folder_type=Folder.FolderType.PLAYER_PERSONAL,
                 parent__parent__owner=user,
             )
-            query |= Q(folder_type=Folder.FolderType.COACHES)
 
         if user.is_player:
             # Player can see their own folder
@@ -162,13 +161,6 @@ class FolderViewSet(viewsets.ModelViewSet):
             root_folders.extend(list(admin_folders))
 
         if user.is_coach:
-            # Coaches can see admin-created coaches folders, but NOT the system "Coaches" folder
-            # Only show coaches folders that are NOT the system folder (exclude name='Coaches' with owner=None)
-            coaches_folders = Folder.objects.filter(
-                folder_type=Folder.FolderType.COACHES, parent__isnull=True
-            )
-            root_folders.extend(list(coaches_folders))
-
             # Coach sees the CONTENTS of their personal folder directly at root
             # Not the folder itself, but what's inside it (Players folder, their documents, etc.)
             # AUTO-RECOVERY: Get or create coach's personal folder
@@ -302,7 +294,6 @@ class FolderViewSet(viewsets.ModelViewSet):
                     folder_type=Folder.FolderType.PLAYER_PERSONAL,
                     parent__parent__owner=user,
                 )
-                folder_query |= Q(folder_type=Folder.FolderType.COACHES)
 
             if user.is_player:
                 folder_query |= Q(
