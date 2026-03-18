@@ -57,6 +57,7 @@ class BracketSerializer(serializers.ModelSerializer):
     rounds = BracketRoundSerializer(many=True, read_only=True)
     season_name = serializers.SerializerMethodField()
     tournament_name = serializers.SerializerMethodField()
+    winner_name = serializers.CharField(source="winner.name", read_only=True)
     league = serializers.SerializerMethodField()
     league_name = serializers.SerializerMethodField()
     team_count = serializers.SerializerMethodField()
@@ -64,7 +65,7 @@ class BracketSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Bracket
-        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'tournament', 'tournament_name', 'team_count', 'elimination_type', 'winner', 'is_complete', 'created_at', 'updated_at', 'rounds', 'matches']
+        fields = ['id', 'league', 'league_name', 'season', 'season_name', 'tournament', 'tournament_name', 'team_count', 'elimination_type', 'winner', 'winner_name', 'is_complete', 'created_at', 'updated_at', 'rounds', 'matches']
         read_only_fields = ["winner", "team_count", "is_complete"]
 
     def get_season_name(self, obj):

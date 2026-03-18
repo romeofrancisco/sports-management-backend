@@ -616,9 +616,9 @@ class BracketViewSet(viewsets.ModelViewSet):
         if len(matches) < 2:
             # Tournament is complete (final match played)
             final_match = matches[0]
-            bracket.is_complete = Bracket.is_complete = True
+            bracket.is_complete = True
             bracket.winner = final_match.winner
-            bracket.save(update_fields=["is_complete"])
+            bracket.save(update_fields=["is_complete", "winner"])
             return
 
         # Check if next round already exists to avoid duplicates

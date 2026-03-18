@@ -456,6 +456,30 @@ class GameActionSerializer(serializers.Serializer):
     def validate(self, data):
         action = data.get("action")
         game = self.context["game"]
+
+        # League/tournament games can only start or be defaulted while competition is ongoing.
+        if action in {"start", "default_home_win", "default_away_win", "double_default"}:
+            if game.type == Game.Type.LEAGUE:
+                if not game.season or game.season.status != Season.Status.ONGOING:
+                    raise serializers.ValidationError(
+                        {
+                            "action": (
+                                "League games can only be started or defaulted when the season is ongoing"
+                            )
+                        }
+                    )
+            elif game.type == Game.Type.TOURNAMENT:
+                if (
+                    not game.tournament
+                    or game.tournament.status != Tournament.Status.ONGOING
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "action": (
+                                "Tournament games can only be started or defaulted when the tournament is ongoing"
+                            )
+                        }
+                    )
         
         # For forfeit action, forfeiting_team_id is required
         if action == "forfeit":
