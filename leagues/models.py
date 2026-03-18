@@ -451,6 +451,32 @@ class Season(models.Model):
         if self.status != self.Status.ONGOING:
             raise ValidationError("Season can only be completed from Ongoing status")
 
+        bracket = self.get_bracket
+        if not bracket:
+            raise ValidationError(
+                "Cannot complete season without a bracket. Generate and complete the bracket first."
+            )
+
+        if not bracket.is_complete:
+            raise ValidationError(
+                "Cannot complete season because the bracket is not completed yet."
+            )
+
+        from games.models import Game
+
+        finished_statuses = [
+            Game.Status.COMPLETED,
+            Game.Status.DEFAULT_HOME_WIN,
+            Game.Status.DEFAULT_AWAY_WIN,
+            Game.Status.DOUBLE_DEFAULT,
+            Game.Status.FORFEITED,
+        ]
+        remaining_games = self.games.exclude(status__in=finished_statuses).count()
+        if remaining_games > 0:
+            raise ValidationError(
+                f"Cannot complete season because {remaining_games} game(s) are still not finished."
+            )
+
         self.status = self.Status.COMPLETED
         self.save()
 

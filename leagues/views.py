@@ -146,7 +146,8 @@ class SeasonViewSet(viewsets.ModelViewSet):
             else:
                 return Response({"error": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
         except ValidationError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            detail = e.messages[0] if hasattr(e, "messages") and e.messages else str(e)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def add_team(self, request, pk=None):

@@ -201,8 +201,9 @@ class TournamentViewSet(viewsets.ModelViewSet):
             
             return Response(result, status=status.HTTP_200_OK)
         except ValidationError as e:
+            detail = e.messages[0] if hasattr(e, "messages") and e.messages else str(e)
             return Response(
-                {"detail": str(e)},
+                {"detail": detail},
                 status=status.HTTP_400_BAD_REQUEST
             )
     

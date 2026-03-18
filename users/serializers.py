@@ -151,6 +151,7 @@ class PlayerSerializer(ModelSerializer):
 
 class CoachSerializer(ModelSerializer):
     profile = serializers.SerializerMethodField()
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
 
     class Meta:
         model = User
@@ -161,6 +162,7 @@ class CoachSerializer(ModelSerializer):
             "last_name",
             "sex",
             "email",
+            "date_of_birth",
         )
 
     def get_profile(self, obj):

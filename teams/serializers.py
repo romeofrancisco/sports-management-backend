@@ -484,6 +484,7 @@ class CoachInfoSerializer(ModelSerializer):
     last_name = serializers.CharField(source="user.last_name", required=False, allow_blank=True)
     email = serializers.EmailField(source="user.email", required=True)
     sex = serializers.CharField(source="user.sex", required=True)
+    date_of_birth = serializers.DateField(source="user.date_of_birth", required=False, allow_null=True)
     # Combined teams field
     coached_teams = serializers.SerializerMethodField()
     # Sports handling
@@ -511,6 +512,7 @@ class CoachInfoSerializer(ModelSerializer):
             "last_name",
             "full_name",
             "sex",
+            "date_of_birth",
             "email",
             "coached_teams",
             "sport_ids",

@@ -1716,31 +1716,47 @@ class DashboardViewSet(viewsets.ViewSet):
                     {
                         "type": "warning",
                         "title": "Teams Need Coach Assignment",
-                        "message": f"{teams_without_coaches} teams have no head coach or assistant coach assigned",
+                        "message": f"{teams_without_coaches} teams have no coach assigned",
                         "action": "Assign coaches to teams or recruit new coaching staff",
                     }
                 )
 
             # Generate recommendations based on system analysis
-            if Team.objects.count() > 0:
-                avg_players_per_team = (
-                    Player.objects.filter(team__isnull=False).count()
-                    / Team.objects.count()
+            # Check for understaffed teams by sport (not by global average)
+            understaffed_by_sport = []
+            for sport in Sport.objects.all():
+                teams = Team.objects.filter(sport=sport).annotate(player_count=Count('players'))
+                # Use 80% of max_players_on_field as minimum threshold
+                min_required = max(1, int(sport.max_players_on_field * 0.8))
+                
+                understaffed_teams = teams.filter(player_count__lt=min_required)
+                if understaffed_teams.exists():
+                    understaffed_by_sport.append({
+                        'sport': sport.name,
+                        'min_required': min_required,
+                        'count': understaffed_teams.count(),
+                        'total_in_sport': teams.count()
+                    })
+            
+            if understaffed_by_sport:
+                sports_list = ", ".join([
+                    f"{item['count']} {item['sport']} team(s)" 
+                    for item in understaffed_by_sport
+                ])
+                recommendations.append(
+                    {
+                        "priority": "high",
+                        "category": "recruitment",
+                        "title": "Strengthen Understaffed Teams by Sport",
+                        "description": f"The following sports have teams below minimum roster: {sports_list}",
+                        "suggested_actions": [
+                            "Review sport-specific roster requirements",
+                            "Launch targeted recruitment for understaffed teams",
+                            "Partner with schools for player development",
+                            "Organize open trials and events",
+                        ],
+                    }
                 )
-                if avg_players_per_team < 8:
-                    recommendations.append(
-                        {
-                            "priority": "high",
-                            "category": "recruitment",
-                            "title": "Increase Player Recruitment",
-                            "description": f"Average of {avg_players_per_team:.1f} players per team is below optimal range (8-15)",
-                            "suggested_actions": [
-                                "Launch recruitment campaigns",
-                                "Partner with schools for player development",
-                                "Organize open trials and events",
-                            ],
-                        }
-                    )
 
             # System health score calculation
             health_score = self._calculate_system_health_score()
