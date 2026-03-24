@@ -199,6 +199,8 @@ class BracketSerializer(serializers.ModelSerializer):
         return {
             'id': match.id,
             'name': f'Round {match.round.round_number} Match {match.id}',
+            'tournamentRoundText': str(match.round.round_number),
+            'tournamentRound': f'R{match.round.round_number}',
             'nextMatchId': match.next_match.id if match.next_match else None,
             'nextLooserMatchId': match.next_loser_match.id if match.next_loser_match else None,
             'startTime': match.game.date.isoformat() if match.game and match.game.date else None,
