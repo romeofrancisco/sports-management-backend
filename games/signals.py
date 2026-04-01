@@ -14,8 +14,6 @@ def send_score_update(game):
     import time
     start_time = time.time()
     
-    print(f"SENDING WEBSOCKET UPDATE: Game {game.id}, Scores: {game.home_team_score}-{game.away_team_score}")
-    
     channel_layer = get_channel_layer()
     if channel_layer:
         try:
@@ -37,7 +35,6 @@ def send_score_update(game):
                     'update_type': 'incremental'  # Mark as incremental update
                 }
             )
-            print(f"WebSocket message sent successfully for game {game.id}")
             logger.debug(f"Score update sent in {time.time() - start_time:.4f}s")
         except Exception as e:
             print(f"ERROR sending WebSocket update: {str(e)}")
