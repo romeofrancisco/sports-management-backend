@@ -9,6 +9,8 @@ from django.db.models import Count, Avg, Max, Min, Q
 from django.db import models
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_time
+from datetime import datetime
 import logging
 import time
 
@@ -576,6 +578,95 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         logger.info(f"Training session list - Query params: {request.query_params}")
 
         return super().list(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"], url_path="reserved-facilities")
+    def reserved_facilities(self, request):
+        """Return pending/approved future coach reservations, optionally filtered by date/time."""
+        from facilities.models import Reservation
+        from users.models import User
+
+        user = request.user
+
+        # Coaches can only access their own reservations.
+        coach = user if getattr(user, "is_coach", False) else None
+
+        # Admins may fetch reservations for a specific coach.
+        if getattr(user, "is_admin", False):
+            coach_id = request.query_params.get("coach")
+            if coach_id:
+                coach = User.objects.filter(id=coach_id, role=User.Role.COACH).first()
+
+        if not coach:
+            return Response([])
+
+        selected_date = parse_date(request.query_params.get("date", ""))
+        start_time_str = request.query_params.get("start_time")
+        end_time_str = request.query_params.get("end_time")
+
+        reservations = Reservation.objects.filter(
+            coach=coach,
+            status__in=[Reservation.Status.PENDING, Reservation.Status.APPROVED],
+            end_datetime__gte=timezone.now(),
+        ).select_related("facility")
+
+        if selected_date:
+            day_start = timezone.make_aware(
+                datetime.combine(selected_date, datetime.min.time())
+            )
+            day_end = timezone.make_aware(
+                datetime.combine(selected_date, datetime.max.time())
+            )
+            reservations = reservations.filter(
+                start_datetime__lt=day_end,
+                end_datetime__gt=day_start,
+            )
+
+        if start_time_str and end_time_str:
+            if not selected_date:
+                raise ValidationError(
+                    {
+                        "date": "Date is required when filtering by start and end time.",
+                    }
+                )
+
+            requested_start = parse_time(start_time_str)
+            requested_end = parse_time(end_time_str)
+
+            if not requested_start or not requested_end:
+                raise ValidationError(
+                    {"start_time": "Invalid time format. Use HH:MM."}
+                )
+
+            if requested_end <= requested_start:
+                raise ValidationError(
+                    {
+                        "end_time": "End time must be after start time.",
+                    }
+                )
+
+            slot_start = timezone.make_aware(datetime.combine(selected_date, requested_start))
+            slot_end = timezone.make_aware(datetime.combine(selected_date, requested_end))
+
+            reservations = reservations.filter(
+                start_datetime__lt=slot_end,
+                end_datetime__gt=slot_start,
+            )
+
+        data = [
+            {
+                "reservation_id": reservation.id,
+                "facility_id": reservation.facility_id,
+                "facility_name": reservation.facility.name,
+                "facility_location": reservation.facility.location,
+                "status": reservation.status,
+                "start_datetime": reservation.start_datetime,
+                "end_datetime": reservation.end_datetime,
+                "location": f"{reservation.facility.name} - {reservation.facility.location}",
+            }
+            for reservation in reservations.order_by("start_datetime")
+        ]
+
+        return Response(data)
 
     def perform_create(self, serializer):
         from .services import TrainingSessionService
