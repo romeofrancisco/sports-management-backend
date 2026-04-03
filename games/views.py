@@ -48,6 +48,7 @@ from .serializers import (
     GameScoreSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from sports_management.permissions import (
     IsAdminOrCoachUser,
     CanManageGamePermission,
@@ -95,7 +96,7 @@ class PlayerStatViewSet(viewsets.ModelViewSet):
     queryset = PlayerStat.objects.select_related("player__team", "game", "stat_type")
     serializer_class = PlayerStatSerializer
     pagination_class = PlayerStatPagination
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     @action(detail=False, methods=["get"])
     def recordable_stats(self, request):
@@ -467,7 +468,7 @@ class GameViewSet(viewsets.ModelViewSet):
         "coach_permissions__coach",
     )
     serializer_class = GameSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend]
     filterset_class = GameFilter
     pagination_class = GamePagination
@@ -483,7 +484,17 @@ class GameViewSet(viewsets.ModelViewSet):
         """
         Instantiate and return the list of permissions that this view requires.
         """
-        if self.action == "create":
+        public_read_actions = [
+            "list",
+            "retrieve",
+            "game_flow",
+            "game_leaders",
+            "team_leaders",
+        ]
+
+        if self.action in public_read_actions:
+            permission_classes = [AllowAny]
+        elif self.action == "create":
             permission_classes = [CanCreateGamePermission]
         elif self.action in [
             "manage",
@@ -507,8 +518,12 @@ class GameViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         user = self.request.user
 
+        # Public read-only access (anonymous): show only competition games.
+        if not getattr(user, "is_authenticated", False):
+            return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
+
         # If admin, return all games
-        if user.is_admin:
+        if getattr(user, "is_admin", False):
             return queryset
 
         # Filter games based on user role - only show games for their teams
