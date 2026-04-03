@@ -6,6 +6,9 @@ from rest_framework.exceptions import ValidationError
 from django.db.models import Value, IntegerField, Q
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_time
+from datetime import datetime
 
 
 def get_coach_teams(coach_profile):
@@ -542,6 +545,78 @@ class GameViewSet(viewsets.ModelViewSet):
 
         # Default: only show league and tournament games for other users
         return queryset.filter(type__in=[Game.Type.LEAGUE, Game.Type.TOURNAMENT])
+
+    @action(detail=False, methods=["get"], url_path="reserved-facilities")
+    def reserved_facilities(self, request):
+        """Return pending/approved future facility reservations for game scheduling."""
+        from facilities.models import Reservation
+
+        user = request.user
+        coach = user if getattr(user, "is_coach", False) or getattr(user, "is_admin", False) else None
+
+        if not coach:
+            return Response([])
+
+        selected_date = parse_date(request.query_params.get("date", ""))
+        start_time_str = request.query_params.get("start_time")
+        end_time_str = request.query_params.get("end_time")
+
+        reservations = Reservation.objects.filter(
+            coach=coach,
+            status__in=[Reservation.Status.PENDING, Reservation.Status.APPROVED],
+            end_datetime__gte=timezone.now(),
+        ).select_related("facility")
+
+        if selected_date:
+            day_start = timezone.make_aware(
+                datetime.combine(selected_date, datetime.min.time())
+            )
+            day_end = timezone.make_aware(
+                datetime.combine(selected_date, datetime.max.time())
+            )
+            reservations = reservations.filter(
+                start_datetime__lt=day_end,
+                end_datetime__gt=day_start,
+            )
+
+        if start_time_str and end_time_str:
+            if not selected_date:
+                raise ValidationError(
+                    {"date": "Date is required when filtering by start and end time."}
+                )
+
+            requested_start = parse_time(start_time_str)
+            requested_end = parse_time(end_time_str)
+
+            if not requested_start or not requested_end:
+                raise ValidationError({"start_time": "Invalid time format. Use HH:MM."})
+
+            if requested_end <= requested_start:
+                raise ValidationError({"end_time": "End time must be after start time."})
+
+            slot_start = timezone.make_aware(datetime.combine(selected_date, requested_start))
+            slot_end = timezone.make_aware(datetime.combine(selected_date, requested_end))
+
+            reservations = reservations.filter(
+                start_datetime__lt=slot_end,
+                end_datetime__gt=slot_start,
+            )
+
+        data = [
+            {
+                "reservation_id": reservation.id,
+                "facility_id": reservation.facility_id,
+                "facility_name": reservation.facility.name,
+                "facility_location": reservation.facility.location,
+                "status": reservation.status,
+                "start_datetime": reservation.start_datetime,
+                "end_datetime": reservation.end_datetime,
+                "location": f"{reservation.facility.name} - {reservation.facility.location}",
+            }
+            for reservation in reservations.order_by("start_datetime")
+        ]
+
+        return Response(data)
 
     def perform_create(self, serializer):
         user = self.request.user

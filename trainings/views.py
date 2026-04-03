@@ -588,7 +588,7 @@ class TrainingSessionViewSet(viewsets.ModelViewSet):
         user = request.user
 
         # Coaches can only access their own reservations.
-        coach = user if getattr(user, "is_coach", False) else None
+        coach = user if getattr(user, "is_coach", False) or getattr(user, "is_admin", False) else None
 
         # Admins may fetch reservations for a specific coach.
         if getattr(user, "is_admin", False):
