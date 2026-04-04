@@ -598,6 +598,278 @@ class DashboardViewSet(viewsets.ViewSet):
             logger.exception(f"Error building monthly trend: {e}")
             return {"labels": [], "values": []}
 
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminUser])
+    def admin_chart_summary(self, request):
+        """Generate actionable chart summary for admin dashboard charts."""
+        chart_type = request.query_params.get("chart_type")
+        supported_types = {
+            "system_health",
+            "system_activity",
+            "top_teams",
+            "user_activity",
+            "training_trend",
+            "training_attendance",
+            "sports_distribution",
+            "coach_effectiveness",
+        }
+
+        if chart_type not in supported_types:
+            return Response(
+                {
+                    "error": "Invalid chart_type. Use one of: system_health, system_activity, top_teams, user_activity, training_trend, training_attendance, sports_distribution, coach_effectiveness"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            overview_response = self.admin_overview(request)
+            analytics_response = self.admin_analytics(request)
+
+            if overview_response.status_code != status.HTTP_200_OK:
+                return Response(
+                    {"error": "Unable to load admin overview data for summary generation"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            if analytics_response.status_code != status.HTTP_200_OK:
+                return Response(
+                    {"error": "Unable to load admin analytics data for summary generation"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            overview = overview_response.data
+            analytics = analytics_response.data
+
+            title, analysis = self._build_admin_chart_analysis(
+                chart_type, overview, analytics
+            )
+            summary_lines = self._compose_summary_lines(analysis)
+
+            return Response(
+                {
+                    "chart_type": chart_type,
+                    "title": title,
+                    "summary": summary_lines,
+                    "analysis": analysis,
+                    "generated_at": timezone.now().isoformat(),
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error generating admin chart summary: {str(e)}")
+            return Response(
+                {"error": "An error occurred while generating admin chart summary"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _build_admin_chart_analysis(self, chart_type, overview, analytics):
+        """Build actionable analysis payload for each admin chart type."""
+        if chart_type == "system_health":
+            score = overview.get("insights", {}).get("system_health_score", 50)
+            warnings = overview.get("insights", {}).get("summary", {}).get("warnings", 0)
+            successes = overview.get("insights", {}).get("summary", {}).get("successes", 0)
+            return (
+                "System Health",
+                {
+                    "insights": [
+                        f"Current system health score is {score:.0f}/100.",
+                        f"The dashboard flags {warnings} warning area(s) and {successes} success indicator(s).",
+                    ],
+                    "recommendations": [
+                        "Prioritize the top 2 warning items and assign owners with one-week due dates.",
+                        "Convert stable success areas into repeatable playbooks for other programs.",
+                    ],
+                    "possible_outcomes": [
+                        "Faster risk containment and fewer operational surprises.",
+                        "Higher consistency across teams and league operations.",
+                    ],
+                },
+            )
+
+        if chart_type == "system_activity":
+            recent = overview.get("recent_activity", {})
+            games_this_month = recent.get("games_this_month", 0)
+            completed_games = recent.get("completed_games_month", 0)
+            upcoming_trainings = recent.get("upcoming_trainings", 0)
+            completion_rate = (
+                (completed_games / games_this_month) * 100 if games_this_month > 0 else 0
+            )
+            return (
+                "System Activity",
+                {
+                    "insights": [
+                        f"System activity logged {games_this_month} games this month, with {completed_games} completed.",
+                        f"Current game completion rate is {completion_rate:.1f}% and upcoming trainings are {upcoming_trainings}.",
+                    ],
+                    "recommendations": [
+                        "If completion rate drops below 80%, audit scheduling conflicts and officiating availability.",
+                        "Align training calendars with game density to prevent workload spikes.",
+                    ],
+                    "possible_outcomes": [
+                        "Improved schedule reliability and fewer postponed events.",
+                        "Better athlete readiness during congested fixtures.",
+                    ],
+                },
+            )
+
+        if chart_type == "top_teams":
+            top_teams = analytics.get("performance_analytics", {}).get("top_teams", [])
+            if not top_teams:
+                return (
+                    "Top Performing Teams",
+                    {
+                        "insights": ["No team performance ranking data is available yet."],
+                        "recommendations": [
+                            "Ensure completed game results are submitted consistently for all teams.",
+                        ],
+                        "possible_outcomes": [
+                            "Reliable rankings and cleaner competitive benchmarking.",
+                        ],
+                    },
+                )
+
+            best_team = top_teams[0]
+            return (
+                "Top Performing Teams",
+                {
+                    "insights": [
+                        f"{best_team.get('team_name', 'Leading team')} currently leads with a {best_team.get('win_rate', 0):.1f}% win rate.",
+                        f"Top-tier team performance suggests a widening gap between high and mid-performing teams.",
+                    ],
+                    "recommendations": [
+                        "Extract tactical and training patterns from top teams and distribute them to mid-tier programs.",
+                        "Use monthly performance reviews for teams below target win-rate thresholds.",
+                    ],
+                    "possible_outcomes": [
+                        "Narrower competitiveness gap across divisions.",
+                        "Higher overall match quality and spectator engagement.",
+                    ],
+                },
+            )
+
+        if chart_type == "user_activity":
+            users = overview.get("user_activity", {})
+            active_today = users.get("active_users_today", 0)
+            active_week = users.get("active_users_week", 0)
+            new_month = users.get("new_users_month", 0)
+            return (
+                "User Activity & Engagement",
+                {
+                    "insights": [
+                        f"User activity shows {active_today} active users today and {active_week} active users this week.",
+                        f"New registrations this month are {new_month}, indicating current onboarding pace.",
+                    ],
+                    "recommendations": [
+                        "Trigger re-engagement notifications for inactive users older than 14 days.",
+                        "Strengthen first-week onboarding to improve conversion from new users to weekly active users.",
+                    ],
+                    "possible_outcomes": [
+                        "Improved retention and higher weekly active usage.",
+                        "More consistent adoption of core system workflows.",
+                    ],
+                },
+            )
+
+        if chart_type == "training_trend":
+            training = analytics.get("training_analytics", {})
+            trend = training.get("training_trend", "stable")
+            monthly_sessions = training.get("monthly_sessions", 0)
+            return (
+                "Training Trend",
+                {
+                    "insights": [
+                        f"Training trend is currently marked as {trend} with {monthly_sessions} sessions this month.",
+                        "Trend direction reflects session volume changes relative to the previous month.",
+                    ],
+                    "recommendations": [
+                        "For decreasing trends, enforce minimum weekly session targets per active team.",
+                        "For increasing trends, monitor staff and facility capacity to avoid quality degradation.",
+                    ],
+                    "possible_outcomes": [
+                        "More stable month-to-month training output.",
+                        "Better balance between session volume and coaching quality.",
+                    ],
+                },
+            )
+
+        if chart_type == "training_attendance":
+            attendance = analytics.get("training_analytics", {}).get(
+                "overall_attendance_rate", 0
+            )
+            return (
+                "Training Attendance",
+                {
+                    "insights": [
+                        f"Overall training attendance rate is {attendance:.1f}%.",
+                        "Attendance is a direct leading indicator for readiness and consistency.",
+                    ],
+                    "recommendations": [
+                        "Set attendance alerts for teams falling below 70% weekly participation.",
+                        "Introduce attendance-linked feedback plans between coaches and players.",
+                    ],
+                    "possible_outcomes": [
+                        "Higher training consistency and reduced no-show patterns.",
+                        "Improved game preparedness and fewer performance dips.",
+                    ],
+                },
+            )
+
+        if chart_type == "sports_distribution":
+            teams_by_sport = overview.get("distribution_stats", {}).get("teams_by_sport", [])
+            total_sports = len(teams_by_sport)
+            top_sport = teams_by_sport[0] if teams_by_sport else {}
+            return (
+                "Sports Distribution",
+                {
+                    "insights": [
+                        f"The dashboard tracks team distribution across {total_sports} sports.",
+                        f"{top_sport.get('sport__name', 'N/A')} currently has the highest team concentration ({top_sport.get('team_count', 0)} teams).",
+                    ],
+                    "recommendations": [
+                        "Rebalance facility time and resource allocation toward underrepresented sports where growth potential exists.",
+                        "Review coach staffing and recruitment in sports showing strong expansion demand.",
+                    ],
+                    "possible_outcomes": [
+                        "More equitable cross-sport development.",
+                        "Better long-term capacity planning and sport-program stability.",
+                    ],
+                },
+            )
+
+        coaches = analytics.get("coach_analytics", [])
+        if not coaches:
+            return (
+                "Coach Effectiveness",
+                {
+                    "insights": ["No coach effectiveness data is available yet."],
+                    "recommendations": [
+                        "Ensure coach-team assignments and attendance records are up to date.",
+                    ],
+                    "possible_outcomes": [
+                        "Clearer coach performance benchmarking for development planning.",
+                    ],
+                },
+            )
+
+        top_coach = coaches[0]
+        return (
+            "Coach Effectiveness",
+            {
+                "insights": [
+                    f"Top coach effectiveness score is {top_coach.get('effectiveness_score', 0):.1f} ({top_coach.get('coach_name', 'Unknown Coach')}).",
+                    f"Leading attendance rate among tracked coaches is {top_coach.get('attendance_rate', 0):.1f}%.",
+                ],
+                "recommendations": [
+                    "Run peer-learning sessions where top-performing coaches share planning and attendance strategies.",
+                    "Assign targeted mentoring for coaches with low training frequency or attendance outcomes.",
+                ],
+                "possible_outcomes": [
+                    "Higher average coaching effectiveness across departments.",
+                    "More consistent player development and session quality.",
+                ],
+            },
+        )
+
     @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
     def coach_overview(self, request):
         """Team-focused dashboard for coaches - also supports admin access to specific coach data"""
@@ -956,6 +1228,329 @@ class DashboardViewSet(viewsets.ViewSet):
                 {"error": "An error occurred while fetching coach player progress data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAdminOrCoachUser])
+    def coach_chart_summary(self, request):
+        """Generate chart explanation text for coach dashboard cards."""
+        chart_type = request.query_params.get("chart_type")
+        coach_id = request.query_params.get("coach_id")
+        team_slug = request.query_params.get("team_slug")
+
+        supported_types = {
+            "team_performance",
+            "coaching_activity",
+            "player_development",
+        }
+
+        if chart_type not in supported_types:
+            return Response(
+                {
+                    "error": "Invalid chart_type. Use one of: team_performance, coaching_activity, player_development"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            coach_teams, error_response = self._resolve_coach_teams(
+                request.user, coach_id=coach_id, team_slug=team_slug
+            )
+            if error_response:
+                return error_response
+
+            if chart_type == "team_performance":
+                title, analysis = self._build_team_performance_summary(coach_teams)
+            elif chart_type == "coaching_activity":
+                title, analysis = self._build_coaching_activity_summary(coach_teams)
+            else:
+                title, analysis = self._build_player_development_summary(coach_teams)
+
+            summary_lines = self._compose_summary_lines(analysis)
+
+            return Response(
+                {
+                    "chart_type": chart_type,
+                    "title": title,
+                    "summary": summary_lines,
+                    "analysis": analysis,
+                    "generated_at": timezone.now().isoformat(),
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error generating coach chart summary: {str(e)}")
+            return Response(
+                {"error": "An error occurred while generating chart summary"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _resolve_coach_teams(self, user, coach_id=None, team_slug=None):
+        """Resolve teams a user can access for coach-focused endpoints."""
+        from teams.models import Coach, Team
+
+        if user.role == "Admin":
+            if coach_id:
+                try:
+                    coach = Coach.objects.get(user_id=coach_id)
+                except Coach.DoesNotExist:
+                    return None, Response(
+                        {"error": "Coach not found"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                coach_teams = Team.objects.filter(
+                    Q(head_coach=coach) | Q(assistant_coach=coach)
+                )
+            elif team_slug:
+                coach_teams = Team.objects.filter(slug=team_slug)
+                if not coach_teams.exists():
+                    return None, Response(
+                        {"error": "Team not found"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+            else:
+                coach_teams = Team.objects.all()[:10]
+        else:
+            if not hasattr(user, "coach_profile"):
+                return None, Response(
+                    {"error": "Coach profile not found"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            coach_teams = Team.objects.filter(
+                Q(head_coach=user.coach_profile) | Q(assistant_coach=user.coach_profile)
+            )
+
+            if team_slug:
+                coach_teams = coach_teams.filter(slug=team_slug)
+                if not coach_teams.exists():
+                    return None, Response(
+                        {"error": "You don't have access to this team"},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+        return coach_teams, None
+
+    def _compose_summary_lines(self, analysis):
+        """Build backward-compatible summary lines from structured analysis."""
+        if not analysis:
+            return []
+
+        summary_lines = []
+        summary_lines.extend(analysis.get("insights", []))
+        summary_lines.extend(
+            [f"Recommendation: {line}" for line in analysis.get("recommendations", [])]
+        )
+        summary_lines.extend(
+            [f"Possible Outcome: {line}" for line in analysis.get("possible_outcomes", [])]
+        )
+        return summary_lines
+
+    def _build_team_performance_summary(self, coach_teams):
+        """Create summary lines for Team Performance chart."""
+        last_30_days = timezone.now() - timedelta(days=30)
+        team_stats = []
+
+        for team in coach_teams:
+            training_records = PlayerTraining.objects.filter(
+                session__team=team,
+                session__date__gte=last_30_days.date(),
+            )
+            total_records = training_records.count()
+            present_records = training_records.filter(attendance_status="present").count()
+            attendance_rate = (present_records / total_records * 100) if total_records > 0 else 0
+
+            recent_games_count = Game.objects.filter(
+                Q(home_team=team) | Q(away_team=team),
+                status="completed",
+            ).count()
+
+            team_stats.append(
+                {
+                    "name": team.name,
+                    "attendance_rate": round(attendance_rate, 2),
+                    "total_sessions": training_records.values("session").distinct().count(),
+                    "recent_games": recent_games_count,
+                }
+            )
+
+        if not team_stats:
+            return (
+                "Team Performance & Activity",
+                {
+                    "insights": ["No team data is available yet to generate a summary."],
+                    "recommendations": [
+                        "Record at least two weeks of attendance and training session logs for each team.",
+                    ],
+                    "possible_outcomes": [
+                        "Once data is captured consistently, performance gaps between teams can be identified early.",
+                    ],
+                },
+            )
+
+        top_attendance = max(team_stats, key=lambda x: x["attendance_rate"])
+        top_sessions = max(team_stats, key=lambda x: x["total_sessions"])
+        top_games = max(team_stats, key=lambda x: x["recent_games"])
+        avg_attendance = sum(x["attendance_rate"] for x in team_stats) / len(team_stats)
+
+        recommendations = [
+            "Set an attendance trigger list for teams below 75% and schedule short recovery drills for absent players.",
+            f"Use {top_sessions['name']} as a benchmark for session planning and replicate its weekly cadence across lower-volume teams.",
+            "For teams with high game load but lower attendance, rotate workloads to reduce fatigue risk before match days.",
+        ]
+
+        possible_outcomes = [
+            "Improved training attendance consistency over the next 2 to 4 weeks.",
+            "More balanced readiness across teams before competitive fixtures.",
+            "Reduced mismatch between training volume and match performance.",
+        ]
+
+        analysis = {
+            "insights": [
+                f"This chart compares attendance rate, training sessions, and recent games across {len(team_stats)} teams.",
+                f"{top_attendance['name']} has the highest attendance rate at {top_attendance['attendance_rate']:.1f}%.",
+                f"{top_sessions['name']} leads in training volume with {top_sessions['total_sessions']} sessions.",
+                f"{top_games['name']} appears in the most completed games ({top_games['recent_games']}).",
+                f"Average attendance across all teams is {avg_attendance:.1f}%.",
+            ],
+            "recommendations": recommendations,
+            "possible_outcomes": possible_outcomes,
+        }
+
+        return "Team Performance & Activity", analysis
+
+    def _build_coaching_activity_summary(self, coach_teams):
+        """Create summary lines for Coaching Activity chart."""
+        last_30_days = timezone.now() - timedelta(days=30)
+
+        upcoming_games = Game.objects.filter(
+            Q(home_team__in=coach_teams) | Q(away_team__in=coach_teams),
+            status="scheduled",
+        ).count()
+        upcoming_training = TrainingSession.objects.filter(
+            team__in=coach_teams,
+            status="upcoming",
+        ).count()
+        upcoming_events = upcoming_games + upcoming_training
+        recent_sessions = TrainingSession.objects.filter(
+            team__in=coach_teams,
+            date__gte=last_30_days.date(),
+        ).count()
+        total_players = Player.objects.filter(team__in=coach_teams).count()
+
+        categories = {
+            "Upcoming Events": upcoming_events,
+            "Recent Training Sessions": recent_sessions,
+            "Total Players": total_players,
+        }
+        top_category = max(categories, key=categories.get)
+        total_units = sum(categories.values())
+
+        recommendations = [
+            "When Upcoming Events dominate, pre-assign staff roles for logistics, player readiness, and tactical prep.",
+            "If Recent Training Sessions are low, add at least one quality-focused session block in the next week.",
+            "For larger player loads, split sessions into smaller groups to maintain coach-to-player feedback quality.",
+        ]
+
+        possible_outcomes = [
+            "Better weekly workload distribution and fewer schedule bottlenecks.",
+            "Higher session effectiveness through clearer coaching focus.",
+            "More predictable preparation cycles before matches and tournaments.",
+        ]
+
+        analysis = {
+            "insights": [
+                "This chart breaks down coaching workload into upcoming events, recent training sessions, and total players managed.",
+                f"Current tracked activity totals {total_units} units across all categories.",
+                f"The largest segment is {top_category} with {categories[top_category]}.",
+                "Use this distribution to see whether your current focus is event-driven, session-driven, or roster-driven.",
+            ],
+            "recommendations": recommendations,
+            "possible_outcomes": possible_outcomes,
+        }
+
+        return "Coaching Activity", analysis
+
+    def _build_player_development_summary(self, coach_teams):
+        """Create summary lines for Player Development chart."""
+        players = Player.objects.filter(team__in=coach_teams).select_related("user", "team")[:15]
+        last_30_days = timezone.now() - timedelta(days=30)
+
+        player_stats = []
+        for player in players:
+            recent_training_records = PlayerTraining.objects.filter(
+                player=player,
+                session__date__gte=last_30_days.date(),
+            )
+
+            recent_improvement = self._calculate_recent_improvement(player, last_30_days)
+            improvement_percentage = self._to_float(recent_improvement.get("percentage", 0))
+            exercise_count = int(recent_improvement.get("metric_count", 0) or 0)
+
+            full_name = player.user.get_full_name() if player.user else "Unknown Player"
+            first_name = full_name.split(" ")[0] if full_name else "Player"
+
+            player_stats.append(
+                {
+                    "name": first_name,
+                    "sessions": recent_training_records.count(),
+                    "exercises": exercise_count,
+                    "improvement": improvement_percentage,
+                }
+            )
+
+        if not player_stats:
+            return (
+                "Player Development Analytics",
+                {
+                    "insights": [
+                        "No player development data is available yet to generate a summary."
+                    ],
+                    "recommendations": [
+                        "Track baseline metrics for each player in at least one weekly training cycle.",
+                    ],
+                    "possible_outcomes": [
+                        "With baseline and follow-up data, the system can identify top improvers and support needs.",
+                    ],
+                },
+            )
+
+        top_sessions = max(player_stats, key=lambda x: x["sessions"])
+        top_exercises = max(player_stats, key=lambda x: x["exercises"])
+        top_improvement = max(player_stats, key=lambda x: x["improvement"])
+        avg_improvement = sum(x["improvement"] for x in player_stats) / len(player_stats)
+
+        recommendations = [
+            "Create individualized targets for players below average improvement and assign focused technical micro-drills.",
+            f"Review what is working for {top_improvement['name']} and replicate key habits in peer mentoring or small-group sessions.",
+            "For players with high session attendance but low improvement, adjust drill quality and feedback specificity rather than volume.",
+        ]
+
+        possible_outcomes = [
+            "Faster progression for underperforming players through targeted interventions.",
+            "More uniform development across the squad over the next training block.",
+            "Higher transfer of training improvements into match performance metrics.",
+        ]
+
+        analysis = {
+            "insights": [
+                f"This chart evaluates {len(player_stats)} players based on training sessions, exercise volume, and recent improvement percentage.",
+                f"{top_sessions['name']} has the highest training participation with {top_sessions['sessions']} sessions.",
+                f"{top_exercises['name']} recorded the highest exercise volume with {top_exercises['exercises']} metrics.",
+                f"{top_improvement['name']} shows the strongest recent improvement at {top_improvement['improvement']:.1f}%.",
+                f"Average three-month improvement across shown players is {avg_improvement:.1f}%.",
+            ],
+            "recommendations": recommendations,
+            "possible_outcomes": possible_outcomes,
+        }
+
+        return "Player Development Analytics", analysis
+
+    def _to_float(self, value, default=0.0):
+        """Safely convert values to float for summary calculations."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _calculate_overall_improvement(self, player):
         """Calculate overall improvement across all metrics for a player"""
