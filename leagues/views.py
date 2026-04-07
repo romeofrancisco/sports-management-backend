@@ -7,6 +7,7 @@ from .models import League, Season
 from .serializers import LeagueSerializer, LeagueWriteSerializer, SeasonSerializer, TeamStandingsSerializer, LeagueStatisticsSerializer, SeasonComparisonSerializer
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Count, Sum, Avg, F, Q, Func
 from teams.models import Team
 from sports.models import Sport
@@ -123,6 +124,45 @@ class SeasonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         league = get_object_or_404(League, pk=self.kwargs['league_pk'])
         serializer.save(league=league)
+
+    @action(detail=True, methods=["delete"])
+    def delete_bracket(self, request, league_pk=None, pk=None):
+        """Delete season bracket only when all linked bracket games are scheduled."""
+        season = self.get_object()
+        bracket = getattr(season, "bracket", None)
+
+        if not bracket:
+            return Response(
+                {"detail": "This season does not have a bracket."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from games.models import Game
+
+        has_non_scheduled_games = bracket.bracketmatch_set.filter(
+            game__isnull=False
+        ).exclude(
+            game__status=Game.Status.SCHEDULED
+        ).exists()
+
+        if has_non_scheduled_games:
+            return Response(
+                {
+                    "detail": "Bracket can only be deleted when all linked bracket games are scheduled."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            # BracketMatch.game uses on_delete=CASCADE, so linked generated games are removed.
+            bracket.delete()
+
+        return Response(
+            {
+                "detail": "Bracket deleted successfully. Linked bracket games were also deleted."
+            },
+            status=status.HTTP_200_OK,
+        )
     
     @action(detail=True, methods=["post"])
     def manage(self, request, pk=None, **kwargs):

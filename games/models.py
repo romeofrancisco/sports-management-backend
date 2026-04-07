@@ -455,6 +455,11 @@ class Game(models.Model):
             player__team=self.home_team, 
             stat_type__is_negative=True
         ).aggregate(total=Sum("stat_type__point_value"))["total"] or 0
+
+        return {
+            "home_team_score": home_positive + home_negative,
+            "away_team_score": away_positive + away_negative,
+        }
         
     def update_scores_incremental(self, stat, operation='add'):
         """

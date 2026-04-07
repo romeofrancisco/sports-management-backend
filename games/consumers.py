@@ -10,12 +10,8 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
         self.game_id = self.scope['url_route']['kwargs']['game_id']
         self.room_group_name = f'game_score_{self.game_id}'
         
-        # Check if user is authenticated and can access this game
+        # Check if the requester can access this game's live updates
         user = self.scope["user"]
-        
-        if isinstance(user, AnonymousUser):
-            await self.close()
-            return
             
         can_access = await self.user_can_access_game(user, self.game_id)
         
@@ -80,11 +76,15 @@ class GameScoreConsumer(AsyncWebsocketConsumer):
     def user_can_access_game(self, user, game_id):
         """
         Check if user can access this game's real-time updates
-        For now, allow all authenticated users (can be restricted later)
+        - Anonymous users: public competition games only
+        - Authenticated users: any existing game
         """
         try:
-            # Simple check - just verify game exists and allow all authenticated users
             game = Game.objects.get(id=game_id)
+
+            if isinstance(user, AnonymousUser):
+                return game.type in [Game.Type.LEAGUE, Game.Type.TOURNAMENT]
+
             return True
             
         except Game.DoesNotExist:

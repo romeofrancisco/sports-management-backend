@@ -13,6 +13,7 @@ class PlayerStatsSummaryService:
         self.game = Game.objects.select_related("home_team", "away_team").get(pk=game_id)
         self.team_filter = team_filter
         self.teams = self._get_teams()
+        self.current_player_ids = self._get_current_player_ids()
         
         # Get stat codes that have actual recorded data for this game
         self.recorded_stat_codes = set(
@@ -43,6 +44,20 @@ class PlayerStatsSummaryService:
         # Get codes for different stat types
         self.recording_abbrevs = list(self.recording_stats.values_list("code", flat=True))
         self.formula_abbrevs = list(self.formula_stats.values_list("code", flat=True))
+
+    def _get_current_player_ids(self):
+        """Return a set of player model ids currently on the field/court."""
+        current_ids = set()
+
+        for team in self.teams:
+            current_players = self.game.get_current_players(team)
+            for lineup_entry in current_players:
+                # get_current_players returns StartingLineup-like entries.
+                player_id = getattr(lineup_entry, "player_id", None)
+                if player_id is not None:
+                    current_ids.add(player_id)
+
+        return current_ids
 
     def _get_teams(self):
         if self.team_filter == "home_team":
@@ -221,6 +236,7 @@ class PlayerStatsSummaryService:
                 
                 player_summary = {
                     "player_id": player.user.id,
+                    "player_pk": player.pk,
                     "team_id": player.team.id,
                 }
             else:
@@ -233,6 +249,7 @@ class PlayerStatsSummaryService:
                 
                 player_summary = {
                     "player_id": player.user.id,
+                    "player_pk": player.pk,
                     "player_name": player.user.get_full_name(),
                     "jersey_number": player.jersey_number,
                     "team_id": player.team.id,
@@ -474,6 +491,7 @@ class PlayerStatsSummaryService:
                     "name": data["player_name"],
                     "jersey_number": data["jersey_number"],
                     "team_id": data["team_id"],
+                    "is_currently_playing": data["player_pk"] in self.current_player_ids,
                 }
 
             # For point-based sports, calculate total stats directly

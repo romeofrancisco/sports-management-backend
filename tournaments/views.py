@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Count, Sum, Avg, F, Q
 
 from .models import Tournament
@@ -32,6 +33,45 @@ class TournamentViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update']:
             return TournamentWriteSerializer
         return TournamentSerializer
+
+    @action(detail=True, methods=["delete"])
+    def delete_bracket(self, request, pk=None):
+        """Delete tournament bracket only when all linked bracket games are scheduled."""
+        tournament = self.get_object()
+        bracket = getattr(tournament, "bracket", None)
+
+        if not bracket:
+            return Response(
+                {"detail": "This tournament does not have a bracket."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from games.models import Game
+
+        has_non_scheduled_games = bracket.bracketmatch_set.filter(
+            game__isnull=False
+        ).exclude(
+            game__status=Game.Status.SCHEDULED
+        ).exists()
+
+        if has_non_scheduled_games:
+            return Response(
+                {
+                    "detail": "Bracket can only be deleted when all linked bracket games are scheduled."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            # BracketMatch.game uses on_delete=CASCADE, so linked generated games are removed.
+            bracket.delete()
+
+        return Response(
+            {
+                "detail": "Bracket deleted successfully. Linked bracket games were also deleted."
+            },
+            status=status.HTTP_200_OK,
+        )
     
     @action(detail=True, methods=["get"])
     def standings(self, request, pk=None):
