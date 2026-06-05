@@ -181,7 +181,7 @@ class TeamViewSet(ModelViewSet):
     serializer_class = TeamSerializer
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ["name"]
-    filterset_fields = ["sport", "division"]
+    filterset_fields = ["sport", "division", "is_active"]
     pagination_class = Pagination
 
     def get_serializer_context(self):
