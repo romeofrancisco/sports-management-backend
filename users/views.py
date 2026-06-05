@@ -7,7 +7,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from datetime import timedelta, datetime, timezone
 from django.contrib.auth.models import update_last_login
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
@@ -28,24 +27,6 @@ from .serializers import (
     UserProfileUpdateSerializer,
     LoginUserSerializer,
 )
-
-# Central cookie settings to avoid repetition.
-# Use Django settings to determine secure/samesite behavior.
-# Note: modern browsers require SameSite=None to be paired with Secure=True.
-COOKIE_SETTINGS = {
-    "httponly": True,
-    # Use secure cookies in production (SESSION_COOKIE_SECURE is set in settings.py)
-    "secure": bool(getattr(settings, "SESSION_COOKIE_SECURE", False)),
-    # If secure cookies are enabled, allow cross-site cookies (needed when frontend is on a different origin).
-    # Otherwise fall back to Lax for local development where Secure cannot be used over HTTP.
-    "samesite": "None" if getattr(settings, "SESSION_COOKIE_SECURE", False) else "Lax",
-}
-
-def set_auth_cookies(response, access_token, refresh_token):
-    expiry = datetime.now(timezone.utc) + timedelta(days=30)
-    response.set_cookie("access_token", access_token, expires=expiry, **COOKIE_SETTINGS)
-    response.set_cookie("refresh_token", refresh_token, expires=expiry, **COOKIE_SETTINGS)
-
 
 class UserInfoView(RetrieveUpdateAPIView):
     permission_classes = (IsAuthenticated,)
@@ -111,40 +92,39 @@ class LoginView(GenericAPIView):
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)
         
-        # Build response with user data and set tokens as cookies.
-        response = Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
-        set_auth_cookies(response, access_token, str(refresh))
+        response = Response(
+            {
+                "user": UserSerializer(user, context={'request': request}).data,
+                "tokens": {
+                    "access_token": access_token,
+                    "refresh_token": str(refresh),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
         return response
 
 
 class LogoutView(APIView):
     authentication_classes = [] 
     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get("refresh_token")
+        refresh_token = request.data.get("refresh") or request.data.get("refresh_token")
         if refresh_token:
             try:
                 # Blacklist the token if possible.
                 RefreshToken(refresh_token).blacklist()
             except Exception as e:
-                # Log the error but continue with cookie deletion
+                # Log the error but continue with logout flow
                 print(f"Token blacklist error (might be expired): {str(e)}")
 
         response = Response(
             {"message": "Successfully logged out!"}, status=status.HTTP_200_OK
         )
-        # Delete cookies by setting them with max_age=0
-        for cookie_name in ["access_token", "refresh_token"]:
-            response.set_cookie(
-                key=cookie_name,
-                value='',
-                max_age=0,
-                **COOKIE_SETTINGS
-            )
         return response
 
-class CookieTokenRefreshView(TokenRefreshView):
+class AppTokenRefreshView(TokenRefreshView):
     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get("refresh_token")
+        refresh_token = request.data.get("refresh") or request.data.get("refresh_token")
         if not refresh_token:
             return Response(
                 {"error": "Refresh token not provided"},
@@ -155,11 +135,8 @@ class CookieTokenRefreshView(TokenRefreshView):
             refresh = RefreshToken(refresh_token)
             access_token = str(refresh.access_token)
             response = Response(
-                {"message": "Access token refreshed successfully"},
+                {"access_token": access_token},
                 status=status.HTTP_200_OK,
-            )
-            response.set_cookie(
-                key="access_token", value=access_token, **COOKIE_SETTINGS
             )
             return response
         except InvalidToken:
@@ -329,10 +306,15 @@ class GoogleOneTapLoginView(APIView):
             access_token = str(refresh.access_token)
             
             response = Response(
-                UserSerializer(user, context={'request': request}).data, 
-                status=status.HTTP_200_OK
+                {
+                    "user": UserSerializer(user, context={'request': request}).data,
+                    "tokens": {
+                        "access_token": access_token,
+                        "refresh_token": str(refresh),
+                    },
+                },
+                status=status.HTTP_200_OK,
             )
-            set_auth_cookies(response, access_token, str(refresh))
             return response
             
         except ValueError as e:
