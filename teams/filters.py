@@ -5,6 +5,7 @@ from django.db.models import Q
 
 class PlayerFilter(django_filters.FilterSet):
     sex = django_filters.ChoiceFilter(field_name="user__sex", choices=User.Sex.choices)
+    is_active = django_filters.BooleanFilter(field_name="user__is_active")
     team = django_filters.CharFilter(method='filter_team')
     year_level = django_filters.CharFilter(field_name="academic_info__year_level", lookup_expr="icontains")
     course = django_filters.CharFilter(field_name="academic_info__course", lookup_expr="icontains")
@@ -29,10 +30,11 @@ class PlayerFilter(django_filters.FilterSet):
 
     class Meta:
         model = Player
-        fields = ["sport", "year_level", "course", "sex", "team"]
+        fields = ["sport", "year_level", "course", "sex", "team", "is_active"]
 
 class CoachFilter(django_filters.FilterSet):
     sex = django_filters.ChoiceFilter(field_name="user__sex", choices=User.Sex.choices)
+    is_active = django_filters.BooleanFilter(field_name="user__is_active")
     sport = django_filters.NumberFilter(field_name="sports", lookup_expr="exact")
     search = django_filters.CharFilter(method='filter_search')
 
@@ -51,4 +53,4 @@ class CoachFilter(django_filters.FilterSet):
 
     class Meta:
         model = Coach
-        fields = ['sex', 'sport', 'search']
+        fields = ['sex', 'sport', 'search', 'is_active']

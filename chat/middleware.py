@@ -49,20 +49,6 @@ class JWTAuthMiddleware:
                 if auth_header.startswith("Bearer "):
                     token = auth_header.split(" ")[1]
             
-            # Check for token in cookies (MOST IMPORTANT for our setup)
-            if not token:
-                headers = dict(scope.get("headers", []))
-                cookie_header = headers.get(b"cookie", b"").decode()
-                
-                if cookie_header:
-                    cookies = {}
-                    for chunk in cookie_header.split(";"):
-                        if "=" in chunk:
-                            key, val = chunk.strip().split("=", 1)
-                            cookies[key] = val
-                    
-                    token = cookies.get("access_token")
-            
             if token:
                 user = await get_user_from_token(token)
                 scope["user"] = user
